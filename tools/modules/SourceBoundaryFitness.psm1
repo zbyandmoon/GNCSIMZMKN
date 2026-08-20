@@ -195,6 +195,23 @@ function Get-PathClassification {
         }
     }
 
+    $frameworkSource = [regex]::Match(
+        $path,
+        '^(?i:framework/src)/(?<module>[A-Za-z_][A-Za-z0-9_]*)(?:/|$)')
+    if ($frameworkSource.Success) {
+        $module = [string]$frameworkSource.Groups['module'].Value
+        $registered = @($Policy.ModuleNames | Where-Object {
+                [string]$_.ToString() -ceq $module
+            })
+        if ($registered.Count -eq 1) {
+            return [PSCustomObject]([ordered]@{
+                kind = 'module'
+                owner = $module
+                package = $null
+            })
+        }
+    }
+
     if ($path -match '^(?i:framework|adapters)(?:/|$)') {
         return [PSCustomObject]([ordered]@{ kind = 'unowned-production'; owner = $null; package = $null })
     }

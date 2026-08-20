@@ -2,7 +2,7 @@
   "schema_version": "gnczmkn.project-manifest/1",
   "project": "GNCZMKN Next",
   "status": "development",
-  "current_gate": "R2",
+  "current_gate": "R3",
   "language": {
     "standard": "C++17",
     "build_system": "CMake 3.20+"

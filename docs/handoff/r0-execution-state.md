@@ -1,16 +1,16 @@
-# R2 当前执行状态
+# R3 当前执行状态
 
 - 更新日期：2026-08-20
-- 当前 gate：`R2`
-- 产品状态：R0 科学/性能基线与 G2 已闭合；R1 Foundation、窄范围 in-process Contracts、四个 YYZ 产品切片和 CAVH 公式产品切片已完成。R2 保留既有 canonical Mission IR/typed BindingPlan/`semantic-bytes@2` qualification，并增加最小 REF-YYZ 的 additive source/IR revision 3。当前 descriptor revision 6 与 Image revision 3 已冻结真实 RigidBody/Mass state owner、initial/projection/evolution entry、environment/aero caller-local query、FrozenInterval held closure、七个 RuntimeComponent factory、确定性 slot extent、state/value codec、fixed-step RK4 policy、三类 transaction outcome、Session-owned preparation lifecycle 与全部直接数字依赖 handle。该交付处于 owner review；R2 链接器保持零调用，也不物化 Session 对象。产品级 CAVH guidance command、syntax-neutral frontend 和更广泛的 R2 blueprint 能力仍未实现
+- 当前 gate：`R3`
+- 产品状态：R0 科学/性能基线、R1 模型生态与 R2 静态 Compiler 已闭合，仓库所有者于 2026-08-20 判定 G3 `Passed`。R2 descriptor revision 6 与 Image revision 3 冻结 REF-YYZ 的完整静态选择；`TransactionPlan` 现在独占 continue/terminal/failure 槽位处置语义。首个 R3 consumer 已沿冻结 Image 与显式 YYZ adapter 完成 `Created → Initialized`，实际物化 3 个 prepared artifact、7 个 Runtime Cell、2 个 committed state box 与 5 个 storage extent，并覆盖非平凡 state/output 生命周期和三类初始化中点故障回收。cycle step、scheduler、RK4 execution、transaction commit 与 terminal publication 尚未进入实现
 - 当前分支：`codex/r2-local-continuation`
-- 接续基线：PR #6 精确 head `07bc4cf212de1687081f6fa81dbac376a81da2b2`
+- 接续基线：精确 head `5130665ae778cd8cf61655c0a9fb4d453ca81bb3`
 
 ## 当前治理
 
 2026-08-12 的机器角色授权已撤销。默认由一个实现智能体完成分析、实现、测试和文档同步；只有用户明确要求并行或子智能体时才委派。仓库所有者保留科学口径、公共时间/frame/ownership 语义、阶段门、发布和明显扩大范围的选择。
 
-阶段顺序固定为：R1 已交付 Definition、PreparedModel 和 Kernel 的无 Session 独立求值；R2 交付 MissionSource 到 proven/linked ExecutionPlan 的静态编译；R3 由正式 Session、StepTransaction 和 IntegrationScopePlan 形成首个正常 YYZ run。R2 不建设 mini Session、临时 runner 或 package-local 影子 runtime。公共 framework abstraction 需要 YYZ 与 CAVH 两个真实 consumer。
+阶段顺序固定为：R1 已交付 Definition、PreparedModel 和 Kernel 的无 Session 独立求值；R2 交付 MissionSource 到 proven/linked ExecutionPlan 的静态编译；R3 已从正式 Session 初始化切片开始，后续由 StepTransaction、CycleFrame executor 与 IntegrationScopePlan 形成首个正常 YYZ run。公共 framework abstraction 仍需真实 consumer 支撑。
 
 当前规则以以下文件为准：
 
@@ -70,13 +70,17 @@
 - YYZ package 当前提供 uniform environment/aero PureQuery、FrozenInterval Closure、RigidBody ContinuousStateOwner、Mass DiscreteStateProcessor、guidance/controller/actuator/config-driven propulsion与 terminal committed-history evaluator。Rigid/Mass 各有唯一 schema/layout/owner和initial builder；committed projection、controlled-wrench/frozen-form、rigid derivative、mass interval candidate均来自既有R1公式的package-owned纯entry，旧wrapper复用这些entry并保持oracle。wrapper、RunBinding和dummy provider均未成为runtime node。
 - Programmatic `CompleteStaticCompositionSource` revision 3 经正式 Catalog 生成 `CompleteCanonicalMissionIr` 和 descriptor revision 6。计划包含 typed occurrence/port/binding、caller-local 与 held result route、state/slot codec、按 storage class 划分的 aligned extent、state blocks/initial values、PublishProjection、QueryPlan、ClosurePlan、静态 invocation authorization、RuntimeComponent factory dependency closure、Boundary DAG/regions、fixed-step RK4 IntegrationScope、Rigid/Mass Transaction、preparation lifecycle 和 terminal evaluator history。`semantic-bytes@3` 只编码 source composition facts；entry/recipe/workspace/layout/build/address/source location 不进入 source semantic hash，既有 `semantic-bytes@2` 及 qualification vector 不变。
 - `PlanProofIndex` 从 provider/cardinality/scope/temporal、owner/writer/reader、authorization/result route、region/DAG/topology、storage/codec、integration/transaction/preparation/evaluator 和 entry planning facts 派生。exact linker 以 package/build lock、entry identity/version/signature、type-preserving callable 与 process-local layout 完成解析并输出 `ExecutionPlanImage` review artifact；linker重算 required proof，并在冻结前检查 slot 越界、重叠、alignment、writer/reader、codec、factory direct links 与三类 transaction sets。缺失、重复、错类型、错 owner、错 route、错 codec、layout overflow 或 proof 篡改均 fail closed，失败路径没有部分 Image。Image 保存七个 typed RuntimeCellFactory 及其直接数字依赖闭包，Query formal result 由 caller-local typed route 表达，Closure formal result 写入唯一 held interval slot。link 阶段不调用 entry，也不物化 PreparedModel/Bound handle/workspace instance/RuntimeCell 或分配 per-session state。
+- R2 槽位生命周期矛盾已经关闭。`CompleteSlotPlan` 与 `PlanImageSlot` 移除 `valid_on_continue`、`discarded_on_terminal`、`discarded_on_failure`，proof、fingerprint、validator 与 projection 同步移除缓存字段。窄查询从 `TransactionBranchPlan`/`PlanImageTransactionBranch` 派生 commit、retain、publish、seal、discard 或 conflict；直接回归覆盖 terminal result、candidate、held 与 ordinary output 的三分支处置。
+- `R2-PLAN-001`、`R2-PRF-001`、`R2-LINK-001` 与 `R2-GATE-001` 已完成，G3 结果为 `Passed`。共享 REF-YYZ source builder 位于单一 fixture root，R2 probe 与 R3 consumer 使用同一组合事实。
+- R3 Session 生产代码只依赖 Foundation 与 Contracts。`Created` 保存 immutable Image 和固定 materialization provider；`Initialized` 按 Image lifecycle handle 调用三类 prepare 与七类 package factory，分配全部 storage extent，为非 state slot placement-construct 真实对象，并通过 state codec 把两个 initial state clone 到 committed/candidate 位置。Session 使用显式 construct/copy/replace/validate/destroy 操作，不执行 byte copy、zero-fill 或领域类型恢复。YYZ 类型恢复与 `std::any_cast` 限定在 fixture/package adapter 实现。
+- 初始化失败会逆序销毁已成功构造的 state、slot、Runtime Cell 与 prepared object，并释放全部 extent。测试覆盖 preparation、factory、initial-state 中点故障、错误 size/alignment/layout/codec、缺失 materializer、下一 Session 成功，以及带字符串的 MassState 与 terminal output 的 clone/replace/destruction。
 
 ## 后续阶段边界
 
-1. `R2-CAT-001` 为 `done`；最小REF-YYZ的 `R2-PLAN-001`、`R2-PRF-001` 与 `R2-LINK-001` 均为 `review`，等待仓库所有者复核；`R2-GATE-001` 与G3保持 `planned`。本次owner review不等于整个R2蓝图或G3通过。
-2. 当前 review Image 已冻结 R3 无需 source/Catalog 发现的最小 REF-YYZ 静态选择。R3 可按 extent 分配 state/candidate/CycleFrame/held/terminal storage，按 preparation 顺序创建 Session-owned prepared artifact，沿 factory direct handles 组装七个 RuntimeCell，并直接取得 codec、RK4 policy、transaction branch 与 evaluator history。R3 仍需实现 Session、PreparedModel/Bound objects、workspace instance、RuntimeCell ownership、stores、scheduler、entry 调用、积分执行、candidate staging 与 Rigid/Mass 原子 commit；第一个完整正常 YYZ run仍属于 R3。
-3. 当前Image限定于10 Hz、0.2 s、两区间REF-YYZ qualification graph，不覆盖00A/Reference A的30 s、100/10/20 Hz全产品图。DecisionAuthority、entity activation/topology、intervention/fault routing、Observation/Encoding、SourceFrontend多格式和产品级CAVH command仍按各自真实consumer推进。
-4. JSON/YAML/INI、多端adapter、mini runtime、manager、runtime registry、serializer、StateFragment、Artifact、Workflow、前端与R3+执行能力继续保持关闭。
+1. 当前进入 `R3-STR-001` 与 `R3-LIF-001` 的首个可执行切片；两项保持 `ready`，后续继续补齐 control stores、reset、checkpoint、restore 与执行期资源。其余 R3 任务依赖保持原序，R4 及后续任务继续锁定。
+2. 下一切片应从 plan-authored region/DAG 与 bounded CycleFrame 开始，建立一次 boundary 的 typed input/output view 和调度顺序；随后接入 candidate staging 与 `TransactionPlan` 分支执行。当前批次没有 cycle step、RK4 stage、commit 或 terminal publish 行为。
+3. 当前 Image 限定于 10 Hz、0.2 s、两区间 REF-YYZ qualification graph，不覆盖 00A/Reference A 的 30 s、100/10/20 Hz 全产品图。DecisionAuthority、entity activation/topology、intervention/fault routing、Observation/Encoding、SourceFrontend 多格式和产品级 CAVH command 仍按各自真实 consumer 推进。
+4. JSON/YAML/INI、多端 adapter、manager、runtime registry、serializer、StateFragment、Artifact、Workflow 与前端保持关闭。
 
 ## 保留与恢复
 

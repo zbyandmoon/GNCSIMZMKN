@@ -215,6 +215,21 @@ if(GNC_BUILD_TESTS)
     endif()
     gnc_enable_warnings(gnc_compiler_complete_yyz_plan_probe)
 
+    # R3 first Image consumer: Created/Initialized Session materialization.
+    add_executable(
+        gnc_kernel_session_materialization_probe
+        tests/kernel_session_materialization.cpp
+        tests/support/ref_yyz_complete_composition.cpp
+        tests/support/ref_yyz_session_adapter.cpp)
+    target_link_libraries(
+        gnc_kernel_session_materialization_probe
+        PRIVATE compiler kernel_session yyz_rigid_step)
+    if(MSVC)
+        target_compile_options(
+            gnc_kernel_session_materialization_probe PRIVATE /bigobj)
+    endif()
+    gnc_enable_warnings(gnc_kernel_session_materialization_probe)
+
     # R0 validation spike: intentionally isolated from product modules and Legacy.
     add_executable(
         gnc_scientific_conventions
@@ -444,6 +459,9 @@ if(GNC_BUILD_TESTS)
     add_test(
         NAME r2.compiler-complete-yyz-plan.probe
         COMMAND gnc_compiler_complete_yyz_plan_probe --self-check)
+    add_test(
+        NAME r3.kernel-session-materialization.probe
+        COMMAND gnc_kernel_session_materialization_probe --self-check)
     add_test(
         NAME r0.scientific-conventions.properties
         COMMAND gnc_scientific_conventions --self-check)

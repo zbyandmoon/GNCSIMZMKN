@@ -1,6 +1,6 @@
 {
   "schema_version": "gnczmkn.task-backlog/1",
-  "current_gate": "R2",
+  "current_gate": "R3",
   "updated_at": "2026-08-20",
   "status_values": ["planned", "ready", "in_progress", "blocked", "review", "done"],
   "tasks": [
@@ -476,7 +476,7 @@
       "id": "R2-PLAN-001",
       "stage": "R2",
       "title": "Lower the complete minimal REF-YYZ static plan and layered identities",
-      "status": "review",
+      "status": "done",
       "priority": "P0",
       "size": "XL",
       "owner_role": "compiler_lead",
@@ -484,14 +484,14 @@
       "depends_on": ["R2-BIND-001", "R2-CAT-001"],
       "deliverables": ["CompleteCanonicalMissionIr revision 3 and complete descriptor revision 6 for the current REF-YYZ qualification graph", "Typed occurrence, port, binding, result-route, stored-slot, state-block, initial-state, projection, query, closure, RuntimeComponent callsite/factory-dependency and evaluator-history plans", "Boundary regions/DAG, fixed-RK4 IntegrationScopePlan, rigid/mass three-outcome TransactionPlan and explicit preparation/runtime lifecycle", "Layered source semantic, descriptor and proof identities with direct provenance"],
       "acceptance": ["The complete static descriptor consumes only package-owned products and compiled obligations, contains no Session identity or mutable runtime object, and introduces no capability outside the current REF-YYZ path", "RigidBody and Mass each have one owner/writer, every required port has one compatible provider, invocation authorization is distinct from result flow, and current-cycle/interval/terminal relationships form a legal deterministic plan", "Incomplete providers, ownership, schedule, temporal, phase, authorization, storage, codec, integration, transaction, preparation, evaluator history or catalog selection fail before any image is published"],
-      "evidence": ["r2.compiler-complete-yyz-plan.probe constructs the current canonical REF-YYZ source facts and verifies the occurrence/port/state/query/closure/runtime/region/integration/transaction/preparation/evaluator planning review artifact", "The same probe covers deterministic source ordering and relocation, source-vs-implementation identity layering, exact RuntimeCellFactory/state/value-codec references, Query CallerLocal and Closure HeldInterval routes, stored-slot writers/readers/extents and focused compile diagnostics", "r2.compiler-static-plan.probe and r2.compiler-canonical-semantic-hash.reference preserve the accepted semantic-bytes@2 path and qualification vector", "ADR-0015 and ADR-0016 record the repository-owner Accepted R2/R3 boundary dated 2026-08-20", "Owner review remains required before G3; R3 entry invocation, Session-local materialization and execution are intentionally absent"],
+      "evidence": ["r2.compiler-complete-yyz-plan.probe constructs the canonical REF-YYZ source facts and verifies the occurrence/port/state/query/closure/runtime/region/integration/transaction/preparation/evaluator plan", "The same probe covers deterministic source ordering and relocation, source-vs-implementation identity layering, exact RuntimeCellFactory/state/value-codec references, Query CallerLocal and Closure HeldInterval routes, stored-slot writers/readers/extents and focused compile diagnostics", "TransactionPlan now solely defines continue, terminal and failure slot disposition; derived descriptor/Image queries cover commit, retain, publish, seal and discard without cached slot booleans", "r2.compiler-static-plan.probe and r2.compiler-canonical-semantic-hash.reference preserve the accepted semantic-bytes@2 path and qualification vector", "ADR-0015 and ADR-0016 record the repository-owner Accepted R2/R3 boundary dated 2026-08-20"],
       "architecture_refs": ["05 §12–§15", "12 §11–§14", "14"]
     },
     {
       "id": "R2-PRF-001",
       "stage": "R2",
       "title": "Implement PlanProofRecord, ProofIndex and dry-run explain",
-      "status": "review",
+      "status": "done",
       "priority": "P0",
       "size": "L",
       "owner_role": "compiler_lead",
@@ -506,7 +506,7 @@
       "id": "R2-LINK-001",
       "stage": "R2",
       "title": "Implement exact plan linking and ExecutionPlanImage",
-      "status": "review",
+      "status": "done",
       "priority": "P0",
       "size": "L",
       "owner_role": "compiler_lead",
@@ -514,14 +514,14 @@
       "depends_on": ["R2-PLAN-001", "R2-CAT-001"],
       "deliverables": ["Process-local immutable typed entry, state-layout/state-codec and stored-value layout/codec tables", "Exact package/entry/version/signature/build lock and stable link fingerprint over every allocation/access field", "Exact package-owned RuntimeCellFactory identity, typed implementation entry and per-component direct dependency handles without factory invocation", "Numeric handles for occurrences, ports, storage extents/slots, writers/readers, state blocks, provider preparations/plans, callsites, invocations/result routes, regions, integration scopes/policies, transaction groups, lifecycle and evaluator history", "Descriptor/proof/image conformance index"],
       "acceptance": ["Linker resolves locked implementations and RuntimeCellFactory/codec handles without model, adapter, source-order or solver reselection and without calling an entry", "Registration order and function address do not affect stable fingerprints; implementation identity, signature, build fingerprint or materialized layout changes do", "Missing, duplicate or mismatched implementation and missing or mutated required proof fail closed without a partial Image", "Query results are caller-local; FrozenInterval Closure has one formal held writer; RuntimeComponent outputs have one compiled writer and telemetry is never authoritative", "The image contains no PreparedModel instance, Bound object, workspace instance, RuntimeCell, Session store or per-session state"],
-      "evidence": ["r2.compiler-complete-yyz-plan.probe verifies exact type-preserving science/factory/codec resolution, per-class storage extent/writer/reader checks, deterministic repeat/reorder linking and poison entries that prove link performs no invocation or address fingerprinting", "The same probe rejects missing, duplicate, wrong-signature/call-shape/type/layout/build implementations, cross-component factories, mismatched codecs, invalid result routes/writers/readers/owners, overflow/alignment failures, incomplete transaction/preparation/integration/factory dependencies and mutated proof indexes", "r0.source-boundaries proves Compiler production code has no concrete YYZ package dependency", "Owner review remains required; actual factory/codec/science-entry invocation, RuntimeCell ownership and slot execution are deferred to R3 after G3"],
+      "evidence": ["r2.compiler-complete-yyz-plan.probe verifies exact type-preserving science/factory/codec resolution, per-class storage extent/writer/reader checks, deterministic repeat/reorder linking and poison entries that prove link performs no invocation or address fingerprinting", "The same probe rejects missing, duplicate, wrong-signature/call-shape/type/layout/build implementations, cross-component factories, mismatched codecs, invalid result routes/writers/readers/owners, overflow/alignment failures, incomplete transaction/preparation/integration/factory dependencies and mutated proof indexes", "r0.source-boundaries proves Compiler production code has no concrete YYZ package dependency", "r3.kernel-session-materialization.probe consumes the frozen Image without source, Catalog or Compiler lookup and follows exact typed adapter handles into three preparations, seven Runtime Cells and two state blocks"],
       "architecture_refs": ["05 §14"]
     },
     {
       "id": "R2-GATE-001",
       "stage": "R2",
       "title": "Conduct the G3 Plan Firewall gate",
-      "status": "planned",
+      "status": "done",
       "priority": "P0",
       "size": "M",
       "owner_role": "architecture_lead",
@@ -529,7 +529,7 @@
       "depends_on": ["R2-PRF-001", "R2-LINK-001"],
       "deliverables": ["G3 decision and R3 unlock"],
       "acceptance": ["YYZ dry-run closes every runtime dependency and Session needs no source/catalog lookup"],
-      "evidence": ["Signed G3 report"],
+      "evidence": ["Repository owner directed G3 Passed and R3 entry on 2026-08-20 after the complete deterministic REF-YYZ Image review", "r2.compiler-complete-yyz-plan.probe and r3.kernel-session-materialization.probe prove the plan firewall and source-free Session initialization boundary"],
       "architecture_refs": ["11 §7"]
     },
 
@@ -537,7 +537,7 @@
       "id": "R3-STR-001",
       "stage": "R3",
       "title": "Implement state, output and control stores with compiled handles",
-      "status": "planned",
+      "status": "ready",
       "priority": "P0",
       "size": "XL",
       "owner_role": "runtime_numerics_lead",
@@ -545,7 +545,7 @@
       "depends_on": ["R2-GATE-001"],
       "deliverables": ["CommittedStateStore", "OutputStore", "CommandLedger/queues", "codec entries"],
       "acceptance": ["Each mutable block has one owner and Session-local storage"],
-      "evidence": ["Store isolation and codec tests"],
+      "evidence": ["r3.kernel-session-materialization.probe allocates exact Image storage extents and safely constructs, clones, validates, replaces and destroys the current state/output objects; control stores and transaction visibility remain open"],
       "architecture_refs": ["12 §9", "14 §3"]
     },
     {
@@ -612,15 +612,15 @@
       "id": "R3-LIF-001",
       "stage": "R3",
       "title": "Implement Session lifecycle, resources, reset, checkpoint and restore core",
-      "status": "planned",
+      "status": "ready",
       "priority": "P0",
       "size": "XL",
       "owner_role": "runtime_numerics_lead",
       "assignee": null,
-      "depends_on": ["R3-STR-001", "R3-SCH-001"],
+      "depends_on": ["R2-GATE-001"],
       "deliverables": ["Lifecycle state machine", "resource journals", "RunBinding and RunId rules"],
       "acceptance": ["Create/initialize/reset/restore/dispose failures close resources deterministically"],
-      "evidence": ["Lifecycle transition/failure suite"],
+      "evidence": ["r3.kernel-session-materialization.probe covers Created, Initialized, preparation/factory/initial-state failure rollback, reverse destruction and successful subsequent Session creation; reset, checkpoint, restore and execution-time resources remain open"],
       "architecture_refs": ["06"]
     },
     {

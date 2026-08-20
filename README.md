@@ -1,16 +1,17 @@
 # GNCZMKN Next
 
-这是 GNCZMKN 大型目标架构的 greenfield 实现仓库。仓库版本仍为 `0.0.0-bootstrap`；R0 科学基线与 R1 独立模型生态已经闭合，R2 开始交付静态编译能力，尚未形成仿真运行能力。
+这是 GNCZMKN 大型目标架构的 greenfield 实现仓库。仓库版本仍为 `0.0.0-bootstrap`；R0 科学基线、R1 独立模型生态与 R2 静态编译已经闭合，R3 已进入 Image-backed Session 初始化阶段，尚未形成 cycle 执行或完整仿真运行能力。
 
 ## 当前交付状态
 
-- 当前 gate：`R2`；G0/G1/G2 已由仓库所有者判定 `Passed`。
-- 已闭合：R1 Foundation、窄范围 in-process Contracts、真实 GlideEnvelope PureQuery、真实 ForceMomentClosure、YYZ 四个产品切片和 CAVH 公式产品切片。
-- 当前静态编译入口保留既有 `TypedStaticCompositionSource`/`semantic-bytes@2` qualification 路径，并增加最小 REF-YYZ 的 programmatic `CompleteStaticCompositionSource` revision 3。后者经同一个 package-owned Catalog 形成 `CompleteCanonicalMissionIr`、typed ports/bindings、RigidBody/Mass state blocks 与 initial/projection/evolution obligations、Query/Closure/RuntimeComponent plans、Boundary DAG、IntegrationScope、Transaction、派生 `PlanProofIndex`，再由 exact linker 生成 process-local `ExecutionPlanImage` review artifact。Image 已保存 exact package/build lock、按 storage class 划分的确定性 extent、slot size/alignment/offset/codec/writer/reader/lifetime、两个 state codec、Query `CallerLocal` route、Closure `HeldInterval` route、fixed-step RK4/numerical policy、三类 transaction outcome、Session-owned preparation policy，以及七个 package-owned typed `RuntimeCellFactory` 的完整数字依赖闭包；link 阶段不调用任何 entry，也不创建 R3 Session 或 RuntimeCell。
-- 暂缓开展：YAML/INI、多端 adapter、Session、mini runtime、runtime registry、serializer、StateFragment 与 R3～R8 能力。
+- 当前 gate：`R3`；G0/G1/G2/G3 已由仓库所有者判定 `Passed`。
+- 已闭合：R1 Foundation、窄范围 in-process Contracts、YYZ/CAVH 产品切片，以及 R2 从 canonical REF-YYZ source 到 proven/linked `ExecutionPlanImage` 的完整静态链。
+- R2 Image 保存 exact package/build lock、按 storage class 划分的确定性 extent、slot size/alignment/offset/codec/writer/reader、两个 state codec、Query `CallerLocal` route、Closure `HeldInterval` route、fixed-step RK4 policy、完整 `TransactionPlan` 分支语义、preparation lifecycle，以及七个 typed `RuntimeCellFactory` 的数字依赖闭包。槽位不再缓存 continue/terminal/failure 生命周期布尔值，分支处置统一从 `TransactionPlan` 派生。
+- 当前 R3 切片只消费冻结 Image 与显式 package/generated adapter，已覆盖 `Created → Initialized`、3 个 prepared artifact、7 个 Session-local Runtime Cell、2 个 committed state box、Image storage extent 分配、非平凡 state/output 的构造/复制/替换/销毁，以及 preparation/factory/initial-state 中点失败的逆序回收。Kernel 不读取 source、不查询 Catalog，也不包含 YYZ 具体类型分支。
+- 暂缓开展：cycle step、scheduler、RK4 执行、transaction commit、terminal publication、reset/checkpoint/restore、YAML/INI、多端 adapter、runtime registry、serializer、StateFragment 与 R4～R8 能力。
 - 旧 GNCZMKN 只作为只读行为与科学参照，不进入任何生产 target、include path 或运行依赖。
 
-阶段顺序已经固定：R1 以 Definition、PreparedModel 和 Kernel 的无 Session 独立求值闭合；R2 实现 MissionSource 到已证明、已链接 ExecutionPlan 的静态编译；R3 再由正式 Session、StepTransaction 和 IntegrationScopePlan 形成首个正常 YYZ run。R2 不建设临时 runner、mini Session 或影子 runtime。
+阶段顺序已经固定：R1 以 Definition、PreparedModel 和 Kernel 的无 Session 独立求值闭合；R2 实现 MissionSource 到已证明、已链接 ExecutionPlan 的静态编译；R3 先完成正式 Session 的 Image-backed 初始化，再由 StepTransaction、CycleFrame executor 与 IntegrationScopePlan 形成首个正常 YYZ run。
 
 ## 新成员从这里开始
 
@@ -72,7 +73,10 @@ YYZ 与 CAVH 共同消费最小 `ModelDefinitionMetadata`、`PreparedModelMetada
 build/dev/gnc_compiler_static_plan_probe --explain
 build/dev/gnc_compiler_static_plan_probe --semantic-hash
 build/dev/gnc_compiler_complete_yyz_plan_probe --self-check
+build/dev/gnc_kernel_session_materialization_probe --self-check
 ```
+
+最后一个探针通过 fixture adapter 恢复 Image 中的 exact typed entries。Session 初始化只沿数字 handle 建立三个 prepared artifact、七个 Runtime Cell 和两组 committed/candidate state object，并为所有非 state slot 建立真实 C++ 对象生命周期。错误 size、alignment、layout、codec 或缺失 materializer 会在初始化阶段稳定失败；已构造对象按逆序释放，下一次 Session 创建仍可成功。
 
 YYZ package 还贡献 `AltitudePitchGuidance` 的 stateless `SampledTransform` descriptor：`vehicle.process` placement、每个 committed boundary 的 `process` phase、`BoundaryEvaluation`、current-cycle sampled input/output、zero-order hold、默认 instantiate/dispose 边界和 exact guidance kernel identity。该 schedule 只描述当前 R1 两区间产品 identity，不覆盖 00A/Reference A 的目标多速率 profile；该窄 descriptor 也不开放 state-schema 字段或重新解释现有混合 output。它的 canonical config 可确定性重建 definition，Catalog 对 form/profile/recipe/obligation/schedule/port/lifecycle 组合做封闭校验：
 
@@ -80,9 +84,9 @@ YYZ package 还贡献 `AltitudePitchGuidance` 的 stateless `SampledTransform` d
 build/dev/gnc_compiler_runtime_component_catalog_probe --self-check
 ```
 
-`GNC-PLAN-RUNTIME-COMPONENT-UNAVAILABLE` 继续保护既有窄编译入口和残缺 RuntimeComponent 图；REF-YYZ revision 3 已闭合 provider、consumer、owner、schedule、temporal、invocation、typed factory、result route、stored slot/state codec、integration、transaction 与 preparation facts，并可生成供 owner review 的静态 Image。缺 provider/授权、owner/writer 不唯一、非法 reader、错误 alignment、layout overflow、非法 phase/cycle/time relation、scope/transaction/lifecycle 不完整、factory/codec/build-lock/result-route cross-reference 错配和 unresolved implementation 均 fail closed，失败路径不发布部分 Image。该结果把 `R2-PLAN-001`、`R2-PRF-001` 与 `R2-LINK-001` 推进到 review，G3 仍由仓库所有者决定。
+`GNC-PLAN-RUNTIME-COMPONENT-UNAVAILABLE` 继续保护既有窄编译入口和残缺 RuntimeComponent 图；REF-YYZ revision 3 已闭合 provider、consumer、owner、schedule、temporal、invocation、typed factory、result route、stored slot/state codec、integration、transaction 与 preparation facts。缺 provider/授权、owner/writer 不唯一、非法 reader、错误 alignment、layout overflow、非法 phase/cycle/time relation、scope/transaction/lifecycle 不完整、factory/codec/build-lock/result-route cross-reference 错配和 unresolved implementation 均 fail closed，失败路径不发布部分 Image。`R2-PLAN-001`、`R2-PRF-001`、`R2-LINK-001` 与 `R2-GATE-001` 已完成，G3 结果为 `Passed`。
 
-`hash_canonical_mission_ir` 使用 `gnc.canonical-mission-ir.semantic-bytes@2` 的显式 tagged/length-prefixed big-endian encoding 与 SHA-256。source URI/path、输入顺序和 plan id 被排除；C++ 与 Python reference 继续固定 YYZ qualification vector `b29dc67f2a9e0bb36cb18a5e54a8c4830bdb0cae718fbf856646ba903892511b`。RuntimeComponent 仍不会进入该 API。完整图改用 additive `gnc.canonical-mission-ir.semantic-bytes@3`：source semantics覆盖 model/config/asset/port/state/obligation/schedule/temporal/invocation composition，package entry identity、recipe、workspace、state layout、build fingerprint、函数地址与 source location均排除。Descriptor revision 6 与 Image revision 3 另保存 exact implementation、allocation、access 和 lifecycle facts；registration order 与地址不影响稳定 fingerprint，任何影响 R3 分配或访问的已链接字段都进入 Image fingerprint。当前仍未提供 syntax-neutral `SourceTree`/`SourceMap`、通用 `PreparedModelKey`/共享 cache、持久化 serializer、Session、stores、scheduler、integrator execution、candidate staging/commit、实际 PreparedModel/Bound handles、workspace instance 或 Session-local RuntimeCell；asset proof仍只证明 source-selected identity preservation。`R2-PLAN-001`、`R2-PRF-001` 与 `R2-LINK-001` 均为 owner review。G3 未通过，factory、codec 与 science entry 的实际恢复和调用、RuntimeCell 物化及 R3 后续阶段保持锁定。
+`hash_canonical_mission_ir` 使用 `gnc.canonical-mission-ir.semantic-bytes@2` 的显式 tagged/length-prefixed big-endian encoding 与 SHA-256。source URI/path、输入顺序和 plan id 被排除；C++ 与 Python reference 继续固定 YYZ qualification vector `b29dc67f2a9e0bb36cb18a5e54a8c4830bdb0cae718fbf856646ba903892511b`。RuntimeComponent 仍不会进入该 API。完整图改用 additive `gnc.canonical-mission-ir.semantic-bytes@3`：source semantics覆盖 model/config/asset/port/state/obligation/schedule/temporal/invocation composition，package entry identity、recipe、workspace、state layout、build fingerprint、函数地址与 source location均排除。Descriptor revision 6 与 Image revision 3 另保存 exact implementation、allocation、access 和 lifecycle facts；registration order 与地址不影响稳定 fingerprint，任何影响 R3 分配或访问的已链接字段都进入 Image fingerprint。当前仍未提供 syntax-neutral `SourceTree`/`SourceMap`、通用 `PreparedModelKey`/共享 cache、持久化 serializer、scheduler、integrator execution、candidate staging/commit、cycle-time science entry 调用、reset/checkpoint/restore 或 terminal publication；asset proof仍只证明 source-selected identity preservation。R3 仅解锁已进入的 state/output storage 与 Session lifecycle 初始化切片，其余 R3 工作继续按 backlog 依赖推进，R4 及后续阶段保持锁定。
 
 ## 仓库地图
 
