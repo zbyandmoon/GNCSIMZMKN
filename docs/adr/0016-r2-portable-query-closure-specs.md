@@ -29,13 +29,13 @@ owner 已决定在 R2 补齐 package-owned RigidBody/Mass StateOwner 静态合�
 8. Canonical Mission IR revision 与 `semantic-bytes@2` 保持不变。Entry identity 是 package implementation/plan fact，不进入当前 canonical source semantics。
 9. 完整 `QueryPlan`、`ClosurePlan`、静态 invocation authorization、`IntegrationScopePlan`、`TransactionPlan`、`PlanProofIndex` 和 `ExecutionPlanImage` 都属于 R2。R2 可以抽取、公开并链接现有纯函数 entry，前提是 R1 科学结果、浮点调用顺序和 oracle 保持。
 10. R3 创建实际 `PreparedModel`、BoundQuery/BoundClosure handles、workspace、RuntimeCell、Session-owned stores 与其他 mutable objects；query、closure、projection、derivative、component entry 和 integrator 的实际调用也从 R3 开始。
-11. 完整 RuntimeComponent 图采用 additive programmatic source revision 3、`CompleteCanonicalMissionIr` revision 3、`semantic-bytes@3` 与完整 descriptor revision 4。source semantic hash 覆盖 model/config/asset/port/state/obligation/schedule/temporal/invocation composition facts；prepare/query/closure/runtime entry identity、recipe、workspace、state layout、build fingerprint、函数地址与 source location 均不进入 source semantic hash。既有 `semantic-bytes@2` API 与 reference vector 保持原样。
+11. 完整 RuntimeComponent 图采用 additive programmatic source revision 3、`CompleteCanonicalMissionIr` revision 3、`semantic-bytes@3` 与完整 descriptor revision 6。source semantic hash 覆盖 model/config/asset/port/state/obligation/schedule/temporal/invocation composition facts；prepare/query/closure/runtime entry identity、recipe、workspace、state layout、build fingerprint、函数地址与 source location 均不进入 source semantic hash。既有 `semantic-bytes@2` API 与 reference vector 保持原样。
 12. process-local `ExecutionPlanImage` 保存 exact package lock、type-preserving callable reference、entry signature、workspace/layout identity、当前进程 state `sizeof/alignof`、numeric handles、regions、DAG、invocation、integration scope、transaction 与 proof conformance。typed callable 与地址不进入稳定 fingerprint；link 阶段不调用任何 entry。跨进程 ABI、动态 package protocol 与 serializer 不在本决定范围内。
 
 ## Consequences
 
 - Descriptor 能在无需运行时重新发现的条件下说明 PureQuery/Closure 的 stable entry、preparation input、workspace fact、strategy、response consumer binding 与静态授权来源。
-- `PreparedModelPreparationInputs` 不是完整 `PreparedModelPlan`：当前没有 `PreparedModelKey` 所需的 config/asset/numerical/preparation policy hashes，也没有 cache/lifetime policy。
+- `PreparedModelPreparationInputs` 保持窄范围：当前完整路径冻结三个 provider occurrence 的 definition/prepared-artifact identity、exact config/assets/prepare entry，以及 `SessionOwned + InitializeTime + NoSharedCache + FailSessionInitialization` 策略。共享 cache key 与跨 Session 复用策略仍未提供。
 - `QueryExecutionSpecInputs`/`ClosureExecutionSpecInputs` 是正式 `QueryPlan`/`ClosurePlan` 的编译输入；R2 plan/link 增加 authorized invocation caller、稳定 slot/layout identity、linked entry、IntegrationScope 与 transaction facts。
 - `PlanProofRecord`/`PlanProofIndex` 与 exact linker 在完整静态图上形成；linker 只解析已冻结 identity/layout/authorization，不执行 entry 或物化 runtime object。
 - 未闭合 RuntimeComponent source继续 fail closed。完整合法 RuntimeComponent source通过新的完整计划路径生成 Descriptor/Image。
@@ -50,7 +50,7 @@ owner 已决定在 R2 补齐 package-owned RigidBody/Mass StateOwner 静态合�
 
 ## Implementation status
 
-当前 PR 的 complete API 已形成 deterministic descriptor、派生 proof 与 exact-entry Image review artifact，并保持 link 阶段零调用。每个 RuntimeComponent 的 package-specific typed RuntimeCellFactory 和每个已授权 query/closure 的 formal-output binder 均以独立 identity、signature、call shape、C++ type witness 与 Image handle exact-link；invocation result slot、唯一 Binding、consumer port 和 package ordinal 也已冻结，FrozenInterval closure result 与 held form 共用同一权威值。R3 不得通过 model-id switch、signature解析、默认数值策略或 telemetry-as-authoritative-flow重新发现这些选择；它在 G3 通过后才由 package/generated composition恢复 entry、调用 factory/binder并物化Session对象。
+当前 complete API 已形成 deterministic descriptor、派生 proof 与 exact-entry Image review artifact，并保持 link 阶段零调用。每个 RuntimeComponent 的 package-specific typed RuntimeCellFactory、RigidBody/Mass state codec 与真实 stored-value codec 均以独立 identity、signature、call shape、C++ type witness 和 Image handle exact-link。已授权 environment/aero query 使用 `CallerLocal` route，没有 CycleFrame result slot 或 writer；FrozenInterval Closure 使用唯一 `HeldInterval` slot/writer，正式 closure output 与 held model 共用一个权威值。Image 还冻结 fixed-step RK4/step/numerical policy、workspace `None/0`、candidate invariant/projection、Continue/Terminal/Failure transaction sets，以及 fail-closed preparation lifecycle。R3 只需沿数字 handle 恢复已选 entry 和 artifact；model-id switch、signature 解析、默认数值策略与 telemetry authoritative flow 均不参与依赖发现。实际调用与 Session 对象物化在 G3 通过后开展。
 
 ## Executable evidence
 
@@ -58,6 +58,8 @@ owner 已决定在 R2 补齐 package-owned RigidBody/Mass StateOwner 静态合�
 - `framework/include/gnc/contracts/execution_plan_image.hpp`
 - `framework/include/gnc/model_sdk/static_descriptor.hpp`
 - `framework/include/gnc/model_sdk/static_implementation.hpp`
+- `framework/include/gnc/model_sdk/runtime_cell_factory.hpp`
+- `framework/include/gnc/model_sdk/in_process_codec.hpp`
 - `framework/include/gnc/compiler/static_mission_compiler.hpp`
 - `framework/include/gnc/compiler/complete_execution_plan.hpp`
 - `packages/cavh-formula/include/cavh/formula.hpp`

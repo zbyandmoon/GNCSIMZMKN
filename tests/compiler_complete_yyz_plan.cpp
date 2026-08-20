@@ -5,11 +5,13 @@
 #include <any>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -867,7 +869,7 @@ void verify_complete_ref_graph() {
     require(compilation.succeeded(),
             "REF-YYZ planning/proof compilation failed");
     const auto& plan = compilation.value->plan;
-    require(plan.revision == 5U && plan.occurrences.size() == 10U,
+    require(plan.revision == 6U && plan.occurrences.size() == 10U,
             "complete plan occurrence/revision count changed");
     require(plan.preparation_inputs.size() == 3U &&
                 plan.queries.size() == 2U && plan.closures.size() == 1U,
@@ -897,7 +899,7 @@ void verify_complete_ref_graph() {
     require(linked.succeeded(),
             "REF-YYZ science-entry link review failed");
     const auto& image = *linked.value;
-    require(image.entries().size() == 44U &&
+    require(image.revision() == 3U && image.entries().size() == 44U &&
                 image.occurrences().size() == 10U &&
                 image.preparations().size() == 3U &&
                 image.queries().size() == 2U &&
@@ -905,7 +907,8 @@ void verify_complete_ref_graph() {
                 image.runtime_components().size() == 7U &&
                 image.resource_plans().size() == 7U &&
                 image.state_blocks().size() == 2U &&
-                image.integration_scopes().size() == 1U,
+                image.integration_scopes().size() == 1U &&
+                image.storage_layouts().size() == 5U,
             "linked image exact table counts changed");
     require(!image.fingerprint().empty(),
             "linked image has no deterministic fingerprint");
@@ -958,9 +961,28 @@ void verify_complete_ref_graph() {
             [&](const auto& candidate) {
                 return candidate.handle == invocation.caller_callsite_handle;
             });
+        const bool provider_plan_exists =
+            std::any_of(image.queries().begin(), image.queries().end(),
+                        [&](const auto& query) {
+                            return query.handle ==
+                                   invocation.provider_plan_handle;
+                        }) ||
+            std::any_of(image.closures().begin(), image.closures().end(),
+                        [&](const auto& closure) {
+                            return closure.handle ==
+                                   invocation.provider_plan_handle;
+                        });
+        const bool provider_preparation_exists = std::any_of(
+            image.preparations().begin(), image.preparations().end(),
+            [&](const auto& preparation) {
+                return preparation.handle ==
+                       invocation.provider_preparation_handle;
+            });
         require(binding != image.bindings().end() &&
                     port != image.ports().end() &&
                     callsite != image.callsites().end() &&
+                    invocation.provider_occurrence_handle != 0U &&
+                    provider_plan_exists && provider_preparation_exists &&
                     binding->consumer_port_handle == port->handle &&
                     port->occurrence_handle == callsite->occurrence_handle &&
                     invocation.requirement_cardinality == "exactly-one" &&
@@ -1006,6 +1028,21 @@ void verify_complete_ref_graph() {
                     "FrozenInterval Closure lacks its unique held slot/writer");
         }
     }
+    require(std::none_of(
+                image.entries().begin(), image.entries().end(),
+                [](const auto& entry) {
+                    return entry.entry_id.find("result-binder") !=
+                               std::string::npos ||
+                           entry.entry_id.find("telemetry") !=
+                               std::string::npos;
+                }) &&
+                std::none_of(
+                    image.slots().begin(), image.slots().end(),
+                    [](const auto& slot) {
+                        return slot.slot_id.find("telemetry") !=
+                               std::string::npos;
+                    }),
+            "identity result binder or telemetry entered the authoritative route/storage graph");
     const auto invocation_for_requirement = [&](std::string_view id) {
         return std::find_if(
             image.invocations().begin(), image.invocations().end(),
@@ -1057,6 +1094,9 @@ void verify_complete_ref_graph() {
                     has_entry_handle(query.query_entry_handle) &&
                     invocation->result_route ==
                         gnc::contracts::InvocationResultRoute::CallerLocal &&
+                    invocation->provider_plan_handle == query.handle &&
+                    invocation->provider_preparation_handle ==
+                        query.preparation_handle &&
                     query.workspace_requirement == "None" &&
                     query.authorized_invocation_handles.size() == 1U &&
                     has_invocation_handle(
@@ -1091,6 +1131,9 @@ void verify_complete_ref_graph() {
                     has_entry_handle(closure.closure_entry_handle) &&
                     invocation->result_route ==
                         gnc::contracts::InvocationResultRoute::HeldInterval &&
+                    invocation->provider_plan_handle == closure.handle &&
+                    invocation->provider_preparation_handle ==
+                        closure.preparation_handle &&
                     closure.strategy == "FrozenInterval" &&
                     closure.workspace_requirement == "None" &&
                     closure.authorized_invocation_handles.size() == 1U &&
@@ -1231,13 +1274,82 @@ void verify_complete_ref_graph() {
         image, gnc::packages::yyz::kRigidStepModelIdentity);
     const auto* mass = find_image_component(
         image, gnc::packages::yyz::kScalarBurnMassModelIdentity);
+    const auto all_handles_exist = [](const auto& handles,
+                                      const auto& values) {
+        return std::all_of(
+            handles.begin(), handles.end(), [&](std::uint32_t handle) {
+                return handle != 0U &&
+                       std::any_of(values.begin(), values.end(),
+                                   [&](const auto& value) {
+                                       return value.handle == handle;
+                                   });
+            });
+    };
+    const auto provider_handles_exist = [&](const auto& handles) {
+        return std::all_of(
+            handles.begin(), handles.end(), [&](std::uint32_t handle) {
+                return handle != 0U &&
+                       (std::any_of(image.queries().begin(),
+                                    image.queries().end(),
+                                    [&](const auto& query) {
+                                        return query.handle == handle;
+                                    }) ||
+                        std::any_of(image.closures().begin(),
+                                    image.closures().end(),
+                                    [&](const auto& closure) {
+                                        return closure.handle == handle;
+                                    }));
+            });
+    };
     require(std::all_of(
                 image.runtime_components().begin(),
                 image.runtime_components().end(), [&](const auto& component) {
-                    return has_entry_handle(
-                        component.runtime_cell_factory_entry_handle);
+                    const bool resource_exists = std::any_of(
+                        image.resource_plans().begin(),
+                        image.resource_plans().end(),
+                        [&](const auto& resource) {
+                            return resource.handle ==
+                                       component.resource_plan_handle &&
+                                   resource.runtime_component_handle ==
+                                       component.handle;
+                        });
+                    return component.handle != 0U &&
+                           component.occurrence_handle != 0U &&
+                           has_entry_handle(
+                               component.definition_builder_entry_handle) &&
+                           has_entry_handle(
+                               component.runtime_cell_factory_entry_handle) &&
+                           resource_exists &&
+                           all_handles_exist(component.callsite_handles,
+                                             image.callsites()) &&
+                           all_handles_exist(component.state_block_handles,
+                                             image.state_blocks()) &&
+                           all_handles_exist(component.preparation_handles,
+                                             image.preparations()) &&
+                           provider_handles_exist(
+                               component.provider_plan_handles) &&
+                           all_handles_exist(component.input_slot_handles,
+                                             image.slots()) &&
+                           all_handles_exist(component.output_slot_handles,
+                                             image.slots()) &&
+                           all_handles_exist(
+                               component.output_writer_token_handles,
+                               image.writer_tokens()) &&
+                           all_handles_exist(component.invocation_handles,
+                                             image.invocations()) &&
+                           all_handles_exist(
+                               component.integration_scope_handles,
+                               image.integration_scopes()) &&
+                           all_handles_exist(
+                               component.interval_model_slot_handles,
+                               image.slots()) &&
+                           all_handles_exist(component.transaction_handles,
+                                             image.transactions()) &&
+                           all_handles_exist(
+                               component.evaluator_history_handles,
+                               image.evaluator_histories());
                 }),
-            "runtime component image lost an exact factory handle");
+            "runtime component image lost an exact factory dependency handle");
     require(guidance != nullptr &&
                 has_entry_handle(
                     guidance->definition_builder_entry_handle) &&
@@ -1267,8 +1379,17 @@ void verify_complete_ref_graph() {
                 evaluator->callsite_handles.size() == 1U,
             "terminal evaluator image schedule/lifecycle facts changed");
     require(rigid != nullptr && rigid->state_block_handles.size() == 1U &&
-                mass != nullptr && mass->state_block_handles.size() == 1U,
-            "state-owning runtime-cell factories lost their exact state block handle");
+                rigid->preparation_handles.size() == 3U &&
+                rigid->provider_plan_handles.size() == 3U &&
+                rigid->invocation_handles.size() == 3U &&
+                rigid->integration_scope_handles.size() == 1U &&
+                rigid->interval_model_slot_handles.size() == 1U &&
+                rigid->transaction_handles.size() == 1U &&
+                mass != nullptr && mass->state_block_handles.size() == 1U &&
+                mass->transaction_handles.size() == 1U &&
+                evaluator != nullptr &&
+                evaluator->evaluator_history_handles.size() == 1U,
+            "state/query/interval/policy/history factory handles are incomplete");
     std::set<std::uint32_t> factory_handles;
     std::set<std::uint32_t> runtime_instance_ids;
     std::set<std::uint32_t> resource_handles;
@@ -1342,36 +1463,133 @@ void verify_complete_ref_graph() {
     require(evaluator_callsite->input_slot_handles ==
                 expected_history_inputs,
             "evaluator callsite does not consume the exact ordered committed-history shape");
-    require(std::all_of(
+    for (const auto& state : image.state_blocks()) {
+        const auto committed = std::find_if(
+            image.slots().begin(), image.slots().end(),
+            [&](const auto& slot) {
+                return slot.handle == state.committed_slot_handle;
+            });
+        const auto candidate = std::find_if(
+            image.slots().begin(), image.slots().end(),
+            [&](const auto& slot) {
+                return slot.handle == state.candidate_slot_handle;
+            });
+        const auto codec = std::find_if(
+            image.entries().begin(), image.entries().end(),
+            [&](const auto& entry) {
+                return entry.handle == state.codec_entry_handle;
+            });
+        require(committed != image.slots().end() &&
+                    candidate != image.slots().end() &&
+                    codec != image.entries().end() &&
+                    codec->kind ==
+                        gnc::contracts::PlanImageEntryKind::StateCodec &&
+                    codec->state_layout_id == state.layout_id &&
+                    codec->typed_entry.has_value() &&
+                    codec->link_anchor != nullptr &&
+                    committed->storage_class ==
+                        gnc::contracts::SlotStorageClass::StateStore &&
+                    candidate->storage_class ==
+                        gnc::contracts::SlotStorageClass::
+                            TransactionCandidate &&
+                    committed->storage_layout_handle !=
+                        candidate->storage_layout_handle &&
+                    committed->size_bytes == state.size_bytes &&
+                    candidate->size_bytes == state.size_bytes &&
+                    committed->alignment_bytes == state.alignment_bytes &&
+                    candidate->alignment_bytes == state.alignment_bytes &&
+                    committed->codec_entry_handle == codec->handle &&
+                    candidate->codec_entry_handle == codec->handle,
+                "state block lacks its exact codec or committed/candidate storage relationship");
+    }
+    const std::set<gnc::contracts::SlotStorageClass>
+        expected_storage_classes{
+            gnc::contracts::SlotStorageClass::CycleFrame,
+            gnc::contracts::SlotStorageClass::StateStore,
+            gnc::contracts::SlotStorageClass::TransactionCandidate,
+            gnc::contracts::SlotStorageClass::IntegrationHeld,
+            gnc::contracts::SlotStorageClass::TerminalResult};
+    std::set<gnc::contracts::SlotStorageClass> actual_storage_classes;
+    std::set<std::uint32_t> layout_handles;
+    std::size_t storage_members = 0U;
+    for (const auto& layout : image.storage_layouts()) {
+        require(layout.handle != 0U &&
+                    layout_handles.insert(layout.handle).second &&
+                    actual_storage_classes.insert(layout.storage_class)
+                        .second &&
+                    layout.size_bytes > 0U &&
+                    layout.alignment_bytes > 0U &&
+                    (layout.alignment_bytes &
+                     (layout.alignment_bytes - 1U)) == 0U &&
+                    layout.size_bytes % layout.alignment_bytes == 0U &&
+                    !layout.ordered_slot_handles.empty(),
+                "storage extent identity/size/alignment is invalid");
+        std::vector<const gnc::contracts::PlanImageSlot*> members;
+        for (const auto handle : layout.ordered_slot_handles) {
+            const auto slot = std::find_if(
                 image.slots().begin(), image.slots().end(),
-                [](const auto& slot) {
-                    return slot.size_bytes > 0U &&
-                           slot.alignment_bytes > 0U &&
-                           slot.codec_entry_handle != 0U &&
-                           slot.writer_token_handle != 0U;
-                }),
-            "image contains a zero runtime/state slot layout, codec, or writer fact");
-    std::vector<const gnc::contracts::PlanImageSlot*> ordered_slots;
-    ordered_slots.reserve(image.slots().size());
-    for (const auto& slot : image.slots()) {
-        ordered_slots.push_back(&slot);
+                [&](const auto& candidate) {
+                    return candidate.handle == handle;
+                });
+            require(slot != image.slots().end() &&
+                        slot->storage_layout_handle == layout.handle &&
+                        slot->storage_class == layout.storage_class,
+                    "storage extent contains a foreign or missing slot");
+            members.push_back(&*slot);
+        }
+        require(std::is_sorted(
+                    members.begin(), members.end(),
+                    [](const auto* lhs, const auto* rhs) {
+                        return lhs->slot_id < rhs->slot_id;
+                    }),
+                "storage extent membership does not use stable slot identity order");
+        std::sort(members.begin(), members.end(),
+                  [](const auto* lhs, const auto* rhs) {
+                      return std::tie(lhs->offset_bytes, lhs->slot_id) <
+                             std::tie(rhs->offset_bytes, rhs->slot_id);
+                  });
+        std::uint64_t previous_end = 0U;
+        for (const auto* slot : members) {
+            const auto writer_count = static_cast<std::size_t>(
+                std::count_if(
+                    image.writer_tokens().begin(),
+                    image.writer_tokens().end(), [&](const auto& writer) {
+                        return writer.slot_handle == slot->handle &&
+                               writer.handle ==
+                                   slot->writer_token_handle;
+                    }));
+            const bool readers_exist = std::all_of(
+                slot->reader_handles.begin(), slot->reader_handles.end(),
+                [&](std::uint32_t reader) {
+                    return std::any_of(
+                               image.callsites().begin(),
+                               image.callsites().end(),
+                               [&](const auto& callsite) {
+                                   return callsite.handle == reader;
+                               }) ||
+                           std::any_of(
+                               image.integration_scopes().begin(),
+                               image.integration_scopes().end(),
+                               [&](const auto& scope) {
+                                   return scope.handle == reader;
+                               });
+                });
+            require(slot->size_bytes > 0U &&
+                        slot->alignment_bytes > 0U &&
+                        slot->offset_bytes % slot->alignment_bytes == 0U &&
+                        slot->offset_bytes >= previous_end &&
+                        slot->size_bytes <=
+                            layout.size_bytes - slot->offset_bytes &&
+                        slot->codec_entry_handle != 0U &&
+                        writer_count == 1U && readers_exist,
+                    "slot extent overlaps, escapes bounds, lacks alignment/codec/writer, or has an invalid reader");
+            previous_end = slot->offset_bytes + slot->size_bytes;
+        }
+        storage_members += members.size();
     }
-    std::sort(ordered_slots.begin(), ordered_slots.end(),
-              [](const auto* lhs, const auto* rhs) {
-                  return lhs->offset_bytes < rhs->offset_bytes;
-              });
-    std::uint64_t previous_end = 0U;
-    for (const auto* slot : ordered_slots) {
-        require(slot->offset_bytes % slot->alignment_bytes == 0U &&
-                    slot->offset_bytes >= previous_end &&
-                    std::all_of(slot->reader_handles.begin(),
-                                slot->reader_handles.end(),
-                                [](std::uint32_t handle) {
-                                    return handle != 0U;
-                                }),
-                "slot offsets overlap, violate alignment, or contain a zero reader handle");
-        previous_end = slot->offset_bytes + slot->size_bytes;
-    }
+    require(actual_storage_classes == expected_storage_classes &&
+                storage_members == image.slots().size(),
+            "storage classes do not cover every persisted slot exactly once");
     const auto& integration = image.integration_scopes().front();
     require(integration.integrator_id ==
                     gnc::foundation::kClassicalRk4FixedStepIdentity.id &&
@@ -1385,7 +1603,21 @@ void verify_complete_ref_graph() {
                 integration.check_finiteness == "every-stage" &&
                 integration.zero_threshold == 1.0e-14 &&
                 integration.condition_limit == 1.0e12 &&
+                integration.numerical_policy_id ==
+                    gnc::compiler::kNumericalPolicyIdentity &&
+                integration.numerical_policy_configuration_occurrence_handle ==
+                    integration.owner_occurrence_handle &&
                 integration.workspace_layout_id == "gnc.workspace.none@1" &&
+                integration.workspace_size_bytes == 0U &&
+                integration.workspace_alignment_bytes == 0U &&
+                integration.held_slot_hold_policy ==
+                    gnc::contracts::SlotHoldPolicy::HoldInterval &&
+                integration.form_invocation_handles.size() == 3U &&
+                integration.closure_invocation_handles.size() == 1U &&
+                std::find(integration.form_invocation_handles.begin(),
+                          integration.form_invocation_handles.end(),
+                          integration.closure_invocation_handles.front()) !=
+                    integration.form_invocation_handles.end() &&
                 integration.candidate_codec_entry_handle != 0U &&
                 !integration.candidate_project_operation_id.empty() &&
                 !integration.candidate_finite_validation_operation_id.empty() &&
@@ -1400,6 +1632,38 @@ void verify_complete_ref_graph() {
     const auto& continue_branch = transaction.branches.at(0U);
     const auto& terminal_branch = transaction.branches.at(1U);
     const auto& failure_branch = transaction.branches.at(2U);
+    const auto output_handles = [&](bool include_terminal) {
+        std::vector<std::pair<std::string, std::uint32_t>> values;
+        for (const auto& slot : image.slots()) {
+            if (slot.storage_class ==
+                    gnc::contracts::SlotStorageClass::CycleFrame ||
+                (include_terminal &&
+                 slot.storage_class ==
+                     gnc::contracts::SlotStorageClass::TerminalResult)) {
+                values.emplace_back(slot.slot_id, slot.handle);
+            }
+        }
+        std::sort(values.begin(), values.end());
+        std::vector<std::uint32_t> handles;
+        for (const auto& value : values) {
+            handles.push_back(value.second);
+        }
+        return handles;
+    };
+    const auto cycle_output_handles = output_handles(false);
+    const auto terminal_output_handles = output_handles(true);
+    std::vector<std::pair<std::string, std::uint32_t>> terminal_only;
+    for (const auto& slot : image.slots()) {
+        if (slot.storage_class ==
+            gnc::contracts::SlotStorageClass::TerminalResult) {
+            terminal_only.emplace_back(slot.slot_id, slot.handle);
+        }
+    }
+    std::sort(terminal_only.begin(), terminal_only.end());
+    std::vector<std::uint32_t> terminal_only_handles;
+    for (const auto& value : terminal_only) {
+        terminal_only_handles.push_back(value.second);
+    }
     require(continue_branch.branch ==
                     gnc::contracts::TransactionBranch::Continue &&
                 continue_branch.committed_candidate_slot_handles.size() ==
@@ -1408,6 +1672,19 @@ void verify_complete_ref_graph() {
                 continue_branch.retained_held_slot_handles ==
                     transaction.held_slot_handles &&
                 continue_branch.discarded_held_slot_handles.empty() &&
+                continue_branch.published_output_slot_handles ==
+                    cycle_output_handles &&
+                continue_branch.sealed_output_slot_handles ==
+                    cycle_output_handles &&
+                continue_branch.discarded_output_slot_handles ==
+                    terminal_only_handles &&
+                continue_branch.output_visibility ==
+                    gnc::contracts::TransactionOutputVisibility::
+                        AfterObservationSeal &&
+                continue_branch.held_interval_end_policy ==
+                    gnc::contracts::HeldIntervalEndPolicy::
+                        ReleaseAfterModelCommit &&
+                !continue_branch.committed_state_preserved &&
                 continue_branch.model_commit &&
                 continue_branch.observation_seal &&
                 !continue_branch.result_seal_after_observation &&
@@ -1420,6 +1697,18 @@ void verify_complete_ref_graph() {
                     2U &&
                 terminal_branch.discarded_held_slot_handles ==
                     transaction.held_slot_handles &&
+                terminal_branch.published_output_slot_handles ==
+                    terminal_output_handles &&
+                terminal_branch.sealed_output_slot_handles ==
+                    terminal_output_handles &&
+                terminal_branch.discarded_output_slot_handles.empty() &&
+                terminal_branch.output_visibility ==
+                    gnc::contracts::TransactionOutputVisibility::
+                        AfterObservationSeal &&
+                terminal_branch.held_interval_end_policy ==
+                    gnc::contracts::HeldIntervalEndPolicy::
+                        ReleaseAtTerminalSeal &&
+                terminal_branch.committed_state_preserved &&
                 !terminal_branch.model_commit &&
                 terminal_branch.observation_seal &&
                 terminal_branch.result_seal_after_observation &&
@@ -1432,6 +1721,21 @@ void verify_complete_ref_graph() {
                     2U &&
                 failure_branch.discarded_held_slot_handles ==
                     transaction.held_slot_handles &&
+                failure_branch.published_output_slot_handles.empty() &&
+                failure_branch.sealed_output_slot_handles.empty() &&
+                failure_branch.discarded_output_slot_handles ==
+                    terminal_output_handles &&
+                failure_branch.output_visibility ==
+                    gnc::contracts::TransactionOutputVisibility::None &&
+                failure_branch.held_interval_end_policy ==
+                    gnc::contracts::HeldIntervalEndPolicy::
+                        DiscardOnFailure &&
+                failure_branch.committed_state_preserved &&
+                failure_branch.failure_owner ==
+                    gnc::contracts::TransactionFailureOwner::
+                        TransactionCoordinator &&
+                failure_branch.failure_route ==
+                    gnc::contracts::TransactionFailureRoute::RunOutcome &&
                 !failure_branch.model_commit &&
                 !failure_branch.observation_seal &&
                 !failure_branch.result_seal_after_observation &&
@@ -1454,7 +1758,16 @@ void verify_complete_ref_graph() {
                 std::all_of(image.preparations().begin(),
                             image.preparations().end(),
                             [](const auto& preparation) {
-                                return preparation.ownership ==
+                                return preparation.handle != 0U &&
+                                       preparation.occurrence_handle != 0U &&
+                                       preparation.prepare_entry_handle !=
+                                           0U &&
+                                       !preparation.definition_id.empty() &&
+                                       !preparation.definition_version
+                                            .empty() &&
+                                       !preparation.prepared_artifact_id
+                                            .empty() &&
+                                       preparation.ownership ==
                                            gnc::contracts::
                                                PreparationOwnership::
                                                    SessionOwned &&
@@ -1464,9 +1777,14 @@ void verify_complete_ref_graph() {
                                        preparation.cache_policy ==
                                            gnc::contracts::
                                                PreparedModelCachePolicy::
-                                                   NoSharedCache;
+                                                   NoSharedCache &&
+                                       preparation.failure_policy ==
+                                           gnc::contracts::
+                                               PreparationFailurePolicy::
+                                                   FailSessionInitialization &&
+                                       !preparation.allows_partial_session;
                             }),
-            "Session-owned initialize-time no-cache lifecycle order changed");
+            "Session-owned prepare-before-factory lifecycle or fail-closed policy changed");
 }
 
 void verify_determinism_and_link_semantics() {
@@ -1547,6 +1865,26 @@ void verify_determinism_and_link_semantics() {
                 reordered_image.value->fingerprint() ==
                     baseline_image.value->fingerprint(),
             "implementation container order changed image fingerprint");
+
+    auto resized_layout_implementation = implementation;
+    require(!resized_layout_implementation.value_layouts.empty() &&
+                resized_layout_implementation.value_layouts.front()
+                        .alignment_bytes > 0U,
+            "materialized-layout fingerprint fixture is absent");
+    resized_layout_implementation.value_layouts.front().size_bytes +=
+        resized_layout_implementation.value_layouts.front().alignment_bytes;
+    const auto resized_layout_image =
+        gnc::compiler::link_complete_execution_plan(
+            baseline.value->plan, baseline.value->proofs,
+            {resized_layout_implementation});
+    require(resized_layout_image.succeeded() &&
+                resized_layout_image.value->descriptor_semantic_hash() ==
+                    baseline_image.value->descriptor_semantic_hash() &&
+                resized_layout_image.value->proof_index_hash() ==
+                    baseline_image.value->proof_index_hash() &&
+                resized_layout_image.value->fingerprint() !=
+                    baseline_image.value->fingerprint(),
+            "process-local slot size/extent change was absent from the image fingerprint");
 
     auto alternate_package = package;
     auto alternate_implementation = implementation;
@@ -2128,6 +2466,54 @@ void verify_high_value_negatives() {
         std::move(closure_local_route),
         "FrozenInterval Closure accepted a caller-local result route");
 
+    auto missing_writer_plan = positive.value->plan;
+    require(!missing_writer_plan.slots.empty() &&
+                !missing_writer_plan.writer_tokens.empty(),
+            "missing-writer mutation fixture is absent");
+    const auto missing_writer_id =
+        missing_writer_plan.slots.front().writer_token_id;
+    missing_writer_plan.writer_tokens.erase(
+        std::remove_if(
+            missing_writer_plan.writer_tokens.begin(),
+            missing_writer_plan.writer_tokens.end(),
+            [&](const auto& writer) {
+                return writer.writer_token_id == missing_writer_id;
+            }),
+        missing_writer_plan.writer_tokens.end());
+    expect_plan_conformance_failure(
+        std::move(missing_writer_plan),
+        "stored slot with no exact writer passed plan conformance");
+
+    auto duplicate_writer_plan = positive.value->plan;
+    require(!duplicate_writer_plan.writer_tokens.empty(),
+            "duplicate-writer mutation fixture is absent");
+    duplicate_writer_plan.writer_tokens.push_back(
+        duplicate_writer_plan.writer_tokens.front());
+    expect_plan_conformance_failure(
+        std::move(duplicate_writer_plan),
+        "stored slot with duplicate writers passed plan conformance");
+
+    auto invalid_reader_plan = positive.value->plan;
+    require(!invalid_reader_plan.slots.empty(),
+            "invalid-reader mutation fixture is absent");
+    invalid_reader_plan.slots.front().reader_plan_element_ids.push_back(
+        "callsite/missing-authoritative-reader");
+    std::sort(
+        invalid_reader_plan.slots.front().reader_plan_element_ids.begin(),
+        invalid_reader_plan.slots.front().reader_plan_element_ids.end());
+    expect_plan_conformance_failure(
+        std::move(invalid_reader_plan),
+        "stored slot accepted an unknown authoritative reader");
+
+    auto wrong_writer_owner_plan = positive.value->plan;
+    require(wrong_writer_owner_plan.writer_tokens.size() >= 2U,
+            "writer-owner mutation fixture lacks two writers");
+    wrong_writer_owner_plan.writer_tokens.front().owner_plan_element_id =
+        wrong_writer_owner_plan.writer_tokens.at(1U).owner_plan_element_id;
+    expect_plan_conformance_failure(
+        std::move(wrong_writer_owner_plan),
+        "stored slot writer accepted a foreign owner");
+
     auto missing_state_codec_plan = positive.value->plan;
     require(!missing_state_codec_plan.state_blocks.empty(),
             "state-codec plan mutation fixture is absent");
@@ -2213,6 +2599,41 @@ void verify_high_value_negatives() {
         std::move(invalid_transaction_seal),
         "continue branch accepted a result seal or non-advancing boundary relation");
 
+    auto incomplete_transaction_outputs = positive.value->plan;
+    auto& incomplete_continue =
+        incomplete_transaction_outputs.transactions.front().branches.front();
+    require(!incomplete_continue.published_output_slot_ids.empty(),
+            "transaction output-set mutation fixture is absent");
+    incomplete_continue.published_output_slot_ids.pop_back();
+    expect_plan_conformance_failure(
+        std::move(incomplete_transaction_outputs),
+        "continue branch accepted an incomplete published-output set");
+
+    auto invalid_failure_route = positive.value->plan;
+    auto& failure =
+        invalid_failure_route.transactions.front().branches.at(2U);
+    failure.failure_owner =
+        gnc::contracts::TransactionFailureOwner::Unspecified;
+    expect_plan_conformance_failure(
+        std::move(invalid_failure_route),
+        "failure branch accepted an unspecified outcome owner/route");
+
+    auto invalid_integration_policy = positive.value->plan;
+    require(!invalid_integration_policy.integration_scopes.empty(),
+            "integration-policy mutation fixture is absent");
+    invalid_integration_policy.integration_scopes.front()
+        .numerical_policy_id.clear();
+    expect_plan_conformance_failure(
+        std::move(invalid_integration_policy),
+        "IntegrationScope accepted a missing numerical-policy identity");
+
+    auto invalid_integration_workspace = positive.value->plan;
+    invalid_integration_workspace.integration_scopes.front()
+        .workspace_size_bytes = 1U;
+    expect_plan_conformance_failure(
+        std::move(invalid_integration_workspace),
+        "no-workspace RK4 IntegrationScope accepted a nonzero extent");
+
     auto invalid_preparation_lifecycle = positive.value->plan;
     require(!invalid_preparation_lifecycle.preparation_inputs.empty(),
             "preparation lifecycle mutation fixture is absent");
@@ -2221,6 +2642,37 @@ void verify_high_value_negatives() {
     expect_plan_conformance_failure(
         std::move(invalid_preparation_lifecycle),
         "selected provider accepted a non-Session-owned/no-cache lifecycle");
+
+    auto partial_preparation_lifecycle = positive.value->plan;
+    partial_preparation_lifecycle.preparation_inputs.front()
+        .allows_partial_session = true;
+    expect_plan_conformance_failure(
+        std::move(partial_preparation_lifecycle),
+        "prepare failure accepted a partially runnable Session");
+
+    auto missing_prepared_artifact = positive.value->plan;
+    missing_prepared_artifact.preparation_inputs.front()
+        .prepared_artifact_id.clear();
+    expect_plan_conformance_failure(
+        std::move(missing_prepared_artifact),
+        "preparation accepted a missing prepared-artifact identity");
+
+    auto incomplete_factory_dependencies = positive.value->plan;
+    const auto dependent_factory = std::find_if(
+        incomplete_factory_dependencies.runtime_components.begin(),
+        incomplete_factory_dependencies.runtime_components.end(),
+        [](const auto& component) {
+            return !component.provider_plan_ids.empty();
+        });
+    require(dependent_factory !=
+                incomplete_factory_dependencies.runtime_components.end() &&
+                !dependent_factory->interval_model_slot_ids.empty(),
+            "factory dependency mutation fixture is absent");
+    dependent_factory->provider_plan_ids.clear();
+    dependent_factory->interval_model_slot_ids.clear();
+    expect_plan_conformance_failure(
+        std::move(incomplete_factory_dependencies),
+        "RuntimeCell factory accepted missing provider/interval handles");
 
     auto coordinated_lifecycle_order = positive.value->plan;
     require(coordinated_lifecycle_order.preparation_inputs.size() >= 2U &&
@@ -2921,6 +3373,39 @@ void verify_high_value_negatives() {
                     duplicate_value_layout_failure.diagnostics,
                     CompleteDiagnosticCode::ImplementationMismatch),
             "duplicate runtime value layout did not fail link");
+
+    auto overflowing_state_layout = implementation;
+    require(!overflowing_state_layout.state_layouts.empty(),
+            "overflowing storage-layout fixture is absent");
+    overflowing_state_layout.state_layouts.front().size_bytes =
+        std::numeric_limits<std::size_t>::max();
+    overflowing_state_layout.state_layouts.front().alignment_bytes = 1U;
+    const auto overflowing_layout_failure =
+        gnc::compiler::link_complete_execution_plan(
+            positive.value->plan, positive.value->proofs,
+            {overflowing_state_layout});
+    require(!overflowing_layout_failure.succeeded() &&
+                !overflowing_layout_failure.value.has_value() &&
+                has_diagnostic(
+                    overflowing_layout_failure.diagnostics,
+                    CompleteDiagnosticCode::ImplementationMismatch),
+            "overflowing deterministic storage extent produced a partial Image");
+
+    auto invalid_alignment_layout = implementation;
+    require(!invalid_alignment_layout.value_layouts.empty(),
+            "invalid-alignment storage fixture is absent");
+    invalid_alignment_layout.value_layouts.front().size_bytes = 3U;
+    invalid_alignment_layout.value_layouts.front().alignment_bytes = 3U;
+    const auto invalid_alignment_failure =
+        gnc::compiler::link_complete_execution_plan(
+            positive.value->plan, positive.value->proofs,
+            {invalid_alignment_layout});
+    require(!invalid_alignment_failure.succeeded() &&
+                !invalid_alignment_failure.value.has_value() &&
+                has_diagnostic(
+                    invalid_alignment_failure.diagnostics,
+                    CompleteDiagnosticCode::ImplementationMismatch),
+            "non-power-of-two slot alignment produced a partial Image");
 
     const auto missing_package_failure =
         gnc::compiler::link_complete_execution_plan(

@@ -39,11 +39,12 @@ R1 已交付 `AltitudePitchGuidanceKernel`。它从 committed rigid observation 
 
 ## Implementation status
 
-当前 PR 已实现两项真实 StateOwner、产品入口，以及 planning/proof/exact-link review。七个 RuntimeComponent 各自冻结并 exact-link package-specific typed RuntimeCellFactory；environment/aero/closure invocation 也分别拥有只接收 formal output 的 package binder、唯一 result-flow Binding、稳定 ordinal 与 result slot，closure response 直接别名 held form。link 阶段不调用任何 entry。`R2-CAT-001` 已完成，`R2-PLAN-001`、`R2-PRF-001` 与 `R2-LINK-001` 均进入 owner review；这不表示 G3 已通过，也不把 Definition builder、wrapper 或统一 callback framework 描述为 factory。实际 factory 调用、Session-local RuntimeCell 与执行仍属于 R3。
+当前实现已交付两项真实 StateOwner、产品入口，以及 planning/proof/exact-link review。七个 RuntimeComponent 各自冻结并 exact-link package-specific typed RuntimeCellFactory；Image 为 factory 保存 runtime component、provider preparation/plan、state、input/output/writer、invocation/callsite、interval model、integration/transaction policy 与 evaluator history 的直接数字 handle。environment/aero query 使用授权 caller 的 `CallerLocal` typed return，不分配 result storage；FrozenInterval Closure 只生成一个 coordinator-owned held interval slot 和 writer。RigidBody/Mass state codec、stored-value codec、按 storage class 划分的确定性 extent 与 slot size/alignment/offset/reader/lifetime 也已闭合。link 阶段保持零调用。`R2-CAT-001` 已完成，`R2-PLAN-001`、`R2-PRF-001` 与 `R2-LINK-001` 均进入 owner review；G3 仍为 `planned`。实际 factory/codec/science entry 调用、Session-local RuntimeCell 与执行属于 R3。
 
 ## Executable evidence
 
 - `framework/include/gnc/model_sdk/static_descriptor.hpp`
+- `framework/include/gnc/model_sdk/runtime_cell_factory.hpp`
 - `framework/include/gnc/compiler/static_mission_compiler.hpp`
 - `framework/include/gnc/compiler/complete_execution_plan.hpp`
 - `packages/yyz-rigid-step/src/mass_commit.cpp`

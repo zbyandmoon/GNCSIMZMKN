@@ -10,7 +10,7 @@
 
 本计划把目标蓝图中的 architecture fitness functions 分成三类证据：当前 R0 可由仓库结构证明的规则、需要 R0 治理 artifact 后启用的规则、需要 R1–R5 产品 artifact 后启用的规则。每条规则必须通过真实 source/descriptor/transaction artifact 或与正向 evaluator 相同的 mutation 证明检测能力。
 
-当前产品已具备 R1 PureQuery、Closure 与 stateless AlgorithmKernel；R2 既保留窄静态 `ExecutionPlanDescriptor` qualification 路径，也为最小 REF-YYZ 图形成 RuntimeComponent/state plans、`PlanProofIndex` 和 exact-entry-linked `ExecutionPlanImage` review artifact。package-owned typed RuntimeCellFactory、formal-output result binder、唯一 result-flow Binding 与 numeric handles 已进入 Descriptor/Image，且 poison tests 证明 link 阶段零调用、地址不进入 fingerprint。R2-PLAN/PRF/LINK 仍等待 owner review，G3 尚未判定；R3 的实际 factory/binder 调用、Session、stores、runtime scheduler、integration execution 与 `StepTransaction` staging/commit也尚未形成。缺少这些运行 artifact 时不能证明对应物化/执行语义正确；coverage report 应使用 `not-applicable-awaiting-artifact` 或 `deferred-by-gate` 表达该状态。
+当前产品已具备 R1 PureQuery、Closure 与 stateless AlgorithmKernel；R2 既保留窄静态 `ExecutionPlanDescriptor` qualification 路径，也为最小 REF-YYZ 图形成 RuntimeComponent/state plans、`PlanProofIndex` 和 exact-entry-linked `ExecutionPlanImage` review artifact。package-owned typed RuntimeCellFactory、state/value codec、caller-local/held result route、确定性 storage extent、唯一 writer/reader、fixed-step RK4 policy、transaction branches、preparation lifecycle 与 factory direct handles 已进入 Descriptor/Image，poison tests 证明 link 阶段零调用、地址不进入 fingerprint。R2-PLAN/PRF/LINK 仍等待 owner review，G3 尚未判定；R3 的实际 entry 调用、Session、stores、runtime scheduler、integration execution 与 `StepTransaction` staging/commit仍未形成。对应运行 artifact 交付前，coverage report 使用 `not-applicable-awaiting-artifact` 或 `deferred-by-gate` 表达该状态。
 
 本计划不定义 runtime schema、不增加生产依赖、不改变 module DAG，也不允许扫描器根据类名推断 state owner、temporal relation 或 commit semantics。
 
