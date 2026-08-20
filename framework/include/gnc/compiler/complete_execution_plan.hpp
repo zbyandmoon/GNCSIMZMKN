@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -29,13 +30,15 @@ inline constexpr std::string_view kCompleteStaticCompositionSourceVersion =
 inline constexpr std::string_view kCompleteCanonicalSemanticEncodingIdentity =
     "gnc.canonical-mission-ir.semantic-bytes@3";
 inline constexpr std::string_view kCompleteExecutionPlanDescriptorIdentity =
-    "gnc.execution-plan-descriptor/5";
+    "gnc.execution-plan-descriptor/6";
 inline constexpr std::string_view kPlanProofIndexIdentity =
     "gnc.plan-proof-index/1";
 inline constexpr std::string_view kExecutionPlanImageFingerprintIdentity =
-    "gnc.execution-plan-image.fingerprint@2";
+    "gnc.execution-plan-image.fingerprint@3";
 inline constexpr std::string_view kNoWorkspaceLayoutIdentity =
     "gnc.workspace.none@1";
+inline constexpr std::string_view kNumericalPolicyIdentity =
+    "gnc.foundation.numerical-policy@1";
 
 enum class CompleteDiagnosticCode : std::uint8_t {
     InvalidCatalog,
@@ -431,6 +434,7 @@ struct PreparationInputPlan {
     PackageLock package;
     std::string model_id;
     std::string model_version;
+    std::string prepared_artifact_id;
     std::string preparation_entry_requirement_id;
     gnc::model_sdk::CanonicalConfigBlock canonical_configuration;
     std::vector<CanonicalAssetBinding> asset_bindings;
@@ -440,6 +444,9 @@ struct PreparationInputPlan {
         gnc::contracts::PreparationPhase::Unspecified;
     gnc::contracts::PreparedModelCachePolicy cache_policy =
         gnc::contracts::PreparedModelCachePolicy::Unspecified;
+    gnc::contracts::PreparationFailurePolicy failure_policy =
+        gnc::contracts::PreparationFailurePolicy::Unspecified;
+    bool allows_partial_session = false;
     std::uint32_t order = 0U;
     SourceRef source;
 };
@@ -546,6 +553,19 @@ struct RuntimeComponentPlan {
         lifecycle_capabilities;
     std::vector<std::string> callsite_ids;
     std::vector<std::string> state_block_owner_occurrence_ids;
+    // Canonical direct dependency closure for the future package-owned
+    // factory binding. Every id is lowered to a numeric Image handle; R3
+    // never scans source, Catalog, or unrelated plan tables by string.
+    std::vector<std::string> preparation_input_ids;
+    std::vector<std::string> provider_plan_ids;
+    std::vector<std::string> input_slot_ids;
+    std::vector<std::string> output_slot_ids;
+    std::vector<std::string> output_writer_token_ids;
+    std::vector<std::string> invocation_binding_ids;
+    std::vector<std::string> integration_scope_ids;
+    std::vector<std::string> interval_model_slot_ids;
+    std::vector<std::string> transaction_ids;
+    std::vector<std::string> evaluator_history_ids;
     SourceRef source;
 };
 
@@ -628,6 +648,7 @@ struct IntegrationScopePlan {
     std::string held_form_contract_id;
     std::string derivative_request_contract_id;
     std::string derivative_result_contract_id;
+    std::vector<std::string> form_invocation_ids;
     std::vector<std::string> closure_invocation_ids;
     std::vector<std::string> member_owner_occurrence_ids;
     std::string integrator_id;
@@ -640,8 +661,14 @@ struct IntegrationScopePlan {
     std::string check_finiteness;
     double zero_threshold = 0.0;
     double condition_limit = 0.0;
+    std::string numerical_policy_id;
+    std::string numerical_policy_configuration_occurrence_id;
     gnc::model_sdk::StaticWorkspaceRequirement workspace_requirement =
         gnc::model_sdk::StaticWorkspaceRequirement::Unspecified;
+    std::uint64_t workspace_size_bytes = 0U;
+    std::uint64_t workspace_alignment_bytes = 0U;
+    gnc::contracts::SlotHoldPolicy held_slot_hold_policy =
+        gnc::contracts::SlotHoldPolicy::Unspecified;
     std::string candidate_codec_entry_requirement_id;
     std::string candidate_project_operation_id;
     std::string candidate_finite_validation_operation_id;
@@ -673,6 +700,18 @@ struct TransactionBranchPlan {
     std::vector<std::string> discarded_candidate_slot_ids;
     std::vector<std::string> retained_held_slot_ids;
     std::vector<std::string> discarded_held_slot_ids;
+    std::vector<std::string> published_output_slot_ids;
+    std::vector<std::string> sealed_output_slot_ids;
+    std::vector<std::string> discarded_output_slot_ids;
+    gnc::contracts::TransactionOutputVisibility output_visibility =
+        gnc::contracts::TransactionOutputVisibility::Unspecified;
+    gnc::contracts::HeldIntervalEndPolicy held_interval_end_policy =
+        gnc::contracts::HeldIntervalEndPolicy::Unspecified;
+    bool committed_state_preserved = false;
+    gnc::contracts::TransactionFailureOwner failure_owner =
+        gnc::contracts::TransactionFailureOwner::Unspecified;
+    gnc::contracts::TransactionFailureRoute failure_route =
+        gnc::contracts::TransactionFailureRoute::Unspecified;
     bool model_commit = false;
     bool observation_seal = false;
     bool result_seal_after_observation = false;
@@ -742,7 +781,7 @@ struct EntryLinkRequirement {
 };
 
 struct CompleteExecutionPlanDescriptor {
-    std::uint32_t revision = 5U;
+    std::uint32_t revision = 6U;
     std::string descriptor_identity =
         std::string(kCompleteExecutionPlanDescriptorIdentity);
     std::string plan_id;
@@ -2038,6 +2077,8 @@ inline void lower_occurrences(LoweringContext& context) {
             preparation.package = occurrence.package;
             preparation.model_id = descriptor.definition.model_id;
             preparation.model_version = descriptor.definition.model_version;
+            preparation.prepared_artifact_id =
+                "prepared-model/" + occurrence.occurrence_id;
             preparation.preparation_entry_requirement_id = prepare_id;
             preparation.canonical_configuration = occurrence.configuration;
             preparation.asset_bindings = occurrence.asset_bindings;
@@ -2047,6 +2088,10 @@ inline void lower_occurrences(LoweringContext& context) {
                 gnc::contracts::PreparationPhase::InitializeTime;
             preparation.cache_policy =
                 gnc::contracts::PreparedModelCachePolicy::NoSharedCache;
+            preparation.failure_policy =
+                gnc::contracts::PreparationFailurePolicy::
+                    FailSessionInitialization;
+            preparation.allows_partial_session = false;
             preparation.source = occurrence.source;
             context.plan.preparation_inputs.push_back(
                 std::move(preparation));
@@ -2248,7 +2293,7 @@ inline void lower_occurrences(LoweringContext& context) {
             candidate_slot.codec_entry_requirement_id = codec_requirement;
             candidate_slot.writer_token_id = "writer/" + candidate;
             candidate_slot.storage_class =
-                gnc::contracts::SlotStorageClass::StateStore;
+                gnc::contracts::SlotStorageClass::TransactionCandidate;
             candidate_slot.hold_policy =
                 gnc::contracts::SlotHoldPolicy::CurrentBoundary;
             candidate_slot.valid_on_continue = true;
@@ -3488,6 +3533,7 @@ inline void lower_integration_scopes(LoweringContext& context) {
             derivative_request_contract;
         scope_plan.derivative_result_contract_id =
             derivative_result_contract;
+        scope_plan.form_invocation_ids = form->invocation_binding_ids;
         scope_plan.closure_invocation_ids =
             source.closure_invocation_ids;
         scope_plan.member_owner_occurrence_ids =
@@ -3504,8 +3550,16 @@ inline void lower_integration_scopes(LoweringContext& context) {
         scope_plan.check_finiteness = *finite;
         scope_plan.zero_threshold = *zero;
         scope_plan.condition_limit = *condition;
+        scope_plan.numerical_policy_id =
+            std::string(kNumericalPolicyIdentity);
+        scope_plan.numerical_policy_configuration_occurrence_id =
+            source.owner_occurrence_id;
         scope_plan.workspace_requirement =
             gnc::model_sdk::StaticWorkspaceRequirement::None;
+        scope_plan.workspace_size_bytes = 0U;
+        scope_plan.workspace_alignment_bytes = 0U;
+        scope_plan.held_slot_hold_policy =
+            gnc::contracts::SlotHoldPolicy::HoldInterval;
         scope_plan.candidate_codec_entry_requirement_id =
             state->codec_entry_requirement_id;
         scope_plan.candidate_project_operation_id =
@@ -3615,11 +3669,47 @@ inline void lower_transactions(LoweringContext& context) {
         }
         std::sort(candidate_slots.begin(), candidate_slots.end());
         std::sort(held_slots.begin(), held_slots.end());
+        std::vector<std::string> current_cycle_outputs;
+        std::vector<std::string> terminal_outputs;
+        for (const auto& slot : context.plan.slots) {
+            const auto* slot_owner =
+                find_occurrence(context, slot.owner_occurrence_id);
+            if (slot_owner == nullptr ||
+                !same_scope(source.scope, *slot_owner)) {
+                continue;
+            }
+            if (slot.storage_class ==
+                gnc::contracts::SlotStorageClass::CycleFrame) {
+                current_cycle_outputs.push_back(slot.slot_id);
+            } else if (slot.storage_class ==
+                       gnc::contracts::SlotStorageClass::TerminalResult) {
+                terminal_outputs.push_back(slot.slot_id);
+            }
+        }
+        std::sort(current_cycle_outputs.begin(),
+                  current_cycle_outputs.end());
+        std::sort(terminal_outputs.begin(), terminal_outputs.end());
+        std::vector<std::string> terminal_published_outputs =
+            current_cycle_outputs;
+        terminal_published_outputs.insert(
+            terminal_published_outputs.end(), terminal_outputs.begin(),
+            terminal_outputs.end());
+        std::sort(terminal_published_outputs.begin(),
+                  terminal_published_outputs.end());
         TransactionBranchPlan continue_branch;
         continue_branch.branch =
             gnc::contracts::TransactionBranch::Continue;
         continue_branch.committed_candidate_slot_ids = candidate_slots;
         continue_branch.retained_held_slot_ids = held_slots;
+        continue_branch.published_output_slot_ids = current_cycle_outputs;
+        continue_branch.sealed_output_slot_ids = current_cycle_outputs;
+        continue_branch.discarded_output_slot_ids = terminal_outputs;
+        continue_branch.output_visibility =
+            gnc::contracts::TransactionOutputVisibility::
+                AfterObservationSeal;
+        continue_branch.held_interval_end_policy =
+            gnc::contracts::HeldIntervalEndPolicy::
+                ReleaseAfterModelCommit;
         continue_branch.model_commit = true;
         continue_branch.observation_seal = true;
         continue_branch.epoch_delta = 1;
@@ -3629,6 +3719,17 @@ inline void lower_transactions(LoweringContext& context) {
             gnc::contracts::TransactionBranch::Terminal;
         terminal_branch.discarded_candidate_slot_ids = candidate_slots;
         terminal_branch.discarded_held_slot_ids = held_slots;
+        terminal_branch.published_output_slot_ids =
+            terminal_published_outputs;
+        terminal_branch.sealed_output_slot_ids =
+            terminal_published_outputs;
+        terminal_branch.output_visibility =
+            gnc::contracts::TransactionOutputVisibility::
+                AfterObservationSeal;
+        terminal_branch.held_interval_end_policy =
+            gnc::contracts::HeldIntervalEndPolicy::
+                ReleaseAtTerminalSeal;
+        terminal_branch.committed_state_preserved = true;
         terminal_branch.observation_seal = true;
         terminal_branch.result_seal_after_observation = true;
         TransactionBranchPlan failure_branch;
@@ -3636,6 +3737,18 @@ inline void lower_transactions(LoweringContext& context) {
             gnc::contracts::TransactionBranch::Failure;
         failure_branch.discarded_candidate_slot_ids = candidate_slots;
         failure_branch.discarded_held_slot_ids = held_slots;
+        failure_branch.discarded_output_slot_ids =
+            terminal_published_outputs;
+        failure_branch.output_visibility =
+            gnc::contracts::TransactionOutputVisibility::None;
+        failure_branch.held_interval_end_policy =
+            gnc::contracts::HeldIntervalEndPolicy::DiscardOnFailure;
+        failure_branch.committed_state_preserved = true;
+        failure_branch.failure_owner =
+            gnc::contracts::TransactionFailureOwner::
+                TransactionCoordinator;
+        failure_branch.failure_route =
+            gnc::contracts::TransactionFailureRoute::RunOutcome;
         TransactionPlan transaction;
         transaction.plan_element_id =
             "transaction/" + source.transaction_id;
@@ -3806,6 +3919,126 @@ inline void lower_evaluator_histories(LoweringContext& context) {
                            "every evaluator callsite must declare exactly one committed-history plan");
             }
         }
+    }
+}
+
+inline void finalize_runtime_component_dependencies(
+    LoweringContext& context) {
+    const auto canonicalize = [](std::vector<std::string>& values) {
+        std::sort(values.begin(), values.end());
+        values.erase(std::unique(values.begin(), values.end()), values.end());
+    };
+    for (auto& component : context.plan.runtime_components) {
+        for (const auto& callsite_id : component.callsite_ids) {
+            const auto* callsite = find_callsite(context, callsite_id);
+            if (callsite == nullptr) {
+                diagnostic(context.diagnostics,
+                           CompleteDiagnosticCode::UnknownCallsite,
+                           component.source, component.occurrence_id,
+                           "RuntimeComponent factory dependency closure references an unknown callsite");
+                continue;
+            }
+            component.input_slot_ids.insert(component.input_slot_ids.end(),
+                                            callsite->input_slot_ids.begin(),
+                                            callsite->input_slot_ids.end());
+            component.output_slot_ids.insert(component.output_slot_ids.end(),
+                                             callsite->output_slot_ids.begin(),
+                                             callsite->output_slot_ids.end());
+            component.output_writer_token_ids.insert(
+                component.output_writer_token_ids.end(),
+                callsite->output_writer_token_ids.begin(),
+                callsite->output_writer_token_ids.end());
+            component.invocation_binding_ids.insert(
+                component.invocation_binding_ids.end(),
+                callsite->invocation_binding_ids.begin(),
+                callsite->invocation_binding_ids.end());
+            for (const auto& invocation_id :
+                 callsite->invocation_binding_ids) {
+                const auto invocation_index =
+                    context.invocation_indices.find(invocation_id);
+                if (invocation_index == context.invocation_indices.end()) {
+                    diagnostic(context.diagnostics,
+                               CompleteDiagnosticCode::
+                                   MissingInvocationAuthorization,
+                               component.source, invocation_id,
+                               "factory dependency closure references an unknown invocation");
+                    continue;
+                }
+                const auto& invocation =
+                    context.plan.invocation_bindings[
+                        invocation_index->second];
+                if (invocation.kind ==
+                    gnc::model_sdk::StaticInvocationKind::PureQuery) {
+                    const auto provider = std::find_if(
+                        context.plan.queries.begin(),
+                        context.plan.queries.end(), [&](const auto& query) {
+                            return query.query_plan_id ==
+                                   invocation.provider_plan_id;
+                        });
+                    if (provider != context.plan.queries.end()) {
+                        component.provider_plan_ids.push_back(
+                            provider->query_plan_id);
+                        component.preparation_input_ids.push_back(
+                            provider->preparation_input_ref);
+                    }
+                } else {
+                    const auto provider = std::find_if(
+                        context.plan.closures.begin(),
+                        context.plan.closures.end(),
+                        [&](const auto& closure) {
+                            return closure.closure_plan_id ==
+                                   invocation.provider_plan_id;
+                        });
+                    if (provider != context.plan.closures.end()) {
+                        component.provider_plan_ids.push_back(
+                            provider->closure_plan_id);
+                        component.preparation_input_ids.push_back(
+                            provider->preparation_input_ref);
+                    }
+                }
+            }
+        }
+        for (const auto& scope : context.plan.integration_scopes) {
+            if (scope.owner_occurrence_id == component.occurrence_id ||
+                std::find(scope.member_owner_occurrence_ids.begin(),
+                          scope.member_owner_occurrence_ids.end(),
+                          component.occurrence_id) !=
+                    scope.member_owner_occurrence_ids.end()) {
+                component.integration_scope_ids.push_back(
+                    scope.integration_scope_id);
+                component.interval_model_slot_ids.push_back(
+                    scope.held_form_slot_id);
+            }
+        }
+        for (const auto& transaction : context.plan.transactions) {
+            if (std::any_of(
+                    transaction.candidates.begin(),
+                    transaction.candidates.end(), [&](const auto& candidate) {
+                        return candidate.owner_occurrence_id ==
+                               component.occurrence_id;
+                    })) {
+                component.transaction_ids.push_back(
+                    transaction.transaction_id);
+            }
+        }
+        for (const auto& history : context.plan.evaluator_histories) {
+            if (std::find(component.callsite_ids.begin(),
+                          component.callsite_ids.end(),
+                          history.evaluator_callsite_id) !=
+                component.callsite_ids.end()) {
+                component.evaluator_history_ids.push_back(history.history_id);
+            }
+        }
+        canonicalize(component.preparation_input_ids);
+        canonicalize(component.provider_plan_ids);
+        canonicalize(component.input_slot_ids);
+        canonicalize(component.output_slot_ids);
+        canonicalize(component.output_writer_token_ids);
+        canonicalize(component.invocation_binding_ids);
+        canonicalize(component.integration_scope_ids);
+        canonicalize(component.interval_model_slot_ids);
+        canonicalize(component.transaction_ids);
+        canonicalize(component.evaluator_history_ids);
     }
 }
 
@@ -4168,6 +4401,7 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
             "occurrence=" + preparation.occurrence_id,
             "model=" + preparation.model_id,
             "model-version=" + preparation.model_version,
+            "prepared-artifact=" + preparation.prepared_artifact_id,
             "prepare-entry-requirement=" +
                 preparation.preparation_entry_requirement_id,
             "canonical-config-hash=" +
@@ -4177,6 +4411,9 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
             "ownership=" + enum_value(preparation.ownership),
             "phase=" + enum_value(preparation.phase),
             "cache=" + enum_value(preparation.cache_policy),
+            "failure-policy=" + enum_value(preparation.failure_policy),
+            std::string("allows-partial-session=") +
+                (preparation.allows_partial_session ? "1" : "0"),
             "order=" + std::to_string(preparation.order)};
         for (const auto& asset : preparation.asset_bindings) {
             premises.push_back("asset=" + asset.role + "|" +
@@ -4297,6 +4534,26 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
         append_ids(premises, "callsite", component.callsite_ids);
         append_ids(premises, "state-block-owner",
                    component.state_block_owner_occurrence_ids);
+        append_ids(premises, "factory-preparation",
+                   component.preparation_input_ids);
+        append_ids(premises, "factory-provider-plan",
+                   component.provider_plan_ids);
+        append_ids(premises, "factory-input-slot",
+                   component.input_slot_ids);
+        append_ids(premises, "factory-output-slot",
+                   component.output_slot_ids);
+        append_ids(premises, "factory-output-writer",
+                   component.output_writer_token_ids);
+        append_ids(premises, "factory-invocation",
+                   component.invocation_binding_ids);
+        append_ids(premises, "factory-integration",
+                   component.integration_scope_ids);
+        append_ids(premises, "factory-interval-model-slot",
+                   component.interval_model_slot_ids);
+        append_ids(premises, "factory-transaction",
+                   component.transaction_ids);
+        append_ids(premises, "factory-evaluator-history",
+                   component.evaluator_history_ids);
         add("proof/runtime-component/" + component.occurrence_id,
             PlanProofKind::RegionMembership,
             component.plan_element_id, std::move(premises),
@@ -4470,7 +4727,15 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
                 std::to_string(scope.zero_threshold),
             "condition-limit=" +
                 std::to_string(scope.condition_limit),
+            "numerical-policy=" + scope.numerical_policy_id,
+            "numerical-policy-config=" +
+                scope.numerical_policy_configuration_occurrence_id,
             "workspace=" + enum_value(scope.workspace_requirement),
+            "workspace-size=" +
+                std::to_string(scope.workspace_size_bytes),
+            "workspace-alignment=" +
+                std::to_string(scope.workspace_alignment_bytes),
+            "held-slot-hold=" + enum_value(scope.held_slot_hold_policy),
             "candidate-codec=" +
                 scope.candidate_codec_entry_requirement_id,
             "candidate-project=" + scope.candidate_project_operation_id,
@@ -4480,6 +4745,8 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
                 scope.candidate_invariant_validation_operation_id};
         append_ids(premises, "member-owner",
                    scope.member_owner_occurrence_ids);
+        append_ids(premises, "form-invocation",
+                   scope.form_invocation_ids);
         append_ids(premises, "closure-invocation",
                    scope.closure_invocation_ids);
         add("proof/integration/" + scope.integration_scope_id,
@@ -4510,8 +4777,24 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
                 (branch.model_commit ? "1" : "0") + "|observation=" +
                 (branch.observation_seal ? "1" : "0") + "|result=" +
                 (branch.result_seal_after_observation ? "1" : "0") +
+                "|visibility=" + enum_value(branch.output_visibility) +
+                "|held-end=" +
+                enum_value(branch.held_interval_end_policy) +
+                "|committed-preserved=" +
+                (branch.committed_state_preserved ? "1" : "0") +
+                "|failure-owner=" + enum_value(branch.failure_owner) +
+                "|failure-route=" + enum_value(branch.failure_route) +
                 "|epoch=" + std::to_string(branch.epoch_delta) +
                 "|tick=" + std::to_string(branch.tick_delta));
+            append_ids(premises,
+                       "branch." + std::to_string(index) + ".published",
+                       branch.published_output_slot_ids);
+            append_ids(premises,
+                       "branch." + std::to_string(index) + ".sealed",
+                       branch.sealed_output_slot_ids);
+            append_ids(premises,
+                       "branch." + std::to_string(index) + ".discarded",
+                       branch.discarded_output_slot_ids);
         }
         premises.push_back(
             "candidate-producer-count=" +
@@ -4802,6 +5085,28 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
         encoder.collection(transaction.branches.size());
         for (const auto& branch : transaction.branches) {
             encoder.uint32(static_cast<std::uint32_t>(branch.branch));
+            const auto encode_ids = [&](const auto& ids) {
+                encoder.collection(ids.size());
+                for (const auto& id : ids) {
+                    encoder.string(id);
+                }
+            };
+            encode_ids(branch.committed_candidate_slot_ids);
+            encode_ids(branch.discarded_candidate_slot_ids);
+            encode_ids(branch.retained_held_slot_ids);
+            encode_ids(branch.discarded_held_slot_ids);
+            encode_ids(branch.published_output_slot_ids);
+            encode_ids(branch.sealed_output_slot_ids);
+            encode_ids(branch.discarded_output_slot_ids);
+            encoder.uint32(
+                static_cast<std::uint32_t>(branch.output_visibility));
+            encoder.uint32(static_cast<std::uint32_t>(
+                branch.held_interval_end_policy));
+            encoder.uint32(branch.committed_state_preserved ? 1U : 0U);
+            encoder.uint32(
+                static_cast<std::uint32_t>(branch.failure_owner));
+            encoder.uint32(
+                static_cast<std::uint32_t>(branch.failure_route));
             encoder.uint32(branch.model_commit ? 1U : 0U);
             encoder.uint32(branch.observation_seal ? 1U : 0U);
             encoder.uint32(
@@ -4849,6 +5154,7 @@ compile_complete_execution_plan(
     lower_dag(context);
     lower_transactions(context);
     lower_evaluator_histories(context);
+    finalize_runtime_component_dependencies(context);
     if (!context.diagnostics.empty()) {
         outcome.diagnostics = std::move(context.diagnostics);
         return outcome;
@@ -5786,6 +6092,9 @@ namespace complete_plan_detail {
                     form->obligation ==
                         gnc::contracts::ExecutionObligation::
                             BoundaryEvaluation &&
+                    scope.form_invocation_ids ==
+                        form->invocation_binding_ids &&
+                    scope.form_invocation_ids.size() == 3U &&
                     form->callsite_id == invocation->caller_callsite_id &&
                     invocation->kind ==
                         gnc::model_sdk::StaticInvocationKind::Closure &&
@@ -5840,8 +6149,16 @@ namespace complete_plan_detail {
                     !scope.check_finiteness.empty() &&
                     scope.zero_threshold >= 0.0 &&
                     scope.condition_limit > 0.0 &&
+                    scope.numerical_policy_id ==
+                        kNumericalPolicyIdentity &&
+                    scope.numerical_policy_configuration_occurrence_id ==
+                        scope.owner_occurrence_id &&
                     scope.workspace_requirement ==
                         gnc::model_sdk::StaticWorkspaceRequirement::None &&
+                    scope.workspace_size_bytes == 0U &&
+                    scope.workspace_alignment_bytes == 0U &&
+                    scope.held_slot_hold_policy ==
+                        gnc::contracts::SlotHoldPolicy::HoldInterval &&
                     scope.candidate_codec_entry_requirement_id ==
                         owner_state->codec_entry_requirement_id &&
                     !scope.candidate_project_operation_id.empty() &&
@@ -5853,7 +6170,7 @@ namespace complete_plan_detail {
                 diagnostics,
                 CompleteDiagnosticCode::SourceImageConformanceFailure,
                 scope.source, scope.integration_scope_id,
-                "integration scope owner/state/callsite/FrozenInterval result-slot alias is not exact");
+                    "integration scope owner/state/callsite/invocation/numerical/workspace/FrozenInterval lifetime facts are not exact");
             continue;
         }
         ++closure_invocation_uses[closure_invocation_id];
@@ -6016,7 +6333,10 @@ namespace complete_plan_detail {
                     state->codec_entry_requirement_id ==
                         slot.codec_entry_requirement_id &&
                     slot.storage_class ==
-                        gnc::contracts::SlotStorageClass::StateStore &&
+                        (slot.kind == CompleteSlotKind::CommittedState
+                             ? gnc::contracts::SlotStorageClass::StateStore
+                             : gnc::contracts::SlotStorageClass::
+                                   TransactionCandidate) &&
                     slot.valid_on_continue;
             if (slot.kind == CompleteSlotKind::CommittedState) {
                 valid = valid &&
@@ -6216,6 +6536,139 @@ namespace complete_plan_detail {
     std::set<std::string> resource_ids;
     for (std::size_t index = 0U; index < ordered_components.size(); ++index) {
         const auto& component = *ordered_components[index];
+        const auto canonicalize = [](std::vector<std::string>& values) {
+            std::sort(values.begin(), values.end());
+            values.erase(std::unique(values.begin(), values.end()),
+                         values.end());
+        };
+        std::vector<std::string> expected_preparation_inputs;
+        std::vector<std::string> expected_provider_plans;
+        std::vector<std::string> expected_input_slots;
+        std::vector<std::string> expected_output_slots;
+        std::vector<std::string> expected_output_writers;
+        std::vector<std::string> expected_invocations;
+        bool dependency_valid = true;
+        for (const auto& callsite_id : component.callsite_ids) {
+            const auto callsite = callsite_for(callsite_id);
+            if (callsite == plan.runtime_callsites.end() ||
+                callsite->occurrence_id != component.occurrence_id) {
+                dependency_valid = false;
+                continue;
+            }
+            expected_input_slots.insert(expected_input_slots.end(),
+                                        callsite->input_slot_ids.begin(),
+                                        callsite->input_slot_ids.end());
+            expected_output_slots.insert(expected_output_slots.end(),
+                                         callsite->output_slot_ids.begin(),
+                                         callsite->output_slot_ids.end());
+            expected_output_writers.insert(
+                expected_output_writers.end(),
+                callsite->output_writer_token_ids.begin(),
+                callsite->output_writer_token_ids.end());
+            expected_invocations.insert(
+                expected_invocations.end(),
+                callsite->invocation_binding_ids.begin(),
+                callsite->invocation_binding_ids.end());
+            for (const auto& invocation_id :
+                 callsite->invocation_binding_ids) {
+                const auto invocation = std::find_if(
+                    plan.invocation_bindings.begin(),
+                    plan.invocation_bindings.end(),
+                    [&](const auto& candidate) {
+                        return candidate.invocation_id == invocation_id;
+                    });
+                if (invocation == plan.invocation_bindings.end()) {
+                    dependency_valid = false;
+                    continue;
+                }
+                expected_provider_plans.push_back(
+                    invocation->provider_plan_id);
+                if (invocation->kind ==
+                    gnc::model_sdk::StaticInvocationKind::PureQuery) {
+                    const auto provider = std::find_if(
+                        plan.queries.begin(), plan.queries.end(),
+                        [&](const auto& query) {
+                            return query.query_plan_id ==
+                                   invocation->provider_plan_id;
+                        });
+                    if (provider == plan.queries.end()) {
+                        dependency_valid = false;
+                    } else {
+                        expected_preparation_inputs.push_back(
+                            provider->preparation_input_ref);
+                    }
+                } else {
+                    const auto provider = std::find_if(
+                        plan.closures.begin(), plan.closures.end(),
+                        [&](const auto& closure) {
+                            return closure.closure_plan_id ==
+                                   invocation->provider_plan_id;
+                        });
+                    if (provider == plan.closures.end()) {
+                        dependency_valid = false;
+                    } else {
+                        expected_preparation_inputs.push_back(
+                            provider->preparation_input_ref);
+                    }
+                }
+            }
+        }
+        std::vector<std::string> expected_integrations;
+        std::vector<std::string> expected_interval_model_slots;
+        for (const auto& scope : plan.integration_scopes) {
+            if (scope.owner_occurrence_id == component.occurrence_id ||
+                std::find(scope.member_owner_occurrence_ids.begin(),
+                          scope.member_owner_occurrence_ids.end(),
+                          component.occurrence_id) !=
+                    scope.member_owner_occurrence_ids.end()) {
+                expected_integrations.push_back(scope.integration_scope_id);
+                expected_interval_model_slots.push_back(
+                    scope.held_form_slot_id);
+            }
+        }
+        std::vector<std::string> expected_transactions;
+        for (const auto& transaction : plan.transactions) {
+            if (std::any_of(
+                    transaction.candidates.begin(),
+                    transaction.candidates.end(), [&](const auto& candidate) {
+                        return candidate.owner_occurrence_id ==
+                               component.occurrence_id;
+                    })) {
+                expected_transactions.push_back(transaction.transaction_id);
+            }
+        }
+        std::vector<std::string> expected_histories;
+        for (const auto& history : plan.evaluator_histories) {
+            if (std::find(component.callsite_ids.begin(),
+                          component.callsite_ids.end(),
+                          history.evaluator_callsite_id) !=
+                component.callsite_ids.end()) {
+                expected_histories.push_back(history.history_id);
+            }
+        }
+        canonicalize(expected_preparation_inputs);
+        canonicalize(expected_provider_plans);
+        canonicalize(expected_input_slots);
+        canonicalize(expected_output_slots);
+        canonicalize(expected_output_writers);
+        canonicalize(expected_invocations);
+        canonicalize(expected_integrations);
+        canonicalize(expected_interval_model_slots);
+        canonicalize(expected_transactions);
+        canonicalize(expected_histories);
+        dependency_valid = dependency_valid &&
+            component.preparation_input_ids ==
+                expected_preparation_inputs &&
+            component.provider_plan_ids == expected_provider_plans &&
+            component.input_slot_ids == expected_input_slots &&
+            component.output_slot_ids == expected_output_slots &&
+            component.output_writer_token_ids == expected_output_writers &&
+            component.invocation_binding_ids == expected_invocations &&
+            component.integration_scope_ids == expected_integrations &&
+            component.interval_model_slot_ids ==
+                expected_interval_model_slots &&
+            component.transaction_ids == expected_transactions &&
+            component.evaluator_history_ids == expected_histories;
         const auto expected_resource =
             "resource-plan/" + component.occurrence_id;
         const auto resource = std::find_if(
@@ -6244,10 +6697,11 @@ namespace complete_plan_detail {
             resource->runtime_component_occurrence_id ==
                 component.occurrence_id &&
             resource->workspace_requirement ==
-                gnc::model_sdk::StaticWorkspaceRequirement::None;
+                gnc::model_sdk::StaticWorkspaceRequirement::None &&
+            dependency_valid;
         if (!valid) {
             report(component.source, component.occurrence_id,
-                   "RuntimeInstanceId/resource-plan mapping is not exact");
+                   "RuntimeInstanceId/resource/factory dependency closure is not exact");
         }
     }
     for (const auto& resource : plan.resource_plans) {
@@ -6349,6 +6803,34 @@ namespace complete_plan_detail {
             }
         }
         std::sort(expected_held.begin(), expected_held.end());
+        std::vector<std::string> expected_cycle_outputs;
+        std::vector<std::string> expected_terminal_outputs;
+        for (const auto& slot : plan.slots) {
+            const auto occurrence = occurrence_for(slot.owner_occurrence_id);
+            if (occurrence == plan.occurrences.end() ||
+                !occurrence->scope.has_value() ||
+                !(*occurrence->scope == transaction.scope)) {
+                continue;
+            }
+            if (slot.storage_class ==
+                gnc::contracts::SlotStorageClass::CycleFrame) {
+                expected_cycle_outputs.push_back(slot.slot_id);
+            } else if (slot.storage_class ==
+                       gnc::contracts::SlotStorageClass::TerminalResult) {
+                expected_terminal_outputs.push_back(slot.slot_id);
+            }
+        }
+        std::sort(expected_cycle_outputs.begin(),
+                  expected_cycle_outputs.end());
+        std::sort(expected_terminal_outputs.begin(),
+                  expected_terminal_outputs.end());
+        auto expected_terminal_published = expected_cycle_outputs;
+        expected_terminal_published.insert(
+            expected_terminal_published.end(),
+            expected_terminal_outputs.begin(),
+            expected_terminal_outputs.end());
+        std::sort(expected_terminal_published.begin(),
+                  expected_terminal_published.end());
         valid = valid && transaction.held_slot_ids == expected_held &&
                 sorted_unique(transaction.held_slot_ids) &&
                 transaction.branches.size() == 3U;
@@ -6356,9 +6838,17 @@ namespace complete_plan_detail {
                                         gnc::contracts::TransactionBranch kind,
                                         const std::vector<std::string>& committed,
                                         const std::vector<std::string>& discarded,
-                                        const std::vector<std::string>& retained,
-                                        const std::vector<std::string>& discarded_held,
-                                        bool model_commit,
+                                         const std::vector<std::string>& retained,
+                                         const std::vector<std::string>& discarded_held,
+                                         const std::vector<std::string>& published,
+                                         const std::vector<std::string>& sealed,
+                                         const std::vector<std::string>& discarded_output,
+                                         gnc::contracts::TransactionOutputVisibility visibility,
+                                         gnc::contracts::HeldIntervalEndPolicy held_end,
+                                         bool committed_preserved,
+                                         gnc::contracts::TransactionFailureOwner failure_owner,
+                                         gnc::contracts::TransactionFailureRoute failure_route,
+                                         bool model_commit,
                                         bool observation_seal,
                                         bool result_seal,
                                         std::int64_t epoch_delta,
@@ -6372,6 +6862,14 @@ namespace complete_plan_detail {
                    branch.discarded_candidate_slot_ids == discarded &&
                    branch.retained_held_slot_ids == retained &&
                    branch.discarded_held_slot_ids == discarded_held &&
+                   branch.published_output_slot_ids == published &&
+                   branch.sealed_output_slot_ids == sealed &&
+                   branch.discarded_output_slot_ids == discarded_output &&
+                   branch.output_visibility == visibility &&
+                   branch.held_interval_end_policy == held_end &&
+                   branch.committed_state_preserved == committed_preserved &&
+                   branch.failure_owner == failure_owner &&
+                   branch.failure_route == failure_route &&
                    branch.model_commit == model_commit &&
                    branch.observation_seal == observation_seal &&
                    branch.result_seal_after_observation == result_seal &&
@@ -6381,15 +6879,43 @@ namespace complete_plan_detail {
         valid = valid &&
                 branch_matches(
                     0U, gnc::contracts::TransactionBranch::Continue,
-                    candidate_slots, {}, expected_held, {}, true, true,
+                    candidate_slots, {}, expected_held, {},
+                    expected_cycle_outputs, expected_cycle_outputs,
+                    expected_terminal_outputs,
+                    gnc::contracts::TransactionOutputVisibility::
+                        AfterObservationSeal,
+                    gnc::contracts::HeldIntervalEndPolicy::
+                        ReleaseAfterModelCommit,
+                    false,
+                    gnc::contracts::TransactionFailureOwner::Unspecified,
+                    gnc::contracts::TransactionFailureRoute::Unspecified,
+                    true, true,
                     false, 1, 1) &&
                 branch_matches(
                     1U, gnc::contracts::TransactionBranch::Terminal, {},
-                    candidate_slots, {}, expected_held, false, true, true,
+                    candidate_slots, {}, expected_held,
+                    expected_terminal_published,
+                    expected_terminal_published, {},
+                    gnc::contracts::TransactionOutputVisibility::
+                        AfterObservationSeal,
+                    gnc::contracts::HeldIntervalEndPolicy::
+                        ReleaseAtTerminalSeal,
+                    true,
+                    gnc::contracts::TransactionFailureOwner::Unspecified,
+                    gnc::contracts::TransactionFailureRoute::Unspecified,
+                    false, true, true,
                     0, 0) &&
                 branch_matches(
                     2U, gnc::contracts::TransactionBranch::Failure, {},
-                    candidate_slots, {}, expected_held, false, false, false,
+                    candidate_slots, {}, expected_held, {}, {},
+                    expected_terminal_published,
+                    gnc::contracts::TransactionOutputVisibility::None,
+                    gnc::contracts::HeldIntervalEndPolicy::DiscardOnFailure,
+                    true,
+                    gnc::contracts::TransactionFailureOwner::
+                        TransactionCoordinator,
+                    gnc::contracts::TransactionFailureRoute::RunOutcome,
+                    false, false, false,
                     0, 0);
         if (!valid) {
             report(transaction.source, transaction.transaction_id,
@@ -6420,12 +6946,18 @@ namespace complete_plan_detail {
             preparation.preparation_input_id);
         lifecycle_valid = lifecycle_valid &&
             preparation.order == static_cast<std::uint32_t>(index) &&
+            preparation.prepared_artifact_id ==
+                "prepared-model/" + preparation.occurrence_id &&
             preparation.ownership ==
                 gnc::contracts::PreparationOwnership::SessionOwned &&
             preparation.phase ==
                 gnc::contracts::PreparationPhase::InitializeTime &&
             preparation.cache_policy ==
-                gnc::contracts::PreparedModelCachePolicy::NoSharedCache;
+                gnc::contracts::PreparedModelCachePolicy::NoSharedCache &&
+            preparation.failure_policy ==
+                gnc::contracts::PreparationFailurePolicy::
+                    FailSessionInitialization &&
+            !preparation.allows_partial_session;
     }
     std::vector<std::string> expected_components;
     for (const auto* component : ordered_components) {
@@ -6721,6 +7253,12 @@ namespace complete_plan_detail {
                         gnc::contracts::PreparationPhase::InitializeTime &&
                     preparation->cache_policy ==
                         gnc::contracts::PreparedModelCachePolicy::NoSharedCache &&
+                    preparation->prepared_artifact_id ==
+                        "prepared-model/" + provider.occurrence_id &&
+                    preparation->failure_policy ==
+                        gnc::contracts::PreparationFailurePolicy::
+                            FailSessionInitialization &&
+                    !preparation->allows_partial_session &&
                     same_source(preparation->source,
                                 occurrence->source) &&
                     preparation_entry != plan.entry_requirements.end() &&
@@ -6805,6 +7343,213 @@ namespace complete_plan_detail {
     return diagnostics.empty();
 }
 
+[[nodiscard]] inline bool validate_materialized_storage_layouts(
+    const gnc::contracts::ExecutionPlanImageData& image,
+    std::vector<CompleteDiagnostic>& diagnostics) {
+    const auto report = [&](std::string subject, std::string detail) {
+        diagnostic(diagnostics,
+                   CompleteDiagnosticCode::SourceImageConformanceFailure,
+                   {}, std::move(subject), std::move(detail));
+    };
+    const auto power_of_two = [](std::uint64_t value) {
+        return value != 0U && (value & (value - 1U)) == 0U;
+    };
+
+    std::map<std::uint32_t, const gnc::contracts::PlanImageEntry*> entries;
+    for (const auto& entry : image.entries) {
+        if (entry.handle == 0U || !entries.emplace(entry.handle, &entry).second) {
+            report(image.plan_id,
+                   "linked entry handles are empty or duplicated");
+        }
+    }
+    std::map<std::uint32_t, const gnc::contracts::PlanImageWriterToken*>
+        writers;
+    std::map<std::uint32_t, std::size_t> writer_counts_by_slot;
+    for (const auto& writer : image.writer_tokens) {
+        if (writer.handle == 0U || writer.slot_handle == 0U ||
+            writer.owner_handle == 0U ||
+            !writers.emplace(writer.handle, &writer).second) {
+            report(image.plan_id,
+                   "writer token handles/owners are empty or duplicated");
+        }
+        ++writer_counts_by_slot[writer.slot_handle];
+    }
+    std::set<std::uint32_t> valid_reader_handles;
+    for (const auto& callsite : image.callsites) {
+        valid_reader_handles.insert(callsite.handle);
+    }
+    for (const auto& integration : image.integration_scopes) {
+        valid_reader_handles.insert(integration.handle);
+    }
+
+    std::map<std::uint32_t,
+             const gnc::contracts::PlanImageStorageLayout*>
+        layouts;
+    std::set<gnc::contracts::SlotStorageClass> storage_classes;
+    for (const auto& layout : image.storage_layouts) {
+        const bool valid =
+            layout.handle != 0U &&
+            layout.storage_class !=
+                gnc::contracts::SlotStorageClass::Unspecified &&
+            layout.size_bytes != 0U &&
+            power_of_two(layout.alignment_bytes) &&
+            layout.size_bytes % layout.alignment_bytes == 0U &&
+            !layout.ordered_slot_handles.empty() &&
+            layouts.emplace(layout.handle, &layout).second &&
+            storage_classes.insert(layout.storage_class).second;
+        if (!valid) {
+            report(image.plan_id,
+                   "storage layout handle/class/extent/alignment is invalid or duplicated");
+        }
+    }
+
+    std::map<std::uint32_t, const gnc::contracts::PlanImageSlot*> slots;
+    std::set<std::string> slot_ids;
+    std::map<std::uint32_t, std::vector<const gnc::contracts::PlanImageSlot*>>
+        slots_by_layout;
+    for (const auto& slot : image.slots) {
+        bool valid = slot.handle != 0U && !slot.slot_id.empty() &&
+                     slot.plan_element_id == slot.slot_id &&
+                     slots.emplace(slot.handle, &slot).second &&
+                     slot_ids.insert(slot.slot_id).second &&
+                     slot.owner_occurrence_handle != 0U &&
+                     !slot.layout_id.empty() && slot.size_bytes != 0U &&
+                     power_of_two(slot.alignment_bytes) &&
+                     slot.offset_bytes % slot.alignment_bytes == 0U &&
+                     slot.storage_layout_handle != 0U &&
+                     slot.storage_class !=
+                         gnc::contracts::SlotStorageClass::Unspecified &&
+                     slot.hold_policy !=
+                         gnc::contracts::SlotHoldPolicy::Unspecified &&
+                     slot.codec_entry_handle != 0U &&
+                     slot.writer_token_handle != 0U &&
+                     writer_counts_by_slot[slot.handle] == 1U;
+
+        const auto layout = layouts.find(slot.storage_layout_handle);
+        valid = valid && layout != layouts.end() &&
+                layout->second->storage_class == slot.storage_class &&
+                layout->second->alignment_bytes >= slot.alignment_bytes;
+        if (layout != layouts.end()) {
+            const bool fits =
+                slot.offset_bytes <= layout->second->size_bytes &&
+                slot.size_bytes <=
+                    layout->second->size_bytes - slot.offset_bytes;
+            valid = valid && fits;
+            slots_by_layout[layout->first].push_back(&slot);
+        }
+
+        const auto writer = writers.find(slot.writer_token_handle);
+        valid = valid && writer != writers.end() &&
+                writer->second->slot_handle == slot.handle;
+        const auto codec = entries.find(slot.codec_entry_handle);
+        const auto expected_codec_kind =
+            slot.kind == gnc::contracts::PlanImageSlotKind::CommittedState ||
+                    slot.kind ==
+                        gnc::contracts::PlanImageSlotKind::CandidateState
+                ? gnc::contracts::PlanImageEntryKind::StateCodec
+                : gnc::contracts::PlanImageEntryKind::SlotCodec;
+        valid = valid && codec != entries.end() &&
+                codec->second->kind == expected_codec_kind &&
+                codec->second->typed_entry.has_value() &&
+                codec->second->link_anchor != nullptr;
+
+        valid = valid &&
+                std::is_sorted(slot.reader_handles.begin(),
+                               slot.reader_handles.end()) &&
+                std::adjacent_find(slot.reader_handles.begin(),
+                                   slot.reader_handles.end()) ==
+                    slot.reader_handles.end();
+        for (const auto reader : slot.reader_handles) {
+            valid = valid && reader != 0U &&
+                    valid_reader_handles.count(reader) == 1U;
+        }
+
+        if (slot.kind ==
+            gnc::contracts::PlanImageSlotKind::CommittedState) {
+            valid = valid && slot.contract_id.empty() &&
+                    slot.storage_class ==
+                        gnc::contracts::SlotStorageClass::StateStore &&
+                    slot.hold_policy ==
+                        gnc::contracts::SlotHoldPolicy::Committed &&
+                    slot.valid_on_continue && !slot.discarded_on_terminal &&
+                    !slot.discarded_on_failure;
+        } else if (slot.kind ==
+                   gnc::contracts::PlanImageSlotKind::CandidateState) {
+            valid = valid && slot.contract_id.empty() &&
+                    slot.storage_class == gnc::contracts::SlotStorageClass::
+                                              TransactionCandidate &&
+                    slot.hold_policy ==
+                        gnc::contracts::SlotHoldPolicy::CurrentBoundary &&
+                    slot.valid_on_continue && slot.discarded_on_terminal &&
+                    slot.discarded_on_failure;
+        } else if (slot.kind ==
+                   gnc::contracts::PlanImageSlotKind::HeldIntervalValue) {
+            valid = valid && !slot.contract_id.empty() &&
+                    slot.storage_class ==
+                        gnc::contracts::SlotStorageClass::IntegrationHeld &&
+                    slot.hold_policy ==
+                        gnc::contracts::SlotHoldPolicy::HoldInterval &&
+                    slot.valid_on_continue && slot.discarded_on_terminal &&
+                    slot.discarded_on_failure;
+        } else {
+            const bool terminal =
+                slot.storage_class ==
+                gnc::contracts::SlotStorageClass::TerminalResult;
+            valid = valid && !slot.contract_id.empty() &&
+                    (terminal ||
+                     slot.storage_class ==
+                         gnc::contracts::SlotStorageClass::CycleFrame) &&
+                    slot.hold_policy ==
+                        (terminal
+                             ? gnc::contracts::SlotHoldPolicy::Terminal
+                             : gnc::contracts::SlotHoldPolicy::
+                                   CurrentBoundary) &&
+                    slot.valid_on_continue && !slot.discarded_on_terminal &&
+                    slot.discarded_on_failure;
+        }
+        if (!valid) {
+            report(slot.slot_id,
+                   "materialized slot layout/codec/writer/reader/lifetime facts are invalid");
+        }
+    }
+
+    for (const auto& [layout_handle, layout] : layouts) {
+        auto members = slots_by_layout[layout_handle];
+        std::sort(members.begin(), members.end(),
+                  [](const auto* lhs, const auto* rhs) {
+                      return lhs->slot_id < rhs->slot_id;
+                  });
+        std::vector<std::uint32_t> expected_order;
+        expected_order.reserve(members.size());
+        for (const auto* slot : members) {
+            expected_order.push_back(slot->handle);
+        }
+        if (expected_order != layout->ordered_slot_handles) {
+            report(image.plan_id,
+                   "storage layout membership/order is incomplete or non-deterministic");
+        }
+        std::sort(members.begin(), members.end(),
+                  [](const auto* lhs, const auto* rhs) {
+                      return std::tie(lhs->offset_bytes, lhs->slot_id) <
+                             std::tie(rhs->offset_bytes, rhs->slot_id);
+                  });
+        std::uint64_t previous_end = 0U;
+        bool first = true;
+        for (const auto* slot : members) {
+            if (!first && slot->offset_bytes < previous_end) {
+                report(slot->slot_id,
+                       "materialized storage slots overlap");
+            }
+            previous_end = slot->offset_bytes + slot->size_bytes;
+            first = false;
+        }
+    }
+    if (slots.size() != image.slots.size()) {
+        report(image.plan_id, "materialized slot handles are duplicated");
+    }
+    return diagnostics.empty();
+}
+
 [[nodiscard]] inline std::string image_fingerprint(
     const gnc::contracts::ExecutionPlanImageData& image) {
     semantic_hash_detail::Encoder encoder;
@@ -6848,6 +7593,10 @@ namespace complete_plan_detail {
             encode(value);
         }
     };
+    const auto encode_uint64 = [&](std::uint64_t value) {
+        encoder.uint32(static_cast<std::uint32_t>(value >> 32U));
+        encoder.uint32(static_cast<std::uint32_t>(value & 0xffffffffULL));
+    };
     encode_ids(image.occurrences, [&](const auto& value) {
         encoder.uint32(value.handle);
         encoder.uint32(value.package_handle);
@@ -6884,9 +7633,14 @@ namespace complete_plan_detail {
         encoder.string(value.plan_element_id);
         encoder.uint32(value.occurrence_handle);
         encoder.uint32(value.prepare_entry_handle);
+        encoder.string(value.definition_id);
+        encoder.string(value.definition_version);
+        encoder.string(value.prepared_artifact_id);
         encoder.uint32(static_cast<std::uint32_t>(value.ownership));
         encoder.uint32(static_cast<std::uint32_t>(value.phase));
         encoder.uint32(static_cast<std::uint32_t>(value.cache_policy));
+        encoder.uint32(static_cast<std::uint32_t>(value.failure_policy));
+        encoder.optional(value.allows_partial_session);
         encoder.uint32(value.order);
     });
     encode_ids(image.queries, [&](const auto& value) {
@@ -6933,9 +7687,10 @@ namespace complete_plan_detail {
         encoder.uint32(value.port_handle);
         encoder.string(value.contract_id);
         encoder.string(value.layout_id);
-        encoder.integer(static_cast<std::int64_t>(value.size_bytes));
-        encoder.integer(static_cast<std::int64_t>(value.alignment_bytes));
-        encoder.integer(static_cast<std::int64_t>(value.offset_bytes));
+        encode_uint64(value.size_bytes);
+        encode_uint64(value.alignment_bytes);
+        encoder.uint32(value.storage_layout_handle);
+        encode_uint64(value.offset_bytes);
         encoder.uint32(value.codec_entry_handle);
         encoder.uint32(value.writer_token_handle);
         encoder.collection(value.reader_handles.size());
@@ -6947,6 +7702,16 @@ namespace complete_plan_detail {
         encoder.optional(value.valid_on_continue);
         encoder.optional(value.discarded_on_terminal);
         encoder.optional(value.discarded_on_failure);
+    });
+    encode_ids(image.storage_layouts, [&](const auto& value) {
+        encoder.uint32(value.handle);
+        encoder.uint32(static_cast<std::uint32_t>(value.storage_class));
+        encode_uint64(value.size_bytes);
+        encode_uint64(value.alignment_bytes);
+        encoder.collection(value.ordered_slot_handles.size());
+        for (const auto handle : value.ordered_slot_handles) {
+            encoder.uint32(handle);
+        }
     });
     encode_ids(image.writer_tokens, [&](const auto& value) {
         encoder.uint32(value.handle);
@@ -6962,8 +7727,8 @@ namespace complete_plan_detail {
         encoder.string(value.schema_id);
         encoder.uint32(value.schema_version);
         encoder.string(value.layout_id);
-        encoder.integer(static_cast<std::int64_t>(value.size_bytes));
-        encoder.integer(static_cast<std::int64_t>(value.alignment_bytes));
+        encode_uint64(value.size_bytes);
+        encode_uint64(value.alignment_bytes);
         encoder.uint32(value.codec_entry_handle);
         encoder.string(value.evolution);
         encoder.uint32(value.committed_slot_handle);
@@ -7048,6 +7813,22 @@ namespace complete_plan_detail {
         for (const auto handle : value.state_block_handles) {
             encoder.uint32(handle);
         }
+        const auto encode_handles = [&](const auto& handles) {
+            encoder.collection(handles.size());
+            for (const auto handle : handles) {
+                encoder.uint32(handle);
+            }
+        };
+        encode_handles(value.preparation_handles);
+        encode_handles(value.provider_plan_handles);
+        encode_handles(value.input_slot_handles);
+        encode_handles(value.output_slot_handles);
+        encode_handles(value.output_writer_token_handles);
+        encode_handles(value.invocation_handles);
+        encode_handles(value.integration_scope_handles);
+        encode_handles(value.interval_model_slot_handles);
+        encode_handles(value.transaction_handles);
+        encode_handles(value.evaluator_history_handles);
     });
     encode_ids(image.resource_plans, [&](const auto& value) {
         encoder.uint32(value.handle);
@@ -7062,6 +7843,8 @@ namespace complete_plan_detail {
         encoder.string(value.invocation_id);
         encoder.uint32(value.caller_callsite_handle);
         encoder.uint32(value.provider_occurrence_handle);
+        encoder.uint32(value.provider_plan_handle);
+        encoder.uint32(value.provider_preparation_handle);
         encoder.uint32(value.entry_handle);
         encoder.string(value.requirement_id);
         encoder.uint32(value.requirement_ordinal);
@@ -7113,6 +7896,10 @@ namespace complete_plan_detail {
         encoder.string(value.held_form_contract_id);
         encoder.string(value.derivative_request_contract_id);
         encoder.string(value.derivative_result_contract_id);
+        encoder.collection(value.form_invocation_handles.size());
+        for (const auto handle : value.form_invocation_handles) {
+            encoder.uint32(handle);
+        }
         encoder.collection(value.closure_invocation_handles.size());
         for (const auto handle : value.closure_invocation_handles) {
             encoder.uint32(handle);
@@ -7131,7 +7918,14 @@ namespace complete_plan_detail {
         encoder.string(value.check_finiteness);
         encoder.float64(value.zero_threshold);
         encoder.float64(value.condition_limit);
+        encoder.string(value.numerical_policy_id);
+        encoder.uint32(
+            value.numerical_policy_configuration_occurrence_handle);
         encoder.string(value.workspace_layout_id);
+        encode_uint64(value.workspace_size_bytes);
+        encode_uint64(value.workspace_alignment_bytes);
+        encoder.uint32(
+            static_cast<std::uint32_t>(value.held_slot_hold_policy));
         encoder.uint32(value.candidate_codec_entry_handle);
         encoder.string(value.candidate_project_operation_id);
         encoder.string(value.candidate_finite_validation_operation_id);
@@ -7172,6 +7966,27 @@ namespace complete_plan_detail {
             for (const auto handle : branch.discarded_held_slot_handles) {
                 encoder.uint32(handle);
             }
+            encoder.collection(branch.published_output_slot_handles.size());
+            for (const auto handle : branch.published_output_slot_handles) {
+                encoder.uint32(handle);
+            }
+            encoder.collection(branch.sealed_output_slot_handles.size());
+            for (const auto handle : branch.sealed_output_slot_handles) {
+                encoder.uint32(handle);
+            }
+            encoder.collection(branch.discarded_output_slot_handles.size());
+            for (const auto handle : branch.discarded_output_slot_handles) {
+                encoder.uint32(handle);
+            }
+            encoder.uint32(
+                static_cast<std::uint32_t>(branch.output_visibility));
+            encoder.uint32(static_cast<std::uint32_t>(
+                branch.held_interval_end_policy));
+            encoder.optional(branch.committed_state_preserved);
+            encoder.uint32(
+                static_cast<std::uint32_t>(branch.failure_owner));
+            encoder.uint32(
+                static_cast<std::uint32_t>(branch.failure_route));
             encoder.optional(branch.model_commit);
             encoder.optional(branch.observation_seal);
             encoder.optional(branch.result_seal_after_observation);
@@ -7234,7 +8049,7 @@ link_complete_execution_plan(
         implementations) {
     using namespace complete_plan_detail;
     CompleteOutcome<gnc::contracts::ExecutionPlanImage> outcome;
-    if (plan.revision != 5U ||
+    if (plan.revision != 6U ||
         plan.descriptor_identity != kCompleteExecutionPlanDescriptorIdentity ||
         plan.descriptor_semantic_hash != descriptor_hash(plan)) {
         diagnostic(outcome.diagnostics,
@@ -7545,8 +8360,11 @@ link_complete_execution_plan(
              occurrence_handles.at(preparation.occurrence_id),
              entry_handles.at(
                  preparation.preparation_entry_requirement_id),
+             preparation.model_id, preparation.model_version,
+             preparation.prepared_artifact_id,
              preparation.ownership, preparation.phase,
-             preparation.cache_policy, preparation.order});
+             preparation.cache_policy, preparation.failure_policy,
+             preparation.allows_partial_session, preparation.order});
         conformance_handles[preparation.plan_element_id].push_back(handle);
     }
     std::map<std::string, std::uint32_t> port_handles;
@@ -7719,6 +8537,12 @@ link_complete_execution_plan(
             integration_handles.at(scope.integration_scope_id));
     }
     std::map<std::string, std::uint64_t> slot_offsets;
+    std::map<gnc::contracts::SlotStorageClass, std::uint64_t>
+        storage_sizes;
+    std::map<gnc::contracts::SlotStorageClass, std::uint64_t>
+        storage_alignments;
+    std::map<gnc::contracts::SlotStorageClass, std::vector<std::string>>
+        storage_slot_ids;
     std::vector<const CompleteSlotPlan*> ordered_slots;
     ordered_slots.reserve(plan.slots.size());
     for (const auto& slot : plan.slots) {
@@ -7729,7 +8553,20 @@ link_complete_execution_plan(
                   return std::tie(lhs->storage_class, lhs->slot_id) <
                          std::tie(rhs->storage_class, rhs->slot_id);
               });
-    std::uint64_t next_offset = 0U;
+    const auto checked_align_up = [](std::uint64_t value,
+                                     std::uint64_t alignment,
+                                     std::uint64_t& aligned) {
+        if (alignment == 0U) {
+            return false;
+        }
+        const auto remainder = value % alignment;
+        const auto padding = remainder == 0U ? 0U : alignment - remainder;
+        if (value > std::numeric_limits<std::uint64_t>::max() - padding) {
+            return false;
+        }
+        aligned = value + padding;
+        return true;
+    };
     for (const auto* slot : ordered_slots) {
         std::uint64_t size_bytes = 0U;
         std::uint64_t alignment_bytes = 1U;
@@ -7743,12 +8580,48 @@ link_complete_execution_plan(
             size_bytes = static_cast<std::uint64_t>(layout->size_bytes);
             alignment_bytes = static_cast<std::uint64_t>(layout->alignment_bytes);
         }
-        const auto remainder = next_offset % alignment_bytes;
-        if (remainder != 0U) {
-            next_offset += alignment_bytes - remainder;
+        auto& next_offset = storage_sizes[slot->storage_class];
+        std::uint64_t aligned_offset = 0U;
+        if (slot->storage_class ==
+                gnc::contracts::SlotStorageClass::Unspecified ||
+            !checked_align_up(next_offset, alignment_bytes,
+                              aligned_offset) ||
+            size_bytes > std::numeric_limits<std::uint64_t>::max() -
+                             aligned_offset) {
+            diagnostic(outcome.diagnostics,
+                       CompleteDiagnosticCode::ImplementationMismatch,
+                       slot->source, slot->slot_id,
+                       "stored slot layout overflows its deterministic storage extent");
+            continue;
         }
-        slot_offsets.emplace(slot->slot_id, next_offset);
-        next_offset += size_bytes;
+        slot_offsets.emplace(slot->slot_id, aligned_offset);
+        next_offset = aligned_offset + size_bytes;
+        storage_alignments[slot->storage_class] =
+            std::max(storage_alignments[slot->storage_class],
+                     alignment_bytes);
+        storage_slot_ids[slot->storage_class].push_back(slot->slot_id);
+    }
+    for (auto& [storage_class, size_bytes] : storage_sizes) {
+        const auto alignment_bytes = storage_alignments.at(storage_class);
+        std::uint64_t aligned_size = 0U;
+        if (!checked_align_up(size_bytes, alignment_bytes, aligned_size)) {
+            diagnostic(outcome.diagnostics,
+                       CompleteDiagnosticCode::ImplementationMismatch,
+                       plan.clock.source,
+                       std::string(gnc::contracts::to_string(storage_class)),
+                       "storage extent tail alignment overflows uint64");
+            continue;
+        }
+        size_bytes = aligned_size;
+    }
+    if (!outcome.diagnostics.empty()) {
+        return outcome;
+    }
+    std::map<gnc::contracts::SlotStorageClass, std::uint32_t>
+        storage_layout_handles;
+    for (const auto& [storage_class, size_bytes] : storage_sizes) {
+        static_cast<void>(size_bytes);
+        storage_layout_handles.emplace(storage_class, next_handle++);
     }
     std::map<std::string, std::uint32_t> slot_handles;
     for (const auto& slot : plan.slots) {
@@ -7786,10 +8659,14 @@ link_complete_execution_plan(
         for (const auto& reader : slot.reader_plan_element_ids) {
             readers.push_back(plan_element_runtime_handles.at(reader));
         }
+        std::sort(readers.begin(), readers.end());
+        readers.erase(std::unique(readers.begin(), readers.end()),
+                      readers.end());
         image.slots.push_back(
             {handle, slot.plan_element_id, slot.slot_id, kind,
              occurrence_handles.at(slot.owner_occurrence_id), port_handle,
              slot.contract_id, slot.layout_id, size_bytes, alignment_bytes,
+             storage_layout_handles.at(slot.storage_class),
              slot_offsets.at(slot.slot_id),
              entry_handles.at(slot.codec_entry_requirement_id),
              writer_token_handles.at(slot.writer_token_id),
@@ -7797,6 +8674,17 @@ link_complete_execution_plan(
              slot.valid_on_continue, slot.discarded_on_terminal,
              slot.discarded_on_failure});
         conformance_handles[slot.plan_element_id].push_back(handle);
+    }
+    for (const auto& [storage_class, slot_ids] : storage_slot_ids) {
+        std::vector<std::uint32_t> handles;
+        handles.reserve(slot_ids.size());
+        for (const auto& slot_id : slot_ids) {
+            handles.push_back(slot_handles.at(slot_id));
+        }
+        image.storage_layouts.push_back(
+            {storage_layout_handles.at(storage_class), storage_class,
+             storage_sizes.at(storage_class),
+             storage_alignments.at(storage_class), std::move(handles)});
     }
     std::map<std::string, std::uint32_t> state_block_handles;
     for (const auto& state : plan.state_blocks) {
@@ -7874,30 +8762,40 @@ link_complete_execution_plan(
 
     std::map<std::string, std::uint32_t> invocation_handles;
     for (const auto& invocation : plan.invocation_bindings) {
-        const auto handle = next_handle++;
-        invocation_handles.emplace(invocation.invocation_id, handle);
-        const auto entry_requirement =
-            invocation.kind == gnc::model_sdk::StaticInvocationKind::PureQuery
-                ? plan.queries.at(
-                      static_cast<std::size_t>(
-                          std::find_if(
-                              plan.queries.begin(), plan.queries.end(),
-                              [&](const auto& query) {
-                                  return query.occurrence_id ==
-                                         invocation.provider_occurrence_id;
-                              }) -
-                          plan.queries.begin()))
-                      .entry_requirement_id
-                : plan.closures.at(
-                      static_cast<std::size_t>(
-                          std::find_if(
-                              plan.closures.begin(), plan.closures.end(),
-                              [&](const auto& closure) {
-                                  return closure.occurrence_id ==
-                                         invocation.provider_occurrence_id;
-                              }) -
-                          plan.closures.begin()))
-                      .entry_requirement_id;
+        invocation_handles.emplace(invocation.invocation_id,
+                                   next_handle++);
+    }
+    std::map<std::string, std::uint32_t> provider_plan_handles;
+    for (const auto& query : plan.queries) {
+        provider_plan_handles.emplace(query.query_plan_id, next_handle++);
+    }
+    for (const auto& closure : plan.closures) {
+        provider_plan_handles.emplace(closure.closure_plan_id,
+                                      next_handle++);
+    }
+    for (const auto& invocation : plan.invocation_bindings) {
+        const auto handle = invocation_handles.at(invocation.invocation_id);
+        std::string entry_requirement;
+        std::string preparation_input;
+        if (invocation.kind ==
+            gnc::model_sdk::StaticInvocationKind::PureQuery) {
+            const auto provider = std::find_if(
+                plan.queries.begin(), plan.queries.end(),
+                [&](const auto& query) {
+                    return query.query_plan_id == invocation.provider_plan_id;
+                });
+            entry_requirement = provider->entry_requirement_id;
+            preparation_input = provider->preparation_input_ref;
+        } else {
+            const auto provider = std::find_if(
+                plan.closures.begin(), plan.closures.end(),
+                [&](const auto& closure) {
+                    return closure.closure_plan_id ==
+                           invocation.provider_plan_id;
+                });
+            entry_requirement = provider->entry_requirement_id;
+            preparation_input = provider->preparation_input_ref;
+        }
         const auto caller_callsite = std::find_if(
             plan.runtime_callsites.begin(), plan.runtime_callsites.end(),
             [&](const auto& candidate) {
@@ -7911,6 +8809,8 @@ link_complete_execution_plan(
             {handle, invocation.plan_element_id, invocation.invocation_id,
              callsite_handles.at(invocation.caller_callsite_id),
              occurrence_handles.at(invocation.provider_occurrence_id),
+             provider_plan_handles.at(invocation.provider_plan_id),
+             preparation_handles.at(preparation_input),
              entry_handles.at(entry_requirement),
              invocation.requirement_id,
              invocation.requirement_ordinal,
@@ -7929,10 +8829,8 @@ link_complete_execution_plan(
              port_handles.at(consumer_port_key)});
         conformance_handles[invocation.plan_element_id].push_back(handle);
     }
-    std::map<std::string, std::uint32_t> provider_plan_handles;
     for (const auto& query : plan.queries) {
-        const auto handle = next_handle++;
-        provider_plan_handles.emplace(query.query_plan_id, handle);
+        const auto handle = provider_plan_handles.at(query.query_plan_id);
         std::vector<std::uint32_t> authorized;
         authorized.reserve(query.authorized_invocation_ids.size());
         for (const auto& invocation_id :
@@ -7950,8 +8848,8 @@ link_complete_execution_plan(
         conformance_handles[query.plan_element_id].push_back(handle);
     }
     for (const auto& closure : plan.closures) {
-        const auto handle = next_handle++;
-        provider_plan_handles.emplace(closure.closure_plan_id, handle);
+        const auto handle = provider_plan_handles.at(
+            closure.closure_plan_id);
         std::vector<std::uint32_t> authorized;
         authorized.reserve(closure.authorized_invocation_ids.size());
         for (const auto& invocation_id :
@@ -8013,6 +8911,24 @@ link_complete_execution_plan(
         resource_plan_handles.emplace(resource.resource_plan_id,
                                       next_handle++);
     }
+    std::map<std::string, std::uint32_t> transaction_handles;
+    for (const auto& transaction : plan.transactions) {
+        transaction_handles.emplace(transaction.transaction_id,
+                                    next_handle++);
+    }
+    std::map<std::string, std::uint32_t> evaluator_history_handles;
+    for (const auto& history : plan.evaluator_histories) {
+        evaluator_history_handles.emplace(history.history_id,
+                                          next_handle++);
+    }
+    const auto mapped_handles = [](const auto& ids, const auto& handles) {
+        std::vector<std::uint32_t> result;
+        result.reserve(ids.size());
+        for (const auto& id : ids) {
+            result.push_back(handles.at(id));
+        }
+        return result;
+    };
     for (const auto& component : plan.runtime_components) {
         const auto handle = runtime_component_handles.at(
             component.occurrence_id);
@@ -8052,7 +8968,25 @@ link_complete_execution_plan(
                  component.schedule.output_hold)),
              component.schedule.max_input_age_steps,
              std::move(lifecycle), std::move(callsites),
-             std::move(state_blocks)});
+             std::move(state_blocks),
+             mapped_handles(component.preparation_input_ids,
+                            preparation_handles),
+             mapped_handles(component.provider_plan_ids,
+                            provider_plan_handles),
+             mapped_handles(component.input_slot_ids, slot_handles),
+             mapped_handles(component.output_slot_ids, slot_handles),
+             mapped_handles(component.output_writer_token_ids,
+                            writer_token_handles),
+             mapped_handles(component.invocation_binding_ids,
+                            invocation_handles),
+             mapped_handles(component.integration_scope_ids,
+                            integration_handles),
+             mapped_handles(component.interval_model_slot_ids,
+                            slot_handles),
+             mapped_handles(component.transaction_ids,
+                            transaction_handles),
+             mapped_handles(component.evaluator_history_ids,
+                            evaluator_history_handles)});
         conformance_handles[component.plan_element_id].push_back(handle);
     }
     for (const auto& resource : plan.resource_plans) {
@@ -8084,6 +9018,10 @@ link_complete_execution_plan(
     }
     for (const auto& scope : plan.integration_scopes) {
         const auto handle = integration_handles.at(scope.integration_scope_id);
+        std::vector<std::uint32_t> form_invocations;
+        for (const auto& invocation : scope.form_invocation_ids) {
+            form_invocations.push_back(invocation_handles.at(invocation));
+        }
         std::vector<std::uint32_t> closures;
         for (const auto& invocation : scope.closure_invocation_ids) {
             closures.push_back(invocation_handles.at(invocation));
@@ -8105,16 +9043,23 @@ link_complete_execution_plan(
              scope.held_form_contract_id,
              scope.derivative_request_contract_id,
              scope.derivative_result_contract_id,
-             std::move(closures), std::move(members),
+             std::move(form_invocations), std::move(closures),
+             std::move(members),
              scope.integrator_id, scope.integrator_version,
              image.clock.handle, scope.step_ticks,
              scope.fixed_step_seconds, scope.absolute_tolerance,
              scope.relative_tolerance, scope.check_finiteness,
              scope.zero_threshold, scope.condition_limit,
+             scope.numerical_policy_id,
+             occurrence_handles.at(
+                 scope.numerical_policy_configuration_occurrence_id),
              scope.workspace_requirement ==
                      gnc::model_sdk::StaticWorkspaceRequirement::None
                  ? std::string(kNoWorkspaceLayoutIdentity)
                  : std::string{},
+             scope.workspace_size_bytes,
+             scope.workspace_alignment_bytes,
+             scope.held_slot_hold_policy,
              entry_handles.at(
                  scope.candidate_codec_entry_requirement_id),
              scope.candidate_project_operation_id,
@@ -8148,7 +9093,8 @@ link_complete_execution_plan(
             dag_node_handles.at(edge.successor_node_id));
     }
     for (const auto& transaction : plan.transactions) {
-        const auto handle = next_handle++;
+        const auto handle = transaction_handles.at(
+            transaction.transaction_id);
         std::vector<gnc::contracts::PlanImageTransactionCandidateMember>
             candidates;
         for (const auto& candidate : transaction.candidates) {
@@ -8190,6 +9136,25 @@ link_complete_execution_plan(
                 image_branch.discarded_held_slot_handles.push_back(
                     slot_handles.at(slot));
             }
+            for (const auto& slot : branch.published_output_slot_ids) {
+                image_branch.published_output_slot_handles.push_back(
+                    slot_handles.at(slot));
+            }
+            for (const auto& slot : branch.sealed_output_slot_ids) {
+                image_branch.sealed_output_slot_handles.push_back(
+                    slot_handles.at(slot));
+            }
+            for (const auto& slot : branch.discarded_output_slot_ids) {
+                image_branch.discarded_output_slot_handles.push_back(
+                    slot_handles.at(slot));
+            }
+            image_branch.output_visibility = branch.output_visibility;
+            image_branch.held_interval_end_policy =
+                branch.held_interval_end_policy;
+            image_branch.committed_state_preserved =
+                branch.committed_state_preserved;
+            image_branch.failure_owner = branch.failure_owner;
+            image_branch.failure_route = branch.failure_route;
             image_branch.model_commit = branch.model_commit;
             image_branch.observation_seal = branch.observation_seal;
             image_branch.result_seal_after_observation =
@@ -8205,7 +9170,8 @@ link_complete_execution_plan(
         conformance_handles[transaction.plan_element_id].push_back(handle);
     }
     for (const auto& history : plan.evaluator_histories) {
-        const auto handle = next_handle++;
+        const auto handle = evaluator_history_handles.at(
+            history.history_id);
         std::vector<gnc::contracts::PlanImageEvaluatorHistoryMember>
             members;
         for (const auto& member : history.ordered_members) {
@@ -8330,6 +9296,11 @@ link_complete_execution_plan(
             {element, std::move(sources),
              coverage->proof_ids, std::move(handles)});
     }
+    if (!outcome.diagnostics.empty()) {
+        return outcome;
+    }
+    static_cast<void>(validate_materialized_storage_layouts(
+        image, outcome.diagnostics));
     if (!outcome.diagnostics.empty()) {
         return outcome;
     }

@@ -1154,6 +1154,8 @@ using CommittedMissionHistoryEvaluationCall =
 // them.
 struct ControlledRigidRuntimeCellBindings {
     std::uint32_t state_block_handle = 0U;
+    std::uint32_t integration_scope_handle = 0U;
+    std::uint32_t transaction_handle = 0U;
     std::uint32_t publish_projection_callsite_handle = 0U;
     std::uint32_t boundary_evaluation_callsite_handle = 0U;
     std::uint32_t derivative_evaluation_callsite_handle = 0U;
@@ -1192,6 +1194,7 @@ using ControlledRigidRuntimeCellFactoryCall =
 
 struct ScalarBurnMassRuntimeCellBindings {
     std::uint32_t state_block_handle = 0U;
+    std::uint32_t transaction_handle = 0U;
     std::uint32_t publish_projection_callsite_handle = 0U;
     std::uint32_t interval_evolution_callsite_handle = 0U;
     gnc::model_sdk::CompiledOutputWriter<MassPropertiesInput>

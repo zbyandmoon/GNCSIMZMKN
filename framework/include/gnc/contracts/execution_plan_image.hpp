@@ -127,10 +127,16 @@ struct PlanImagePreparation {
     std::string plan_element_id;
     std::uint32_t occurrence_handle = 0U;
     std::uint32_t prepare_entry_handle = 0U;
+    std::string definition_id;
+    std::string definition_version;
+    std::string prepared_artifact_id;
     PreparationOwnership ownership = PreparationOwnership::Unspecified;
     PreparationPhase phase = PreparationPhase::Unspecified;
     PreparedModelCachePolicy cache_policy =
         PreparedModelCachePolicy::Unspecified;
+    PreparationFailurePolicy failure_policy =
+        PreparationFailurePolicy::Unspecified;
+    bool allows_partial_session = false;
     std::uint32_t order = 0U;
 };
 
@@ -177,6 +183,7 @@ struct PlanImageSlot {
     std::string layout_id;
     std::uint64_t size_bytes = 0U;
     std::uint64_t alignment_bytes = 1U;
+    std::uint32_t storage_layout_handle = 0U;
     std::uint64_t offset_bytes = 0U;
     std::uint32_t codec_entry_handle = 0U;
     std::uint32_t writer_token_handle = 0U;
@@ -186,6 +193,17 @@ struct PlanImageSlot {
     bool valid_on_continue = false;
     bool discarded_on_terminal = false;
     bool discarded_on_failure = false;
+};
+
+// One allocation extent per runtime storage class. Slot offsets are relative
+// to this extent, so R3 can allocate exact aligned arenas without consulting
+// source or the Compiler. R2 only validates and freezes these numbers.
+struct PlanImageStorageLayout {
+    std::uint32_t handle = 0U;
+    SlotStorageClass storage_class = SlotStorageClass::Unspecified;
+    std::uint64_t size_bytes = 0U;
+    std::uint64_t alignment_bytes = 1U;
+    std::vector<std::uint32_t> ordered_slot_handles;
 };
 
 enum class PlanImageWriterOwnerKind : std::uint8_t {
@@ -286,6 +304,16 @@ struct PlanImageRuntimeComponent {
     // Direct numeric ownership references used to construct the factory's
     // compiled binding input without an R3 catalog/name lookup.
     std::vector<std::uint32_t> state_block_handles;
+    std::vector<std::uint32_t> preparation_handles;
+    std::vector<std::uint32_t> provider_plan_handles;
+    std::vector<std::uint32_t> input_slot_handles;
+    std::vector<std::uint32_t> output_slot_handles;
+    std::vector<std::uint32_t> output_writer_token_handles;
+    std::vector<std::uint32_t> invocation_handles;
+    std::vector<std::uint32_t> integration_scope_handles;
+    std::vector<std::uint32_t> interval_model_slot_handles;
+    std::vector<std::uint32_t> transaction_handles;
+    std::vector<std::uint32_t> evaluator_history_handles;
 };
 
 struct PlanImageResourcePlan {
@@ -302,6 +330,8 @@ struct PlanImageInvocation {
     std::string invocation_id;
     std::uint32_t caller_callsite_handle = 0U;
     std::uint32_t provider_occurrence_handle = 0U;
+    std::uint32_t provider_plan_handle = 0U;
+    std::uint32_t provider_preparation_handle = 0U;
     std::uint32_t entry_handle = 0U;
     std::string requirement_id;
     // Zero-based position in the caller entry's package-authored invocation
@@ -360,6 +390,7 @@ struct PlanImageIntegrationScope {
     std::string held_form_contract_id;
     std::string derivative_request_contract_id;
     std::string derivative_result_contract_id;
+    std::vector<std::uint32_t> form_invocation_handles;
     std::vector<std::uint32_t> closure_invocation_handles;
     std::vector<std::uint32_t> member_owner_occurrence_handles;
     std::string integrator_id;
@@ -372,7 +403,12 @@ struct PlanImageIntegrationScope {
     std::string check_finiteness;
     double zero_threshold = 0.0;
     double condition_limit = 0.0;
+    std::string numerical_policy_id;
+    std::uint32_t numerical_policy_configuration_occurrence_handle = 0U;
     std::string workspace_layout_id;
+    std::uint64_t workspace_size_bytes = 0U;
+    std::uint64_t workspace_alignment_bytes = 0U;
+    SlotHoldPolicy held_slot_hold_policy = SlotHoldPolicy::Unspecified;
     std::uint32_t candidate_codec_entry_handle = 0U;
     std::string candidate_project_operation_id;
     std::string candidate_finite_validation_operation_id;
@@ -393,6 +429,18 @@ struct PlanImageTransactionBranch {
     std::vector<std::uint32_t> discarded_candidate_slot_handles;
     std::vector<std::uint32_t> retained_held_slot_handles;
     std::vector<std::uint32_t> discarded_held_slot_handles;
+    std::vector<std::uint32_t> published_output_slot_handles;
+    std::vector<std::uint32_t> sealed_output_slot_handles;
+    std::vector<std::uint32_t> discarded_output_slot_handles;
+    TransactionOutputVisibility output_visibility =
+        TransactionOutputVisibility::Unspecified;
+    HeldIntervalEndPolicy held_interval_end_policy =
+        HeldIntervalEndPolicy::Unspecified;
+    bool committed_state_preserved = false;
+    TransactionFailureOwner failure_owner =
+        TransactionFailureOwner::Unspecified;
+    TransactionFailureRoute failure_route =
+        TransactionFailureRoute::Unspecified;
     bool model_commit = false;
     bool observation_seal = false;
     bool result_seal_after_observation = false;
@@ -450,7 +498,7 @@ struct PlanImageConformance {
 };
 
 struct ExecutionPlanImageData {
-    std::uint32_t revision = 2U;
+    std::uint32_t revision = 3U;
     std::string plan_id;
     std::string mission_id;
     std::string source_semantic_hash;
@@ -466,6 +514,7 @@ struct ExecutionPlanImageData {
     std::vector<PlanImageClosure> closures;
     std::vector<PlanImagePort> ports;
     std::vector<PlanImageSlot> slots;
+    std::vector<PlanImageStorageLayout> storage_layouts;
     std::vector<PlanImageWriterToken> writer_tokens;
     std::vector<PlanImageStateBlock> state_blocks;
     std::vector<PlanImageInitialBinding> initial_bindings;
@@ -542,6 +591,10 @@ class ExecutionPlanImage final {
     }
     [[nodiscard]] const std::vector<PlanImageSlot>& slots() const noexcept {
         return data_.slots;
+    }
+    [[nodiscard]] const std::vector<PlanImageStorageLayout>& storage_layouts()
+        const noexcept {
+        return data_.storage_layouts;
     }
     [[nodiscard]] const std::vector<PlanImageWriterToken>& writer_tokens() const noexcept {
         return data_.writer_tokens;

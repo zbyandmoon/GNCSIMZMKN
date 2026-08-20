@@ -131,6 +131,7 @@ enum class SlotStorageClass : std::uint8_t {
     Unspecified,
     CycleFrame,
     StateStore,
+    TransactionCandidate,
     IntegrationHeld,
     TerminalResult,
 };
@@ -144,6 +145,8 @@ enum class SlotStorageClass : std::uint8_t {
         return "CycleFrame";
     case SlotStorageClass::StateStore:
         return "StateStore";
+    case SlotStorageClass::TransactionCandidate:
+        return "TransactionCandidate";
     case SlotStorageClass::IntegrationHeld:
         return "IntegrationHeld";
     case SlotStorageClass::TerminalResult:
@@ -192,6 +195,11 @@ enum class PreparedModelCachePolicy : std::uint8_t {
     NoSharedCache,
 };
 
+enum class PreparationFailurePolicy : std::uint8_t {
+    Unspecified,
+    FailSessionInitialization,
+};
+
 [[nodiscard]] constexpr std::string_view to_string(
     PreparationOwnership value) noexcept {
     return value == PreparationOwnership::SessionOwned ? "SessionOwned"
@@ -211,10 +219,40 @@ enum class PreparedModelCachePolicy : std::uint8_t {
                : "Unspecified";
 }
 
+[[nodiscard]] constexpr std::string_view to_string(
+    PreparationFailurePolicy value) noexcept {
+    return value == PreparationFailurePolicy::FailSessionInitialization
+               ? "FailSessionInitialization"
+               : "Unspecified";
+}
+
 enum class TransactionBranch : std::uint8_t {
     Continue,
     Terminal,
     Failure,
+};
+
+enum class TransactionOutputVisibility : std::uint8_t {
+    Unspecified,
+    None,
+    AfterObservationSeal,
+};
+
+enum class HeldIntervalEndPolicy : std::uint8_t {
+    Unspecified,
+    ReleaseAfterModelCommit,
+    ReleaseAtTerminalSeal,
+    DiscardOnFailure,
+};
+
+enum class TransactionFailureOwner : std::uint8_t {
+    Unspecified,
+    TransactionCoordinator,
+};
+
+enum class TransactionFailureRoute : std::uint8_t {
+    Unspecified,
+    RunOutcome,
 };
 
 [[nodiscard]] constexpr std::string_view to_string(
@@ -228,6 +266,47 @@ enum class TransactionBranch : std::uint8_t {
         return "Failure";
     }
     return "Unknown";
+}
+
+[[nodiscard]] constexpr std::string_view to_string(
+    TransactionOutputVisibility value) noexcept {
+    switch (value) {
+    case TransactionOutputVisibility::Unspecified:
+        return "Unspecified";
+    case TransactionOutputVisibility::None:
+        return "None";
+    case TransactionOutputVisibility::AfterObservationSeal:
+        return "AfterObservationSeal";
+    }
+    return "Unknown";
+}
+
+[[nodiscard]] constexpr std::string_view to_string(
+    HeldIntervalEndPolicy value) noexcept {
+    switch (value) {
+    case HeldIntervalEndPolicy::Unspecified:
+        return "Unspecified";
+    case HeldIntervalEndPolicy::ReleaseAfterModelCommit:
+        return "ReleaseAfterModelCommit";
+    case HeldIntervalEndPolicy::ReleaseAtTerminalSeal:
+        return "ReleaseAtTerminalSeal";
+    case HeldIntervalEndPolicy::DiscardOnFailure:
+        return "DiscardOnFailure";
+    }
+    return "Unknown";
+}
+
+[[nodiscard]] constexpr std::string_view to_string(
+    TransactionFailureOwner value) noexcept {
+    return value == TransactionFailureOwner::TransactionCoordinator
+               ? "TransactionCoordinator"
+               : "Unspecified";
+}
+
+[[nodiscard]] constexpr std::string_view to_string(
+    TransactionFailureRoute value) noexcept {
+    return value == TransactionFailureRoute::RunOutcome ? "RunOutcome"
+                                                        : "Unspecified";
 }
 
 } // namespace gnc::contracts

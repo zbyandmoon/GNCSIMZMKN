@@ -1788,6 +1788,8 @@ create_controlled_rigid_runtime_cell(
             invocations.frozen_form.closure.invocation_handle;
     if (!valid_runtime_cell_factory_context(context) ||
         bindings.state_block_handle == 0U ||
+        bindings.integration_scope_handle == 0U ||
+        bindings.transaction_handle == 0U ||
         bindings.publish_projection_callsite_handle == 0U ||
         bindings.boundary_evaluation_callsite_handle == 0U ||
         bindings.derivative_evaluation_callsite_handle == 0U ||
@@ -1836,6 +1838,7 @@ create_scalar_burn_mass_runtime_cell(
     const ScalarBurnMassRuntimeCellBindings& bindings) {
     if (!valid_runtime_cell_factory_context(context) ||
         bindings.state_block_handle == 0U ||
+        bindings.transaction_handle == 0U ||
         bindings.publish_projection_callsite_handle == 0U ||
         bindings.interval_evolution_callsite_handle == 0U ||
         bindings.publish_projection_callsite_handle ==
