@@ -232,6 +232,19 @@ enum class TransactionBranch : std::uint8_t {
     Failure,
 };
 
+// Branch lifetime is derived from TransactionPlan/Image membership. Stored
+// slots never cache an equivalent set of branch booleans.
+enum class TransactionSlotDisposition : std::uint8_t {
+    NotManaged,
+    CommitCandidate,
+    RetainHeld,
+    PublishOutput,
+    SealOutput,
+    PublishAndSealOutput,
+    Discard,
+    Conflict,
+};
+
 enum class TransactionOutputVisibility : std::uint8_t {
     Unspecified,
     None,
@@ -264,6 +277,29 @@ enum class TransactionFailureRoute : std::uint8_t {
         return "Terminal";
     case TransactionBranch::Failure:
         return "Failure";
+    }
+    return "Unknown";
+}
+
+[[nodiscard]] constexpr std::string_view to_string(
+    TransactionSlotDisposition disposition) noexcept {
+    switch (disposition) {
+    case TransactionSlotDisposition::NotManaged:
+        return "NotManaged";
+    case TransactionSlotDisposition::CommitCandidate:
+        return "CommitCandidate";
+    case TransactionSlotDisposition::RetainHeld:
+        return "RetainHeld";
+    case TransactionSlotDisposition::PublishOutput:
+        return "PublishOutput";
+    case TransactionSlotDisposition::SealOutput:
+        return "SealOutput";
+    case TransactionSlotDisposition::PublishAndSealOutput:
+        return "PublishAndSealOutput";
+    case TransactionSlotDisposition::Discard:
+        return "Discard";
+    case TransactionSlotDisposition::Conflict:
+        return "Conflict";
     }
     return "Unknown";
 }

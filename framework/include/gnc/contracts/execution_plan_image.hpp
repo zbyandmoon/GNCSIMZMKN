@@ -2,6 +2,7 @@
 
 #include "gnc/contracts/execution_semantics.hpp"
 
+#include <algorithm>
 #include <any>
 #include <cstdint>
 #include <string_view>
@@ -190,9 +191,6 @@ struct PlanImageSlot {
     std::vector<std::uint32_t> reader_handles;
     SlotStorageClass storage_class = SlotStorageClass::Unspecified;
     SlotHoldPolicy hold_policy = SlotHoldPolicy::Unspecified;
-    bool valid_on_continue = false;
-    bool discarded_on_terminal = false;
-    bool discarded_on_failure = false;
 };
 
 // One allocation extent per runtime storage class. Slot offsets are relative
@@ -457,6 +455,59 @@ struct PlanImageTransaction {
     std::vector<PlanImageTransactionBranch> branches;
 };
 
+[[nodiscard]] inline const PlanImageTransactionBranch*
+find_transaction_branch(const PlanImageTransaction& transaction,
+                        TransactionBranch branch) noexcept {
+    const auto found = std::find_if(
+        transaction.branches.begin(), transaction.branches.end(),
+        [branch](const auto& candidate) { return candidate.branch == branch; });
+    return found == transaction.branches.end() ? nullptr : &*found;
+}
+
+[[nodiscard]] inline TransactionSlotDisposition transaction_slot_disposition(
+    const PlanImageTransactionBranch& branch,
+    std::uint32_t slot_handle) noexcept {
+    const auto contains = [slot_handle](const auto& handles) {
+        return std::find(handles.begin(), handles.end(), slot_handle) !=
+               handles.end();
+    };
+    const bool committed = contains(branch.committed_candidate_slot_handles);
+    const bool retained = contains(branch.retained_held_slot_handles);
+    const bool published = contains(branch.published_output_slot_handles);
+    const bool sealed = contains(branch.sealed_output_slot_handles);
+    const bool discarded =
+        contains(branch.discarded_candidate_slot_handles) ||
+        contains(branch.discarded_held_slot_handles) ||
+        contains(branch.discarded_output_slot_handles);
+    const unsigned int exclusive_roles =
+        static_cast<unsigned int>(committed) +
+        static_cast<unsigned int>(retained) +
+        static_cast<unsigned int>(published || sealed) +
+        static_cast<unsigned int>(discarded);
+    if (exclusive_roles > 1U) {
+        return TransactionSlotDisposition::Conflict;
+    }
+    if (committed) {
+        return TransactionSlotDisposition::CommitCandidate;
+    }
+    if (retained) {
+        return TransactionSlotDisposition::RetainHeld;
+    }
+    if (discarded) {
+        return TransactionSlotDisposition::Discard;
+    }
+    if (published && sealed) {
+        return TransactionSlotDisposition::PublishAndSealOutput;
+    }
+    if (published) {
+        return TransactionSlotDisposition::PublishOutput;
+    }
+    if (sealed) {
+        return TransactionSlotDisposition::SealOutput;
+    }
+    return TransactionSlotDisposition::NotManaged;
+}
+
 struct PlanImageLifecycle {
     std::vector<std::uint32_t> preparation_handles;
     std::vector<std::uint32_t> runtime_component_handles;
@@ -643,6 +694,9 @@ class ExecutionPlanImage final {
     }
     [[nodiscard]] const std::vector<PlanImageConformance>& conformance() const noexcept {
         return data_.conformance;
+    }
+    [[nodiscard]] const ExecutionPlanImageData& data() const noexcept {
+        return data_;
     }
 
   private:

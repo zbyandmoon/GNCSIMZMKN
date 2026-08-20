@@ -367,9 +367,6 @@ struct CompleteSlotPlan {
         gnc::contracts::SlotStorageClass::Unspecified;
     gnc::contracts::SlotHoldPolicy hold_policy =
         gnc::contracts::SlotHoldPolicy::Unspecified;
-    bool valid_on_continue = false;
-    bool discarded_on_terminal = false;
-    bool discarded_on_failure = false;
     SourceRef source;
 };
 
@@ -728,6 +725,58 @@ struct TransactionPlan {
     std::vector<TransactionBranchPlan> branches;
     SourceRef source;
 };
+
+[[nodiscard]] inline const TransactionBranchPlan* find_transaction_branch(
+    const TransactionPlan& transaction,
+    gnc::contracts::TransactionBranch branch) noexcept {
+    const auto found = std::find_if(
+        transaction.branches.begin(), transaction.branches.end(),
+        [branch](const auto& candidate) { return candidate.branch == branch; });
+    return found == transaction.branches.end() ? nullptr : &*found;
+}
+
+[[nodiscard]] inline gnc::contracts::TransactionSlotDisposition
+transaction_slot_disposition(const TransactionBranchPlan& branch,
+                             std::string_view slot_id) noexcept {
+    const auto contains = [slot_id](const auto& ids) {
+        return std::find(ids.begin(), ids.end(), slot_id) != ids.end();
+    };
+    const bool committed = contains(branch.committed_candidate_slot_ids);
+    const bool retained = contains(branch.retained_held_slot_ids);
+    const bool published = contains(branch.published_output_slot_ids);
+    const bool sealed = contains(branch.sealed_output_slot_ids);
+    const bool discarded = contains(branch.discarded_candidate_slot_ids) ||
+                           contains(branch.discarded_held_slot_ids) ||
+                           contains(branch.discarded_output_slot_ids);
+    const unsigned int exclusive_roles =
+        static_cast<unsigned int>(committed) +
+        static_cast<unsigned int>(retained) +
+        static_cast<unsigned int>(published || sealed) +
+        static_cast<unsigned int>(discarded);
+    if (exclusive_roles > 1U) {
+        return gnc::contracts::TransactionSlotDisposition::Conflict;
+    }
+    if (committed) {
+        return gnc::contracts::TransactionSlotDisposition::CommitCandidate;
+    }
+    if (retained) {
+        return gnc::contracts::TransactionSlotDisposition::RetainHeld;
+    }
+    if (discarded) {
+        return gnc::contracts::TransactionSlotDisposition::Discard;
+    }
+    if (published && sealed) {
+        return gnc::contracts::TransactionSlotDisposition::
+            PublishAndSealOutput;
+    }
+    if (published) {
+        return gnc::contracts::TransactionSlotDisposition::PublishOutput;
+    }
+    if (sealed) {
+        return gnc::contracts::TransactionSlotDisposition::SealOutput;
+    }
+    return gnc::contracts::TransactionSlotDisposition::NotManaged;
+}
 
 struct LifecyclePlan {
     std::vector<std::string> preparation_input_ids;
@@ -2046,9 +2095,6 @@ inline void lower_occurrences(LoweringContext& context) {
                             gnc::model_sdk::RuntimeCellProfile::Evaluator
                         ? gnc::contracts::SlotHoldPolicy::Terminal
                         : gnc::contracts::SlotHoldPolicy::CurrentBoundary;
-                value.valid_on_continue = true;
-                value.discarded_on_terminal = false;
-                value.discarded_on_failure = true;
                 value.source = occurrence.source;
                 context.plan.slots.push_back(std::move(value));
             }
@@ -2281,7 +2327,6 @@ inline void lower_occurrences(LoweringContext& context) {
                 gnc::contracts::SlotStorageClass::StateStore;
             committed_slot.hold_policy =
                 gnc::contracts::SlotHoldPolicy::Committed;
-            committed_slot.valid_on_continue = true;
             committed_slot.source = occurrence.source;
             context.plan.slots.push_back(std::move(committed_slot));
             CompleteSlotPlan candidate_slot;
@@ -2296,9 +2341,6 @@ inline void lower_occurrences(LoweringContext& context) {
                 gnc::contracts::SlotStorageClass::TransactionCandidate;
             candidate_slot.hold_policy =
                 gnc::contracts::SlotHoldPolicy::CurrentBoundary;
-            candidate_slot.valid_on_continue = true;
-            candidate_slot.discarded_on_terminal = true;
-            candidate_slot.discarded_on_failure = true;
             candidate_slot.source = occurrence.source;
             context.plan.slots.push_back(std::move(candidate_slot));
             const auto builder_requirement = entry_requirement_id(
@@ -2487,9 +2529,6 @@ inline void lower_occurrences(LoweringContext& context) {
                     gnc::contracts::SlotStorageClass::IntegrationHeld;
                 stored_result.hold_policy =
                     gnc::contracts::SlotHoldPolicy::HoldInterval;
-                stored_result.valid_on_continue = true;
-                stored_result.discarded_on_terminal = true;
-                stored_result.discarded_on_failure = true;
                 stored_result.source = occurrence.source;
                 context.plan.slots.push_back(std::move(stored_result));
                 callsite_plan.output_slot_ids.push_back(result_slot);
@@ -3424,9 +3463,6 @@ inline void lower_integration_scopes(LoweringContext& context) {
                 gnc::contracts::SlotStorageClass::IntegrationHeld;
             slot.hold_policy =
                 gnc::contracts::SlotHoldPolicy::HoldInterval;
-            slot.valid_on_continue = true;
-            slot.discarded_on_terminal = true;
-            slot.discarded_on_failure = true;
             slot.reader_plan_element_ids = {derivative->plan_element_id};
             slot.source = source.source;
             context.plan.slots.push_back(std::move(slot));
@@ -4314,14 +4350,8 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
                  slot.codec_entry_requirement_id,
              "writer-token=" + slot.writer_token_id,
              "storage=" + enum_value(slot.storage_class),
-             "hold=" + enum_value(slot.hold_policy),
-             "valid-on-continue=" +
-                 std::string(slot.valid_on_continue ? "true" : "false"),
-             "discard-terminal=" +
-                 std::string(slot.discarded_on_terminal ? "true" : "false"),
-             "discard-failure=" +
-                 std::string(slot.discarded_on_failure ? "true" : "false")},
-            {slot.plan_element_id}, slot.source);
+             "hold=" + enum_value(slot.hold_policy)},
+             {slot.plan_element_id}, slot.source);
     }
     for (const auto& writer : plan.writer_tokens) {
         add("proof/writer/" + writer.writer_token_id,
@@ -5898,9 +5928,6 @@ namespace complete_plan_detail {
                         gnc::contracts::SlotStorageClass::IntegrationHeld &&
                     slot->hold_policy ==
                         gnc::contracts::SlotHoldPolicy::HoldInterval &&
-                    slot->valid_on_continue &&
-                    slot->discarded_on_terminal &&
-                    slot->discarded_on_failure &&
                     slot->writer_token_id ==
                         invocation.result_writer_token_id &&
                     writer != plan.writer_tokens.end() &&
@@ -6336,21 +6363,16 @@ namespace complete_plan_detail {
                         (slot.kind == CompleteSlotKind::CommittedState
                              ? gnc::contracts::SlotStorageClass::StateStore
                              : gnc::contracts::SlotStorageClass::
-                                   TransactionCandidate) &&
-                    slot.valid_on_continue;
+                                   TransactionCandidate);
             if (slot.kind == CompleteSlotKind::CommittedState) {
                 valid = valid &&
                         slot.hold_policy ==
                             gnc::contracts::SlotHoldPolicy::Committed &&
-                        !slot.discarded_on_terminal &&
-                        !slot.discarded_on_failure &&
                         state->committed_slot_id == slot.slot_id;
             } else {
                 valid = valid &&
                         slot.hold_policy ==
                             gnc::contracts::SlotHoldPolicy::CurrentBoundary &&
-                        slot.discarded_on_terminal &&
-                        slot.discarded_on_failure &&
                         state->candidate_slot_id == slot.slot_id;
             }
         } else {
@@ -6364,10 +6386,7 @@ namespace complete_plan_detail {
                         slot.storage_class ==
                             gnc::contracts::SlotStorageClass::IntegrationHeld &&
                         slot.hold_policy ==
-                            gnc::contracts::SlotHoldPolicy::HoldInterval &&
-                        slot.valid_on_continue &&
-                        slot.discarded_on_terminal &&
-                        slot.discarded_on_failure;
+                            gnc::contracts::SlotHoldPolicy::HoldInterval;
             } else {
                 const auto port = std::find_if(
                     plan.ports.begin(), plan.ports.end(),
@@ -6391,10 +6410,7 @@ namespace complete_plan_detail {
                             (terminal
                                  ? gnc::contracts::SlotHoldPolicy::Terminal
                                  : gnc::contracts::SlotHoldPolicy::
-                                       CurrentBoundary) &&
-                        slot.valid_on_continue &&
-                        !slot.discarded_on_terminal &&
-                        slot.discarded_on_failure;
+                                       CurrentBoundary);
             }
         }
         if (!valid) {
@@ -7470,27 +7486,21 @@ namespace complete_plan_detail {
                     slot.storage_class ==
                         gnc::contracts::SlotStorageClass::StateStore &&
                     slot.hold_policy ==
-                        gnc::contracts::SlotHoldPolicy::Committed &&
-                    slot.valid_on_continue && !slot.discarded_on_terminal &&
-                    !slot.discarded_on_failure;
+                        gnc::contracts::SlotHoldPolicy::Committed;
         } else if (slot.kind ==
                    gnc::contracts::PlanImageSlotKind::CandidateState) {
             valid = valid && slot.contract_id.empty() &&
                     slot.storage_class == gnc::contracts::SlotStorageClass::
                                               TransactionCandidate &&
                     slot.hold_policy ==
-                        gnc::contracts::SlotHoldPolicy::CurrentBoundary &&
-                    slot.valid_on_continue && slot.discarded_on_terminal &&
-                    slot.discarded_on_failure;
+                        gnc::contracts::SlotHoldPolicy::CurrentBoundary;
         } else if (slot.kind ==
                    gnc::contracts::PlanImageSlotKind::HeldIntervalValue) {
             valid = valid && !slot.contract_id.empty() &&
                     slot.storage_class ==
                         gnc::contracts::SlotStorageClass::IntegrationHeld &&
                     slot.hold_policy ==
-                        gnc::contracts::SlotHoldPolicy::HoldInterval &&
-                    slot.valid_on_continue && slot.discarded_on_terminal &&
-                    slot.discarded_on_failure;
+                        gnc::contracts::SlotHoldPolicy::HoldInterval;
         } else {
             const bool terminal =
                 slot.storage_class ==
@@ -7503,9 +7513,7 @@ namespace complete_plan_detail {
                         (terminal
                              ? gnc::contracts::SlotHoldPolicy::Terminal
                              : gnc::contracts::SlotHoldPolicy::
-                                   CurrentBoundary) &&
-                    slot.valid_on_continue && !slot.discarded_on_terminal &&
-                    slot.discarded_on_failure;
+                                   CurrentBoundary);
         }
         if (!valid) {
             report(slot.slot_id,
@@ -7699,9 +7707,6 @@ namespace complete_plan_detail {
         }
         encoder.uint32(static_cast<std::uint32_t>(value.storage_class));
         encoder.uint32(static_cast<std::uint32_t>(value.hold_policy));
-        encoder.optional(value.valid_on_continue);
-        encoder.optional(value.discarded_on_terminal);
-        encoder.optional(value.discarded_on_failure);
     });
     encode_ids(image.storage_layouts, [&](const auto& value) {
         encoder.uint32(value.handle);
@@ -8670,9 +8675,7 @@ link_complete_execution_plan(
              slot_offsets.at(slot.slot_id),
              entry_handles.at(slot.codec_entry_requirement_id),
              writer_token_handles.at(slot.writer_token_id),
-             std::move(readers), slot.storage_class, slot.hold_policy,
-             slot.valid_on_continue, slot.discarded_on_terminal,
-             slot.discarded_on_failure});
+             std::move(readers), slot.storage_class, slot.hold_policy});
         conformance_handles[slot.plan_element_id].push_back(handle);
     }
     for (const auto& [storage_class, slot_ids] : storage_slot_ids) {

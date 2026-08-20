@@ -199,7 +199,8 @@ if(GNC_BUILD_TESTS)
     # R2 vertical review: canonical REF-YYZ planning/proof/exact-entry link.
     add_executable(
         gnc_compiler_complete_yyz_plan_probe
-        tests/compiler_complete_yyz_plan.cpp)
+        tests/compiler_complete_yyz_plan.cpp
+        tests/support/ref_yyz_complete_composition.cpp)
     target_link_libraries(
         gnc_compiler_complete_yyz_plan_probe
         PRIVATE compiler yyz_rigid_step)
