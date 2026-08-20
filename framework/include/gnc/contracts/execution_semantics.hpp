@@ -98,4 +98,136 @@ enum class ClosureStrategy : std::uint8_t {
            strategy == ClosureStrategy::AlgebraicSolve;
 }
 
+// An invocation result is either consumed directly by the authorized typed
+// caller or written once into coordinator-owned interval storage. PureQuery
+// responses are never CycleFrame values merely because a logical Binding
+// names their consumer.
+enum class InvocationResultRoute : std::uint8_t {
+    Unspecified,
+    CallerLocal,
+    HeldInterval,
+};
+
+[[nodiscard]] constexpr std::string_view to_string(
+    InvocationResultRoute route) noexcept {
+    switch (route) {
+    case InvocationResultRoute::Unspecified:
+        return "Unspecified";
+    case InvocationResultRoute::CallerLocal:
+        return "CallerLocal";
+    case InvocationResultRoute::HeldInterval:
+        return "HeldInterval";
+    }
+    return "Unknown";
+}
+
+[[nodiscard]] constexpr bool valid_invocation_result_route(
+    InvocationResultRoute route) noexcept {
+    return route == InvocationResultRoute::CallerLocal ||
+           route == InvocationResultRoute::HeldInterval;
+}
+
+enum class SlotStorageClass : std::uint8_t {
+    Unspecified,
+    CycleFrame,
+    StateStore,
+    IntegrationHeld,
+    TerminalResult,
+};
+
+[[nodiscard]] constexpr std::string_view to_string(
+    SlotStorageClass storage) noexcept {
+    switch (storage) {
+    case SlotStorageClass::Unspecified:
+        return "Unspecified";
+    case SlotStorageClass::CycleFrame:
+        return "CycleFrame";
+    case SlotStorageClass::StateStore:
+        return "StateStore";
+    case SlotStorageClass::IntegrationHeld:
+        return "IntegrationHeld";
+    case SlotStorageClass::TerminalResult:
+        return "TerminalResult";
+    }
+    return "Unknown";
+}
+
+enum class SlotHoldPolicy : std::uint8_t {
+    Unspecified,
+    CurrentBoundary,
+    HoldInterval,
+    Committed,
+    Terminal,
+};
+
+[[nodiscard]] constexpr std::string_view to_string(
+    SlotHoldPolicy hold) noexcept {
+    switch (hold) {
+    case SlotHoldPolicy::Unspecified:
+        return "Unspecified";
+    case SlotHoldPolicy::CurrentBoundary:
+        return "CurrentBoundary";
+    case SlotHoldPolicy::HoldInterval:
+        return "HoldInterval";
+    case SlotHoldPolicy::Committed:
+        return "Committed";
+    case SlotHoldPolicy::Terminal:
+        return "Terminal";
+    }
+    return "Unknown";
+}
+
+enum class PreparationOwnership : std::uint8_t {
+    Unspecified,
+    SessionOwned,
+};
+
+enum class PreparationPhase : std::uint8_t {
+    Unspecified,
+    InitializeTime,
+};
+
+enum class PreparedModelCachePolicy : std::uint8_t {
+    Unspecified,
+    NoSharedCache,
+};
+
+[[nodiscard]] constexpr std::string_view to_string(
+    PreparationOwnership value) noexcept {
+    return value == PreparationOwnership::SessionOwned ? "SessionOwned"
+                                                       : "Unspecified";
+}
+
+[[nodiscard]] constexpr std::string_view to_string(
+    PreparationPhase value) noexcept {
+    return value == PreparationPhase::InitializeTime ? "InitializeTime"
+                                                     : "Unspecified";
+}
+
+[[nodiscard]] constexpr std::string_view to_string(
+    PreparedModelCachePolicy value) noexcept {
+    return value == PreparedModelCachePolicy::NoSharedCache
+               ? "NoSharedCache"
+               : "Unspecified";
+}
+
+enum class TransactionBranch : std::uint8_t {
+    Continue,
+    Terminal,
+    Failure,
+};
+
+[[nodiscard]] constexpr std::string_view to_string(
+    TransactionBranch branch) noexcept {
+    switch (branch) {
+    case TransactionBranch::Continue:
+        return "Continue";
+    case TransactionBranch::Terminal:
+        return "Terminal";
+    case TransactionBranch::Failure:
+        return "Failure";
+    }
+    return "Unknown";
+}
+
 } // namespace gnc::contracts

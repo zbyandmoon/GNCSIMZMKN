@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <iostream>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -666,6 +667,9 @@ void append_configuration_provenance(
             "REF graph lacks two state owners or evaluator");
     source.transactions.push_back(std::move(transaction));
     source.evaluator_histories.push_back(std::move(evaluator));
+    source.package_build_locks.push_back(
+        {package.package_id, package.package_version,
+         "build.ref-yyz.release", ref("packages/yyz/build")});
     return source;
 }
 
@@ -760,6 +764,9 @@ void relocate(CompleteStaticCompositionSource& source) {
     for (auto& evaluator : source.evaluator_histories) {
         relocate(evaluator.source);
     }
+    for (auto& package : source.package_build_locks) {
+        relocate(package.source);
+    }
 }
 
 int poison_call_count = 0;
@@ -826,27 +833,26 @@ poison_derivative(
                                                                 input);
 }
 
-[[nodiscard]] gnc::packages::yyz::EnvironmentInput
-poison_environment_result_binder(
-    const gnc::packages::yyz::EnvironmentInput& formal_output) {
-    ++poison_call_count;
-    return gnc::packages::yyz::UniformEnvironmentResultBinder::bind(
-        formal_output);
-}
-
 [[nodiscard]] gnc::foundation::NumericalOutcome<
     gnc::packages::yyz::AltitudePitchGuidanceRuntimeCell>
 poison_guidance_runtime_cell_factory(
     const gnc::packages::yyz::AltitudePitchGuidanceDefinition& definition,
+    const gnc::model_sdk::RuntimeCellFactoryContext& context,
     const gnc::packages::yyz::AltitudePitchGuidanceRuntimeCellBindings&
         bindings) {
     ++poison_call_count;
     return gnc::packages::yyz::create_altitude_pitch_guidance_runtime_cell(
-        definition, bindings);
+        definition, context, bindings);
+}
+
+[[nodiscard]] const gnc::packages::yyz::RigidStateCodec&
+poison_rigid_state_codec() noexcept {
+    ++poison_call_count;
+    return gnc::packages::yyz::rigid_state_codec();
 }
 
 void verify_complete_ref_graph() {
-    // Factory/binder conformance is link-only: this test never invokes them.
+    // Factory/codec conformance is link-only: this test never invokes them.
     const auto package =
         gnc::packages::yyz::describe_yyz_rigid_step_package();
     const auto implementation =
@@ -861,7 +867,7 @@ void verify_complete_ref_graph() {
     require(compilation.succeeded(),
             "REF-YYZ planning/proof compilation failed");
     const auto& plan = compilation.value->plan;
-    require(plan.revision == 4U && plan.occurrences.size() == 10U,
+    require(plan.revision == 5U && plan.occurrences.size() == 10U,
             "complete plan occurrence/revision count changed");
     require(plan.preparation_inputs.size() == 3U &&
                 plan.queries.size() == 2U && plan.closures.size() == 1U,
@@ -875,7 +881,7 @@ void verify_complete_ref_graph() {
                 plan.integration_scopes.size() == 1U &&
                 plan.transactions.size() == 1U &&
                 plan.evaluator_histories.size() == 1U &&
-                plan.entry_requirements.size() == 35U,
+                plan.entry_requirements.size() == 44U,
             "authorization/scope/link requirement count changed");
     require(!compilation.value->proofs.records.empty() &&
                 compilation.value->proofs.coverage.size() ==
@@ -891,17 +897,22 @@ void verify_complete_ref_graph() {
     require(linked.succeeded(),
             "REF-YYZ science-entry link review failed");
     const auto& image = *linked.value;
-    require(image.entries().size() == 35U &&
+    require(image.entries().size() == 44U &&
                 image.occurrences().size() == 10U &&
                 image.preparations().size() == 3U &&
                 image.queries().size() == 2U &&
                 image.closures().size() == 1U &&
                 image.runtime_components().size() == 7U &&
+                image.resource_plans().size() == 7U &&
                 image.state_blocks().size() == 2U &&
                 image.integration_scopes().size() == 1U,
             "linked image exact table counts changed");
     require(!image.fingerprint().empty(),
             "linked image has no deterministic fingerprint");
+    require(image.packages().size() == 1U &&
+                image.packages().front().build_fingerprint ==
+                    "build.ref-yyz.release",
+            "linked image lost the exact package build lock");
     for (const auto& image_callsite : image.callsites()) {
         const auto descriptor_callsite = std::find_if(
             plan.runtime_callsites.begin(), plan.runtime_callsites.end(),
@@ -929,19 +940,13 @@ void verify_complete_ref_graph() {
                 return invocation.handle == handle;
             });
     };
-    // Each invocation has one provider-owned formal result slot; its request
-    // contract remains a separate authorization fact.
+    // Query responses are caller-local. The one FrozenInterval Closure owns
+    // the coordinator-held interval slot and writer.
     for (const auto& invocation : image.invocations()) {
         const auto binding = std::find_if(
             image.bindings().begin(), image.bindings().end(),
             [&](const auto& candidate) {
                 return candidate.handle == invocation.result_binding_handle;
-            });
-        const auto slot = std::find_if(
-            image.slots().begin(), image.slots().end(),
-            [&](const auto& candidate) {
-                return candidate.handle ==
-                       invocation.provider_result_slot_handle;
             });
         const auto port = std::find_if(
             image.ports().begin(), image.ports().end(),
@@ -954,31 +959,52 @@ void verify_complete_ref_graph() {
                 return candidate.handle == invocation.caller_callsite_handle;
             });
         require(binding != image.bindings().end() &&
-                    slot != image.slots().end() &&
                     port != image.ports().end() &&
                     callsite != image.callsites().end() &&
-                    binding->provider_slot_handle == slot->handle &&
                     binding->consumer_port_handle == port->handle &&
-                    slot->owner_occurrence_handle ==
-                        invocation.provider_occurrence_handle &&
-                     port->occurrence_handle == callsite->occurrence_handle &&
-                    has_entry_handle(
-                         invocation.result_binder_entry_handle) &&
-                     invocation.requirement_cardinality == "exactly-one" &&
-                     invocation.requirement_ordinal <
-                         callsite->authorized_invocation_handles.size() &&
-                     callsite->authorized_invocation_handles.at(
-                         invocation.requirement_ordinal) ==
-                         invocation.handle &&
+                    port->occurrence_handle == callsite->occurrence_handle &&
+                    invocation.requirement_cardinality == "exactly-one" &&
+                    invocation.requirement_ordinal <
+                        callsite->authorized_invocation_handles.size() &&
+                    callsite->authorized_invocation_handles.at(
+                        invocation.requirement_ordinal) ==
+                        invocation.handle &&
                     std::find(callsite->authorized_invocation_handles.begin(),
                               callsite->authorized_invocation_handles.end(),
                               invocation.handle) !=
-                        callsite->authorized_invocation_handles.end() &&
-                    std::find(callsite->input_slot_handles.begin(),
-                              callsite->input_slot_handles.end(),
-                              slot->handle) ==
-                        callsite->input_slot_handles.end(),
-                "invocation authorization/result flow is missing, ambiguous, or duplicated as an ordinary callsite input");
+                        callsite->authorized_invocation_handles.end(),
+                "invocation authorization/result binding is missing or ambiguous");
+        if (invocation.result_route ==
+            gnc::contracts::InvocationResultRoute::CallerLocal) {
+            require(binding->provider_slot_handle == 0U &&
+                        invocation.result_storage_slot_handle == 0U &&
+                        invocation.result_writer_token_handle == 0U,
+                    "caller-local Query response acquired CycleFrame storage");
+        } else {
+            const auto slot = std::find_if(
+                image.slots().begin(), image.slots().end(),
+                [&](const auto& candidate) {
+                    return candidate.handle ==
+                           invocation.result_storage_slot_handle;
+                });
+            const auto writer = std::find_if(
+                image.writer_tokens().begin(), image.writer_tokens().end(),
+                [&](const auto& candidate) {
+                    return candidate.handle ==
+                           invocation.result_writer_token_handle;
+                });
+            require(invocation.result_route ==
+                            gnc::contracts::InvocationResultRoute::HeldInterval &&
+                        slot != image.slots().end() &&
+                        writer != image.writer_tokens().end() &&
+                        binding->provider_slot_handle == slot->handle &&
+                        slot->writer_token_handle == writer->handle &&
+                        slot->storage_class ==
+                            gnc::contracts::SlotStorageClass::IntegrationHeld &&
+                        slot->hold_policy ==
+                            gnc::contracts::SlotHoldPolicy::HoldInterval,
+                    "FrozenInterval Closure lacks its unique held slot/writer");
+        }
     }
     const auto invocation_for_requirement = [&](std::string_view id) {
         return std::find_if(
@@ -1008,7 +1034,7 @@ void verify_complete_ref_graph() {
                     closure_invocation->handle &&
                 image.integration_scopes().front()
                         .held_form_slot_handle ==
-                    closure_invocation->provider_result_slot_handle,
+                    closure_invocation->result_storage_slot_handle,
             "FrozenInterval closure response is not the single authoritative held form slot");
     for (const auto& query : image.queries()) {
         const auto preparation = std::find_if(
@@ -1028,10 +1054,9 @@ void verify_complete_ref_graph() {
                     preparation->occurrence_handle ==
                         query.occurrence_handle &&
                     has_entry_handle(preparation->prepare_entry_handle) &&
-                     has_entry_handle(query.query_entry_handle) &&
-                     has_entry_handle(query.result_binder_entry_handle) &&
-                     query.result_binder_entry_handle ==
-                         invocation->result_binder_entry_handle &&
+                    has_entry_handle(query.query_entry_handle) &&
+                    invocation->result_route ==
+                        gnc::contracts::InvocationResultRoute::CallerLocal &&
                     query.workspace_requirement == "None" &&
                     query.authorized_invocation_handles.size() == 1U &&
                     has_invocation_handle(
@@ -1063,10 +1088,9 @@ void verify_complete_ref_graph() {
                     preparation->occurrence_handle ==
                         closure.occurrence_handle &&
                     has_entry_handle(preparation->prepare_entry_handle) &&
-                     has_entry_handle(closure.closure_entry_handle) &&
-                     has_entry_handle(closure.result_binder_entry_handle) &&
-                     closure.result_binder_entry_handle ==
-                         invocation->result_binder_entry_handle &&
+                    has_entry_handle(closure.closure_entry_handle) &&
+                    invocation->result_route ==
+                        gnc::contracts::InvocationResultRoute::HeldInterval &&
                     closure.strategy == "FrozenInterval" &&
                     closure.workspace_requirement == "None" &&
                     closure.authorized_invocation_handles.size() == 1U &&
@@ -1136,7 +1160,7 @@ void verify_complete_ref_graph() {
                 *exact_boundary ==
                     &gnc::packages::yyz::
                         ControlledRigidBoundaryEvaluationKernel::
-                            evaluate_with_invocation_results,
+                            prepare_for_integration,
             "image does not retain the final typed boundary callable");
     const auto evaluator_entry = std::find_if(
         image.entries().begin(), image.entries().end(),
@@ -1245,6 +1269,21 @@ void verify_complete_ref_graph() {
     require(rigid != nullptr && rigid->state_block_handles.size() == 1U &&
                 mass != nullptr && mass->state_block_handles.size() == 1U,
             "state-owning runtime-cell factories lost their exact state block handle");
+    std::set<std::uint32_t> factory_handles;
+    std::set<std::uint32_t> runtime_instance_ids;
+    std::set<std::uint32_t> resource_handles;
+    for (const auto& component : image.runtime_components()) {
+        factory_handles.insert(
+            component.runtime_cell_factory_entry_handle);
+        runtime_instance_ids.insert(component.runtime_instance_id);
+        resource_handles.insert(component.resource_plan_handle);
+    }
+    require(factory_handles.size() == 7U &&
+                runtime_instance_ids.size() == 7U &&
+                runtime_instance_ids.count(0U) == 0U &&
+                resource_handles.size() == 7U &&
+                resource_handles.count(0U) == 0U,
+            "runtime factory/instance/resource handles are not unique and nonzero");
     require(image.clock().clock_id == kClock &&
                 image.clock().base_step_seconds == 0.1 &&
                 image.clock().initial_tick == 0 &&
@@ -1307,9 +1346,127 @@ void verify_complete_ref_graph() {
                 image.slots().begin(), image.slots().end(),
                 [](const auto& slot) {
                     return slot.size_bytes > 0U &&
-                           slot.alignment_bytes > 0U;
+                           slot.alignment_bytes > 0U &&
+                           slot.codec_entry_handle != 0U &&
+                           slot.writer_token_handle != 0U;
                 }),
-            "image contains a zero runtime/state slot layout fact");
+            "image contains a zero runtime/state slot layout, codec, or writer fact");
+    std::vector<const gnc::contracts::PlanImageSlot*> ordered_slots;
+    ordered_slots.reserve(image.slots().size());
+    for (const auto& slot : image.slots()) {
+        ordered_slots.push_back(&slot);
+    }
+    std::sort(ordered_slots.begin(), ordered_slots.end(),
+              [](const auto* lhs, const auto* rhs) {
+                  return lhs->offset_bytes < rhs->offset_bytes;
+              });
+    std::uint64_t previous_end = 0U;
+    for (const auto* slot : ordered_slots) {
+        require(slot->offset_bytes % slot->alignment_bytes == 0U &&
+                    slot->offset_bytes >= previous_end &&
+                    std::all_of(slot->reader_handles.begin(),
+                                slot->reader_handles.end(),
+                                [](std::uint32_t handle) {
+                                    return handle != 0U;
+                                }),
+                "slot offsets overlap, violate alignment, or contain a zero reader handle");
+        previous_end = slot->offset_bytes + slot->size_bytes;
+    }
+    const auto& integration = image.integration_scopes().front();
+    require(integration.integrator_id ==
+                    gnc::foundation::kClassicalRk4FixedStepIdentity.id &&
+                integration.integrator_version ==
+                    gnc::foundation::kClassicalRk4FixedStepIdentity.version &&
+                integration.clock_handle == image.clock().handle &&
+                integration.step_ticks == 1U &&
+                integration.fixed_step_seconds == 0.1 &&
+                integration.absolute_tolerance == 2.0e-12 &&
+                integration.relative_tolerance == 2.0e-12 &&
+                integration.check_finiteness == "every-stage" &&
+                integration.zero_threshold == 1.0e-14 &&
+                integration.condition_limit == 1.0e12 &&
+                integration.workspace_layout_id == "gnc.workspace.none@1" &&
+                integration.candidate_codec_entry_handle != 0U &&
+                !integration.candidate_project_operation_id.empty() &&
+                !integration.candidate_finite_validation_operation_id.empty() &&
+                !integration.candidate_invariant_validation_operation_id.empty(),
+            "IntegrationScope lost fixed RK4, clock, numerical policy, workspace, or candidate validation facts");
+    require(image.transactions().size() == 1U &&
+                image.transactions().front().candidates.size() == 2U &&
+                image.transactions().front().held_slot_handles.size() == 1U &&
+                image.transactions().front().branches.size() == 3U,
+            "atomic rigid+mass transaction table shape changed");
+    const auto& transaction = image.transactions().front();
+    const auto& continue_branch = transaction.branches.at(0U);
+    const auto& terminal_branch = transaction.branches.at(1U);
+    const auto& failure_branch = transaction.branches.at(2U);
+    require(continue_branch.branch ==
+                    gnc::contracts::TransactionBranch::Continue &&
+                continue_branch.committed_candidate_slot_handles.size() ==
+                    2U &&
+                continue_branch.discarded_candidate_slot_handles.empty() &&
+                continue_branch.retained_held_slot_handles ==
+                    transaction.held_slot_handles &&
+                continue_branch.discarded_held_slot_handles.empty() &&
+                continue_branch.model_commit &&
+                continue_branch.observation_seal &&
+                !continue_branch.result_seal_after_observation &&
+                continue_branch.epoch_delta == 1 &&
+                continue_branch.tick_delta == 1 &&
+                terminal_branch.branch ==
+                    gnc::contracts::TransactionBranch::Terminal &&
+                terminal_branch.committed_candidate_slot_handles.empty() &&
+                terminal_branch.discarded_candidate_slot_handles.size() ==
+                    2U &&
+                terminal_branch.discarded_held_slot_handles ==
+                    transaction.held_slot_handles &&
+                !terminal_branch.model_commit &&
+                terminal_branch.observation_seal &&
+                terminal_branch.result_seal_after_observation &&
+                terminal_branch.epoch_delta == 0 &&
+                terminal_branch.tick_delta == 0 &&
+                failure_branch.branch ==
+                    gnc::contracts::TransactionBranch::Failure &&
+                failure_branch.committed_candidate_slot_handles.empty() &&
+                failure_branch.discarded_candidate_slot_handles.size() ==
+                    2U &&
+                failure_branch.discarded_held_slot_handles ==
+                    transaction.held_slot_handles &&
+                !failure_branch.model_commit &&
+                !failure_branch.observation_seal &&
+                !failure_branch.result_seal_after_observation &&
+                failure_branch.epoch_delta == 0 &&
+                failure_branch.tick_delta == 0,
+            "continue/terminal/failure transaction semantics changed");
+    require(image.lifecycle().preparation_handles.size() == 3U &&
+                image.lifecycle().runtime_component_handles.size() == 7U &&
+                image.lifecycle().initial_binding_handles.size() == 2U &&
+                image.lifecycle().bound_provider_dispose_handles.size() ==
+                    3U &&
+                image.lifecycle().runtime_component_dispose_handles ==
+                    std::vector<std::uint32_t>(
+                        image.lifecycle().runtime_component_handles.rbegin(),
+                        image.lifecycle().runtime_component_handles.rend()) &&
+                image.lifecycle().preparation_dispose_handles ==
+                    std::vector<std::uint32_t>(
+                        image.lifecycle().preparation_handles.rbegin(),
+                        image.lifecycle().preparation_handles.rend()) &&
+                std::all_of(image.preparations().begin(),
+                            image.preparations().end(),
+                            [](const auto& preparation) {
+                                return preparation.ownership ==
+                                           gnc::contracts::
+                                               PreparationOwnership::
+                                                   SessionOwned &&
+                                       preparation.phase ==
+                                           gnc::contracts::PreparationPhase::
+                                               InitializeTime &&
+                                       preparation.cache_policy ==
+                                           gnc::contracts::
+                                               PreparedModelCachePolicy::
+                                                   NoSharedCache;
+                            }),
+            "Session-owned initialize-time no-cache lifecycle order changed");
 }
 
 void verify_determinism_and_link_semantics() {
@@ -1433,48 +1590,28 @@ void verify_determinism_and_link_semantics() {
 
     auto alternate_static_package = package;
     auto alternate_static_implementation = implementation;
-    const auto environment_model = std::find_if(
-        alternate_static_package.models.begin(),
-        alternate_static_package.models.end(), [](const auto& model) {
-            return model.definition.model_id ==
-                   gnc::packages::yyz::kUniformEnvironmentModelIdentity;
-        });
     const auto guidance_model = std::find_if(
         alternate_static_package.models.begin(),
         alternate_static_package.models.end(), [](const auto& model) {
             return model.definition.model_id ==
                    gnc::packages::yyz::kAltitudePitchGuidanceModelIdentity;
         });
-    require(environment_model != alternate_static_package.models.end() &&
-                environment_model->pure_query.has_value() &&
-                guidance_model != alternate_static_package.models.end() &&
+    require(guidance_model != alternate_static_package.models.end() &&
                 guidance_model->runtime_component.has_value(),
-            "alternate binder/factory fixture lacks required models");
-    const auto original_binder_id =
-        environment_model->pure_query->result_binder_id;
+            "alternate factory fixture lacks its runtime model");
     const auto original_factory_id =
         guidance_model->runtime_component->runtime_cell_factory_id;
-    environment_model->pure_query->result_binder_id += ".alternate";
     guidance_model->runtime_component->runtime_cell_factory_id +=
         ".alternate";
-    const auto binder_entry = std::find_if(
-        alternate_static_implementation.entries.begin(),
-        alternate_static_implementation.entries.end(),
-        [&](const auto& entry) {
-            return entry.entry_id == original_binder_id;
-        });
     const auto factory_entry = std::find_if(
         alternate_static_implementation.entries.begin(),
         alternate_static_implementation.entries.end(),
         [&](const auto& entry) {
             return entry.entry_id == original_factory_id;
         });
-    require(binder_entry != alternate_static_implementation.entries.end() &&
-                factory_entry !=
+    require(factory_entry !=
                     alternate_static_implementation.entries.end(),
-            "alternate binder/factory fixture lacks implementation entries");
-    binder_entry->entry_id =
-        environment_model->pure_query->result_binder_id;
+            "alternate factory fixture lacks its implementation entry");
     factory_entry->entry_id =
         guidance_model->runtime_component->runtime_cell_factory_id;
     const auto alternate_static =
@@ -1485,7 +1622,7 @@ void verify_determinism_and_link_semantics() {
                     baseline.value->plan.source_semantic_hash &&
                 alternate_static.value->plan.descriptor_semantic_hash !=
                     baseline.value->plan.descriptor_semantic_hash,
-            "binder/factory implementation identity leaked into source semantics or was absent from the descriptor");
+            "factory implementation identity leaked into source semantics or was absent from the descriptor");
     const auto alternate_static_image =
         gnc::compiler::link_complete_execution_plan(
             alternate_static.value->plan, alternate_static.value->proofs,
@@ -1493,7 +1630,7 @@ void verify_determinism_and_link_semantics() {
     require(alternate_static_image.succeeded() &&
                 alternate_static_image.value->fingerprint() !=
                     baseline_image.value->fingerprint(),
-            "alternate binder/factory entries did not relink a distinct image");
+            "alternate factory entry did not relink a distinct image");
 
     auto poisoned = implementation;
     const auto poisoned_entry = std::find_if(
@@ -1531,13 +1668,6 @@ void verify_determinism_and_link_semantics() {
             "same-signature typed callable substitution was not recoverable");
 
     auto poisoned_static_entries = implementation;
-    const auto poisoned_binder = std::find_if(
-        poisoned_static_entries.entries.begin(),
-        poisoned_static_entries.entries.end(), [](const auto& entry) {
-            return entry.entry_id ==
-                   gnc::packages::yyz::
-                       kUniformEnvironmentResultBinderIdentity.id;
-        });
     const auto poisoned_factory = std::find_if(
         poisoned_static_entries.entries.begin(),
         poisoned_static_entries.entries.end(), [](const auto& entry) {
@@ -1545,14 +1675,8 @@ void verify_determinism_and_link_semantics() {
                    gnc::packages::yyz::
                        kAltitudePitchGuidanceRuntimeCellFactoryIdentity.id;
         });
-    require(poisoned_binder != poisoned_static_entries.entries.end() &&
-                poisoned_factory != poisoned_static_entries.entries.end(),
-            "poison binder/factory fixture lacks exact entries");
-    poisoned_binder->typed_entry =
-        std::any{&poison_environment_result_binder};
-    poisoned_binder->link_anchor =
-        gnc::model_sdk::make_static_link_anchor<
-            &poison_environment_result_binder>();
+    require(poisoned_factory != poisoned_static_entries.entries.end(),
+            "poison factory fixture lacks its exact entry");
     poisoned_factory->typed_entry =
         std::any{&poison_guidance_runtime_cell_factory};
     poisoned_factory->link_anchor =
@@ -1566,14 +1690,7 @@ void verify_determinism_and_link_semantics() {
     require(poisoned_static_link.succeeded() && poison_call_count == 0 &&
                 poisoned_static_link.value->fingerprint() ==
                     baseline_image.value->fingerprint(),
-            "R2 linking invoked or address-fingerprinted a RuntimeCell factory/result binder");
-    const auto recovered_binder = std::find_if(
-        poisoned_static_link.value->entries().begin(),
-        poisoned_static_link.value->entries().end(), [](const auto& entry) {
-            return entry.entry_id ==
-                   gnc::packages::yyz::
-                       kUniformEnvironmentResultBinderIdentity.id;
-        });
+            "R2 linking invoked or address-fingerprinted a RuntimeCell factory");
     const auto recovered_factory = std::find_if(
         poisoned_static_link.value->entries().begin(),
         poisoned_static_link.value->entries().end(), [](const auto& entry) {
@@ -1581,17 +1698,35 @@ void verify_determinism_and_link_semantics() {
                    gnc::packages::yyz::
                        kAltitudePitchGuidanceRuntimeCellFactoryIdentity.id;
         });
-    require(recovered_binder !=
+    require(recovered_factory !=
                     poisoned_static_link.value->entries().end() &&
-                recovered_factory !=
-                    poisoned_static_link.value->entries().end() &&
-                std::any_cast<
-                    gnc::packages::yyz::UniformEnvironmentResultBinderCall>(
-                    &recovered_binder->typed_entry) != nullptr &&
                 std::any_cast<gnc::packages::yyz::
                                   AltitudePitchGuidanceRuntimeCellFactoryCall>(
                     &recovered_factory->typed_entry) != nullptr,
-            "poison-linked binder/factory exact typed entries were not recoverable");
+            "poison-linked factory exact typed entry was not recoverable");
+
+    auto poisoned_codec_entries = implementation;
+    const auto poisoned_codec = std::find_if(
+        poisoned_codec_entries.entries.begin(),
+        poisoned_codec_entries.entries.end(), [](const auto& entry) {
+            return entry.entry_id ==
+                   gnc::packages::yyz::kRigidStateCodecIdentity.id;
+        });
+    require(poisoned_codec != poisoned_codec_entries.entries.end(),
+            "poison codec fixture lacks its exact entry");
+    poisoned_codec->typed_entry = std::any{&poison_rigid_state_codec};
+    poisoned_codec->link_anchor =
+        gnc::model_sdk::make_static_link_anchor<
+            &poison_rigid_state_codec>();
+    poison_call_count = 0;
+    const auto poisoned_codec_link =
+        gnc::compiler::link_complete_execution_plan(
+            baseline.value->plan, baseline.value->proofs,
+            {poisoned_codec_entries});
+    require(poisoned_codec_link.succeeded() && poison_call_count == 0 &&
+                poisoned_codec_link.value->fingerprint() ==
+                    baseline_image.value->fingerprint(),
+            "R2 linking invoked or address-fingerprinted a state codec");
 }
 
 void verify_high_value_negatives() {
@@ -1659,31 +1794,6 @@ void verify_high_value_negatives() {
                     negative_zero_result.diagnostics,
                     CompleteDiagnosticCode::InvalidConfiguration),
             "semantic-bytes@3 accepted canonical negative zero");
-
-    auto missing_binder_package = package;
-    const auto missing_binder_model = std::find_if(
-        missing_binder_package.models.begin(),
-        missing_binder_package.models.end(), [](const auto& model) {
-            return model.definition.model_id ==
-                   gnc::packages::yyz::kUniformEnvironmentModelIdentity;
-        });
-    require(missing_binder_model != missing_binder_package.models.end() &&
-                missing_binder_model->pure_query.has_value(),
-            "missing-binder compatibility fixture lacks environment query");
-    missing_binder_model->pure_query->result_binder_id.clear();
-    missing_binder_model->pure_query->result_binder_version.clear();
-    missing_binder_model->pure_query->result_binder_call_shape_id.clear();
-    const auto legacy_catalog =
-        gnc::compiler::Catalog::build({missing_binder_package});
-    require(legacy_catalog.succeeded(),
-            "legacy narrow Catalog rejected a provider without a complete-plan result binder");
-    const auto complete_missing_binder =
-        gnc::compiler::compile_complete_execution_plan(
-            source, {missing_binder_package});
-    require(!complete_missing_binder.succeeded() &&
-                has_diagnostic(complete_missing_binder.diagnostics,
-                               CompleteDiagnosticCode::InvalidCatalog),
-            "complete planning accepted a selected provider without a result binder");
 
     auto no_output_package = package;
     const auto no_output_model = std::find_if(
@@ -1960,6 +2070,172 @@ void verify_high_value_negatives() {
             {implementation});
     require(baseline_link.succeeded(),
             "baseline image for link negatives failed");
+    const auto expect_plan_conformance_failure =
+        [&](gnc::compiler::CompleteExecutionPlanDescriptor candidate,
+            std::string_view message) {
+            candidate.descriptor_semantic_hash =
+                gnc::compiler::complete_plan_detail::descriptor_hash(
+                    candidate);
+            const auto candidate_proofs =
+                gnc::compiler::complete_plan_detail::derive_proofs(
+                    candidate);
+            const auto candidate_link =
+                gnc::compiler::link_complete_execution_plan(
+                    candidate, candidate_proofs, {implementation});
+            require(!candidate_link.succeeded() &&
+                        (has_diagnostic(
+                             candidate_link.diagnostics,
+                             CompleteDiagnosticCode::
+                                 SourceImageConformanceFailure) ||
+                         has_diagnostic(
+                             candidate_link.diagnostics,
+                             CompleteDiagnosticCode::
+                                 ImplementationMismatch)),
+                    message);
+        };
+
+    auto query_storage_route = positive.value->plan;
+    const auto caller_local_invocation = std::find_if(
+        query_storage_route.invocation_bindings.begin(),
+        query_storage_route.invocation_bindings.end(),
+        [](const auto& invocation) {
+            return invocation.result_route ==
+                   gnc::contracts::InvocationResultRoute::CallerLocal;
+        });
+    require(caller_local_invocation !=
+                query_storage_route.invocation_bindings.end(),
+            "caller-local route mutation fixture is absent");
+    caller_local_invocation->result_route =
+        gnc::contracts::InvocationResultRoute::HeldInterval;
+    expect_plan_conformance_failure(
+        std::move(query_storage_route),
+        "caller-local Query accepted a fabricated held-storage route");
+
+    auto closure_local_route = positive.value->plan;
+    const auto held_invocation = std::find_if(
+        closure_local_route.invocation_bindings.begin(),
+        closure_local_route.invocation_bindings.end(),
+        [](const auto& invocation) {
+            return invocation.result_route ==
+                   gnc::contracts::InvocationResultRoute::HeldInterval;
+        });
+    require(held_invocation !=
+                closure_local_route.invocation_bindings.end(),
+            "held Closure route mutation fixture is absent");
+    held_invocation->result_route =
+        gnc::contracts::InvocationResultRoute::CallerLocal;
+    expect_plan_conformance_failure(
+        std::move(closure_local_route),
+        "FrozenInterval Closure accepted a caller-local result route");
+
+    auto missing_state_codec_plan = positive.value->plan;
+    require(!missing_state_codec_plan.state_blocks.empty(),
+            "state-codec plan mutation fixture is absent");
+    missing_state_codec_plan.state_blocks.front()
+        .codec_entry_requirement_id.clear();
+    expect_plan_conformance_failure(
+        std::move(missing_state_codec_plan),
+        "missing state codec plan reference did not fail before image lookup");
+
+    auto swapped_slot_codec_plan = positive.value->plan;
+    const auto first_value_slot = std::find_if(
+        swapped_slot_codec_plan.slots.begin(),
+        swapped_slot_codec_plan.slots.end(), [](const auto& slot) {
+            return slot.kind == gnc::compiler::CompleteSlotKind::PortValue;
+        });
+    const auto second_value_slot =
+        first_value_slot == swapped_slot_codec_plan.slots.end()
+            ? swapped_slot_codec_plan.slots.end()
+            : std::find_if(
+                  first_value_slot + 1,
+                  swapped_slot_codec_plan.slots.end(),
+                  [&](const auto& slot) {
+                      return slot.kind ==
+                                 gnc::compiler::CompleteSlotKind::PortValue &&
+                             slot.contract_id !=
+                                 first_value_slot->contract_id &&
+                             slot.codec_entry_requirement_id !=
+                                 first_value_slot
+                                     ->codec_entry_requirement_id;
+                  });
+    require(first_value_slot != swapped_slot_codec_plan.slots.end() &&
+                second_value_slot != swapped_slot_codec_plan.slots.end(),
+            "slot-codec plan mutation fixture lacks distinct values");
+    first_value_slot->codec_entry_requirement_id =
+        second_value_slot->codec_entry_requirement_id;
+    expect_plan_conformance_failure(
+        std::move(swapped_slot_codec_plan),
+        "cross-contract slot codec plan reference passed exact conformance");
+
+    auto missing_resource_plan = positive.value->plan;
+    require(!missing_resource_plan.runtime_components.empty(),
+            "resource-plan mutation fixture is absent");
+    missing_resource_plan.runtime_components.front().resource_plan_id.clear();
+    expect_plan_conformance_failure(
+        std::move(missing_resource_plan),
+        "missing RuntimeComponent resource plan did not fail before image lookup");
+
+    auto coordinated_candidate_swap = positive.value->plan;
+    require(coordinated_candidate_swap.transactions.size() == 1U &&
+                coordinated_candidate_swap.transactions.front()
+                        .candidates.size() == 2U,
+            "transaction candidate swap fixture is absent");
+    auto& swapped_candidates =
+        coordinated_candidate_swap.transactions.front().candidates;
+    std::swap(swapped_candidates.at(0U).candidate_state_slot_id,
+              swapped_candidates.at(1U).candidate_state_slot_id);
+    std::swap(swapped_candidates.at(0U).writer_token_id,
+              swapped_candidates.at(1U).writer_token_id);
+    std::swap(swapped_candidates.at(0U).producer,
+              swapped_candidates.at(1U).producer);
+    expect_plan_conformance_failure(
+        std::move(coordinated_candidate_swap),
+        "coordinated rigid/mass candidate-writer-producer swap passed transaction conformance");
+
+    auto missing_transaction_branch = positive.value->plan;
+    require(!missing_transaction_branch.transactions.empty(),
+            "transaction branch mutation fixture is absent");
+    missing_transaction_branch.transactions.front().branches.pop_back();
+    expect_plan_conformance_failure(
+        std::move(missing_transaction_branch),
+        "transaction with no failure branch passed exact conformance");
+
+    auto invalid_transaction_seal = positive.value->plan;
+    require(!invalid_transaction_seal.transactions.empty() &&
+                !invalid_transaction_seal.transactions.front()
+                     .branches.empty(),
+            "transaction seal mutation fixture is absent");
+    invalid_transaction_seal.transactions.front().branches.front()
+        .result_seal_after_observation = true;
+    invalid_transaction_seal.transactions.front().branches.front()
+        .tick_delta = 0;
+    expect_plan_conformance_failure(
+        std::move(invalid_transaction_seal),
+        "continue branch accepted a result seal or non-advancing boundary relation");
+
+    auto invalid_preparation_lifecycle = positive.value->plan;
+    require(!invalid_preparation_lifecycle.preparation_inputs.empty(),
+            "preparation lifecycle mutation fixture is absent");
+    invalid_preparation_lifecycle.preparation_inputs.front().cache_policy =
+        gnc::contracts::PreparedModelCachePolicy::Unspecified;
+    expect_plan_conformance_failure(
+        std::move(invalid_preparation_lifecycle),
+        "selected provider accepted a non-Session-owned/no-cache lifecycle");
+
+    auto coordinated_lifecycle_order = positive.value->plan;
+    require(coordinated_lifecycle_order.preparation_inputs.size() >= 2U &&
+                coordinated_lifecycle_order.lifecycle
+                        .preparation_input_ids.size() >= 2U,
+            "lifecycle order mutation fixture lacks two preparations");
+    std::swap(coordinated_lifecycle_order.preparation_inputs.at(0U).order,
+              coordinated_lifecycle_order.preparation_inputs.at(1U).order);
+    std::swap(coordinated_lifecycle_order.lifecycle
+                  .preparation_input_ids.at(0U),
+              coordinated_lifecycle_order.lifecycle
+                  .preparation_input_ids.at(1U));
+    expect_plan_conformance_failure(
+        std::move(coordinated_lifecycle_order),
+        "coordinated preparation order/list swap bypassed canonical lifecycle conformance");
 
     auto synchronized_history_package = package;
     const auto synchronized_evaluator = std::find_if(
@@ -2009,11 +2285,17 @@ void verify_high_value_negatives() {
             "proof premise mutation did not fail exact linker validation");
 
     auto invalid_result_plan = positive.value->plan;
-    require(!invalid_result_plan.invocation_bindings.empty() &&
+    const auto invalid_result_invocation = std::find_if(
+        invalid_result_plan.invocation_bindings.begin(),
+        invalid_result_plan.invocation_bindings.end(), [](const auto& value) {
+            return value.result_route ==
+                   gnc::contracts::InvocationResultRoute::HeldInterval;
+        });
+    require(invalid_result_invocation !=
+                    invalid_result_plan.invocation_bindings.end() &&
                 !invalid_result_plan.state_blocks.empty(),
             "result-flow link mutation fixture is incomplete");
-    invalid_result_plan.invocation_bindings.front()
-        .provider_result_slot_id =
+    invalid_result_invocation->result_storage_slot_id =
         invalid_result_plan.state_blocks.front().committed_slot_id;
     invalid_result_plan.descriptor_semantic_hash =
         gnc::compiler::complete_plan_detail::descriptor_hash(
@@ -2147,8 +2429,6 @@ void verify_high_value_negatives() {
             "provider-plan mutation fixture lacks two query invocations");
     mismatched_environment->provider_plan_id =
         mismatched_aerodynamic->provider_plan_id;
-    mismatched_environment->result_binder_entry_requirement_id =
-        mismatched_aerodynamic->result_binder_entry_requirement_id;
     mismatched_provider_plan.descriptor_semantic_hash =
         gnc::compiler::complete_plan_detail::descriptor_hash(
             mismatched_provider_plan);
@@ -2163,7 +2443,7 @@ void verify_high_value_negatives() {
                 has_diagnostic(
                     mismatched_provider_link.diagnostics,
                     CompleteDiagnosticCode::SourceImageConformanceFailure),
-            "cross-occurrence provider plan/binder pair passed exact invocation conformance");
+            "cross-occurrence provider plan passed exact invocation conformance");
 
     auto mismatched_preparation_plan = positive.value->plan;
     auto mismatched_preparation_environment =
@@ -2314,40 +2594,6 @@ void verify_high_value_negatives() {
                     CompleteDiagnosticCode::SourceImageConformanceFailure),
             "cross-component RuntimeCell factory swap passed exact link conformance");
 
-    auto swapped_binder_plan = positive.value->plan;
-    require(swapped_binder_plan.queries.size() >= 2U,
-            "binder-swap mutation fixture lacks two queries");
-    std::swap(swapped_binder_plan.queries.at(0)
-                  .result_binder_entry_requirement_id,
-              swapped_binder_plan.queries.at(1)
-                  .result_binder_entry_requirement_id);
-    for (auto& invocation : swapped_binder_plan.invocation_bindings) {
-        const auto provider = std::find_if(
-            swapped_binder_plan.queries.begin(),
-            swapped_binder_plan.queries.end(), [&](const auto& query) {
-                return query.query_plan_id == invocation.provider_plan_id;
-            });
-        if (provider != swapped_binder_plan.queries.end()) {
-            invocation.result_binder_entry_requirement_id =
-                provider->result_binder_entry_requirement_id;
-        }
-    }
-    swapped_binder_plan.descriptor_semantic_hash =
-        gnc::compiler::complete_plan_detail::descriptor_hash(
-            swapped_binder_plan);
-    const auto swapped_binder_proofs =
-        gnc::compiler::complete_plan_detail::derive_proofs(
-            swapped_binder_plan);
-    const auto swapped_binder_link =
-        gnc::compiler::link_complete_execution_plan(
-            swapped_binder_plan, swapped_binder_proofs,
-            {implementation});
-    require(!swapped_binder_link.succeeded() &&
-                has_diagnostic(
-                    swapped_binder_link.diagnostics,
-                    CompleteDiagnosticCode::SourceImageConformanceFailure),
-            "cross-provider result binder swap passed exact link conformance");
-
     auto missing_factory_plan = positive.value->plan;
     require(!missing_factory_plan.runtime_components.empty(),
             "missing factory-reference mutation fixture is absent");
@@ -2442,25 +2688,128 @@ void verify_high_value_negatives() {
                     CompleteDiagnosticCode::MissingImplementationEntry),
             "missing exact RuntimeCell factory did not fail link");
 
-    auto wrong_result_binder = implementation;
-    const auto result_binder = std::find_if(
-        wrong_result_binder.entries.begin(),
-        wrong_result_binder.entries.end(), [](const auto& entry) {
-            return entry.kind == gnc::model_sdk::StaticEntryKind::
-                                     InvocationResultBinder;
+    auto duplicate_runtime_factory = implementation;
+    const auto duplicate_factory = std::find_if(
+        duplicate_runtime_factory.entries.begin(),
+        duplicate_runtime_factory.entries.end(), [](const auto& entry) {
+            return entry.kind ==
+                   gnc::model_sdk::StaticEntryKind::RuntimeCellFactory;
         });
-    require(result_binder != wrong_result_binder.entries.end(),
-            "result-binder negative fixture lacks a binder entry");
-    result_binder->call_shape_id += ".wrong";
-    const auto result_binder_failure =
+    require(duplicate_factory != duplicate_runtime_factory.entries.end(),
+            "duplicate RuntimeCell factory fixture is absent");
+    duplicate_runtime_factory.entries.push_back(*duplicate_factory);
+    const auto duplicate_factory_failure =
         gnc::compiler::link_complete_execution_plan(
             positive.value->plan, positive.value->proofs,
-            {wrong_result_binder});
-    require(!result_binder_failure.succeeded() &&
+            {duplicate_runtime_factory});
+    require(!duplicate_factory_failure.succeeded() &&
                 has_diagnostic(
-                    result_binder_failure.diagnostics,
+                    duplicate_factory_failure.diagnostics,
+                    CompleteDiagnosticCode::MultipleImplementationEntries),
+            "duplicate exact RuntimeCell factory did not fail link");
+
+    auto wrong_runtime_factory_kind = implementation;
+    const auto wrong_factory_kind = std::find_if(
+        wrong_runtime_factory_kind.entries.begin(),
+        wrong_runtime_factory_kind.entries.end(), [](const auto& entry) {
+            return entry.kind ==
+                   gnc::model_sdk::StaticEntryKind::RuntimeCellFactory;
+        });
+    require(wrong_factory_kind !=
+                wrong_runtime_factory_kind.entries.end(),
+            "wrong RuntimeCell factory kind fixture is absent");
+    wrong_factory_kind->kind =
+        gnc::model_sdk::StaticEntryKind::DefinitionBuilder;
+    const auto wrong_factory_kind_failure =
+        gnc::compiler::link_complete_execution_plan(
+            positive.value->plan, positive.value->proofs,
+            {wrong_runtime_factory_kind});
+    require(!wrong_factory_kind_failure.succeeded() &&
+                has_diagnostic(
+                    wrong_factory_kind_failure.diagnostics,
                     CompleteDiagnosticCode::ImplementationMismatch),
-            "wrong provider result-binder call shape did not fail link");
+            "wrong RuntimeCell factory entry kind did not fail exact link");
+
+    auto wrong_runtime_factory_shape = implementation;
+    const auto wrong_factory_shape = std::find_if(
+        wrong_runtime_factory_shape.entries.begin(),
+        wrong_runtime_factory_shape.entries.end(), [](const auto& entry) {
+            return entry.kind ==
+                   gnc::model_sdk::StaticEntryKind::RuntimeCellFactory;
+        });
+    require(wrong_factory_shape !=
+                wrong_runtime_factory_shape.entries.end(),
+            "wrong RuntimeCell factory call-shape fixture is absent");
+    wrong_factory_shape->call_shape_id += ".wrong";
+    const auto wrong_factory_shape_failure =
+        gnc::compiler::link_complete_execution_plan(
+            positive.value->plan, positive.value->proofs,
+            {wrong_runtime_factory_shape});
+    require(!wrong_factory_shape_failure.succeeded() &&
+                has_diagnostic(
+                    wrong_factory_shape_failure.diagnostics,
+                    CompleteDiagnosticCode::ImplementationMismatch),
+            "wrong RuntimeCell factory call shape did not fail exact link");
+
+    auto wrong_factory_package_plan = positive.value->plan;
+    require(!wrong_factory_package_plan.runtime_components.empty(),
+            "wrong RuntimeCell factory package fixture is absent");
+    const auto factory_requirement_id =
+        wrong_factory_package_plan.runtime_components.front()
+            .runtime_cell_factory_entry_requirement_id;
+    const auto wrong_factory_package_requirement = std::find_if(
+        wrong_factory_package_plan.entry_requirements.begin(),
+        wrong_factory_package_plan.entry_requirements.end(),
+        [&](const auto& requirement) {
+            return requirement.requirement_id == factory_requirement_id;
+        });
+    require(wrong_factory_package_requirement !=
+                wrong_factory_package_plan.entry_requirements.end(),
+            "wrong RuntimeCell factory package requirement is absent");
+    wrong_factory_package_requirement->package.package_id += ".foreign";
+    expect_plan_conformance_failure(
+        std::move(wrong_factory_package_plan),
+        "foreign-package RuntimeCell factory requirement passed component conformance");
+
+    auto wrong_slot_codec = implementation;
+    const auto slot_codec = std::find_if(
+        wrong_slot_codec.entries.begin(),
+        wrong_slot_codec.entries.end(), [](const auto& entry) {
+            return entry.kind ==
+                   gnc::model_sdk::StaticEntryKind::SlotCodec;
+        });
+    require(slot_codec != wrong_slot_codec.entries.end(),
+            "slot-codec negative fixture lacks a codec entry");
+    slot_codec->call_shape_id += ".wrong";
+    const auto slot_codec_failure =
+        gnc::compiler::link_complete_execution_plan(
+            positive.value->plan, positive.value->proofs,
+            {wrong_slot_codec});
+    require(!slot_codec_failure.succeeded() &&
+                has_diagnostic(
+                    slot_codec_failure.diagnostics,
+                    CompleteDiagnosticCode::ImplementationMismatch),
+            "wrong slot-codec call shape did not fail link");
+
+    auto missing_state_codec = implementation;
+    const auto state_codec = std::find_if(
+        missing_state_codec.entries.begin(),
+        missing_state_codec.entries.end(), [](const auto& entry) {
+            return entry.kind ==
+                   gnc::model_sdk::StaticEntryKind::StateCodec;
+        });
+    require(state_codec != missing_state_codec.entries.end(),
+            "missing state-codec fixture lacks a codec entry");
+    missing_state_codec.entries.erase(state_codec);
+    const auto missing_state_codec_failure =
+        gnc::compiler::link_complete_execution_plan(
+            positive.value->plan, positive.value->proofs,
+            {missing_state_codec});
+    require(!missing_state_codec_failure.succeeded() &&
+                has_diagnostic(
+                    missing_state_codec_failure.diagnostics,
+                    CompleteDiagnosticCode::MissingImplementationEntry),
+            "missing exact state codec did not fail link");
 
     auto duplicate_entry = implementation;
     duplicate_entry.entries.push_back(duplicate_entry.entries.front());
@@ -2598,10 +2947,11 @@ void verify_high_value_negatives() {
         gnc::compiler::link_complete_execution_plan(
             positive.value->plan, positive.value->proofs,
             {alternate_build});
-    require(alternate_build_link.succeeded() &&
-                alternate_build_link.value->fingerprint() !=
-                    baseline_link.value->fingerprint(),
-            "package build fingerprint did not affect image identity");
+    require(!alternate_build_link.succeeded() &&
+                has_diagnostic(
+                    alternate_build_link.diagnostics,
+                    CompleteDiagnosticCode::MissingImplementationPackage),
+            "wrong package build fingerprint did not fail exact link");
 }
 
 } // namespace

@@ -7,7 +7,9 @@
 #include "gnc/foundation/passive_quaternion.hpp"
 #include "gnc/foundation/trilinear_table.hpp"
 #include "gnc/model_sdk/algorithm_evaluation.hpp"
+#include "gnc/model_sdk/in_process_codec.hpp"
 #include "gnc/model_sdk/model_metadata.hpp"
+#include "gnc/model_sdk/runtime_cell_factory.hpp"
 #include "gnc/model_sdk/static_descriptor.hpp"
 
 #include <array>
@@ -84,6 +86,12 @@ inline constexpr std::string_view kAerodynamicCoefficientsContractIdentity =
     "gnc.contract.yyz.aerodynamic-coefficients@1";
 inline constexpr std::string_view kRigidFormInputContractIdentity =
     "gnc.contract.yyz.rigid-form-input@1";
+inline constexpr std::string_view kRigidObservationLayoutIdentity =
+    "gnc.layout.yyz.committed-rigid-observation@1";
+inline constexpr std::string_view kRigidFormInputLayoutIdentity =
+    "gnc.layout.yyz.rigid-form-input@1";
+inline constexpr std::string_view kYyzNoWorkspaceResourcePlanIdentity =
+    "gnc.resource-plan.yyz.no-workspace@1";
 inline constexpr gnc::foundation::AlgorithmIdentity
     kRigidStepPreparationIdentity{
         "gnc.package.yyz.rigid-step.prepare@1", "0.1.0"};
@@ -113,6 +121,15 @@ inline constexpr gnc::foundation::AlgorithmIdentity
 inline constexpr gnc::foundation::AlgorithmIdentity
     kRigidDerivativeKernelIdentity{
         "gnc.package.yyz.rigid-body-6dof.derivative@1", "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity kRigidStateCodecIdentity{
+    "gnc.package.yyz.rigid-body-6dof.state-codec@1", "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
+    kRigidObservationSlotCodecIdentity{
+        "gnc.package.yyz.committed-rigid-observation.slot-codec@1",
+        "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
+    kRigidFormInputSlotCodecIdentity{
+        "gnc.package.yyz.rigid-form-input.slot-codec@1", "0.1.0"};
 
 inline constexpr std::string_view kUniformEnvironmentModelIdentity =
     "gnc.package.yyz.environment.uniform-supplied.experimental@1";
@@ -126,16 +143,6 @@ inline constexpr gnc::foundation::AlgorithmIdentity
 inline constexpr gnc::foundation::AlgorithmIdentity
     kUniformEnvironmentQueryIdentity{
         "gnc.package.yyz.environment.uniform-supplied.query@1", "0.1.0"};
-inline constexpr gnc::foundation::AlgorithmIdentity
-    kUniformEnvironmentResultBinderIdentity{
-        "gnc.package.yyz.environment.uniform-supplied.result-binder@1",
-        "0.1.0"};
-inline constexpr gnc::foundation::AlgorithmIdentity
-    kAerodynamicTableResultBinderIdentity{
-        "gnc.package.yyz.aerodynamic-table.result-binder@1", "0.1.0"};
-inline constexpr gnc::foundation::AlgorithmIdentity
-    kForceMomentClosureResultBinderIdentity{
-        "gnc.package.yyz.force-moment-closure.result-binder@1", "0.1.0"};
 
 // Stable package-authored C++ prototype identities. These identify only the
 // exact in-process call shapes below; they are not wire or cross-compiler ABI
@@ -146,30 +153,39 @@ inline constexpr std::string_view
 inline constexpr std::string_view kUniformEnvironmentQueryCallShapeIdentity =
     "gnc.cpp-call-shape.yyz.uniform-environment.query@1";
 inline constexpr std::string_view
-    kUniformEnvironmentResultBinderCallShapeIdentity =
-        "gnc.cpp-call-shape.yyz.uniform-environment.result-binder@1";
-inline constexpr std::string_view
     kAerodynamicTablePreparationCallShapeIdentity =
         "gnc.cpp-call-shape.yyz.aerodynamic-table.prepare@1";
 inline constexpr std::string_view kAerodynamicTableQueryCallShapeIdentity =
     "gnc.cpp-call-shape.yyz.aerodynamic-table.query@1";
 inline constexpr std::string_view
-    kAerodynamicTableResultBinderCallShapeIdentity =
-        "gnc.cpp-call-shape.yyz.aerodynamic-table.result-binder@1";
-inline constexpr std::string_view
     kForceMomentClosurePreparationCallShapeIdentity =
         "gnc.cpp-call-shape.yyz.force-moment-closure.prepare@1";
 inline constexpr std::string_view kForceMomentClosureCallShapeIdentity =
     "gnc.cpp-call-shape.yyz.force-moment-closure.evaluate@1";
-inline constexpr std::string_view
-    kForceMomentClosureResultBinderCallShapeIdentity =
-        "gnc.cpp-call-shape.yyz.force-moment-closure.result-binder@1";
 inline constexpr std::string_view kRigidInitialStateCallShapeIdentity =
     "gnc.cpp-call-shape.yyz.rigid.initial-state@1";
 inline constexpr std::string_view kRigidPublishProjectionCallShapeIdentity =
     "gnc.cpp-call-shape.yyz.rigid.publish-projection@1";
 inline constexpr std::string_view kRigidDerivativeCallShapeIdentity =
     "gnc.cpp-call-shape.yyz.rigid.derivative@1";
+inline constexpr std::string_view kRigidStateCodecCallShapeIdentity =
+    "gnc.cpp-call-shape.yyz.rigid.state-codec.getter@1";
+inline constexpr std::string_view kRigidObservationSlotCodecCallShapeIdentity =
+    "gnc.cpp-call-shape.yyz.committed-rigid-observation.slot-codec.getter@1";
+inline constexpr std::string_view kRigidFormInputSlotCodecCallShapeIdentity =
+    "gnc.cpp-call-shape.yyz.rigid-form-input.slot-codec.getter@1";
+
+[[nodiscard]] inline gnc::model_sdk::StaticSlotCodecDescriptor
+make_yyz_slot_codec_descriptor(
+    const gnc::foundation::AlgorithmIdentity& identity,
+    std::string_view call_shape_id, std::string_view layout_id,
+    std::string_view operation_prefix) {
+    return {std::string(layout_id), std::string(identity.id),
+            std::string(identity.version), std::string(call_shape_id),
+            std::string(operation_prefix) + ".copy@1",
+            std::string(operation_prefix) + ".validate@1",
+            std::string(operation_prefix) + ".project@1"};
+}
 
 struct InertialPositionMeters {
     gnc::foundation::Vec3 value = gnc::foundation::Vec3::Zero();
@@ -326,12 +342,6 @@ using UniformEnvironmentQueryEvaluation =
     gnc::model_sdk::AlgorithmEvaluation<EnvironmentInput,
                                         UniformEnvironmentQueryTelemetry>;
 
-class UniformEnvironmentResultBinder {
-  public:
-    [[nodiscard]] static EnvironmentInput bind(
-        const EnvironmentInput& formal_output);
-};
-
 class UniformEnvironmentQueryKernel {
   public:
     [[nodiscard]] static gnc::foundation::NumericalOutcome<
@@ -482,12 +492,6 @@ using AerodynamicTableQueryEvaluation =
     gnc::model_sdk::AlgorithmEvaluation<AerodynamicTableQueryOutput,
                                         AerodynamicTableQueryTelemetry>;
 
-class AerodynamicTableResultBinder {
-  public:
-    [[nodiscard]] static AerodynamicTableQueryOutput bind(
-        const AerodynamicTableQueryOutput& formal_output);
-};
-
 class AerodynamicTableQueryKernel {
   public:
     [[nodiscard]] static gnc::foundation::NumericalOutcome<
@@ -601,16 +605,18 @@ describe_yyz_rigid_step_base_package() {
         gnc::contracts::ClosureStrategy::FrozenInterval,
         gnc::model_sdk::StaticWorkspaceRequirement::None,
         std::string(kForceMomentClosureInputContractIdentity),
-        std::string(kForceMomentClosureCallShapeIdentity),
-        std::string(kForceMomentClosureResultBinderIdentity.id),
-        std::string(kForceMomentClosureResultBinderIdentity.version),
-        std::string(kForceMomentClosureResultBinderCallShapeIdentity)};
+        std::string(kForceMomentClosureCallShapeIdentity)};
     closure.ports.push_back(
         {"form-input", std::string(kRigidFormInputContractIdentity),
          gnc::model_sdk::StaticPortDirection::Output,
          gnc::model_sdk::BindingKind::ContinuousClosureLink,
          gnc::model_sdk::PortCardinality::OneOrMore,
-         gnc::model_sdk::TemporalRelation::IntervalModel});
+         gnc::model_sdk::TemporalRelation::IntervalModel,
+         make_yyz_slot_codec_descriptor(
+             kRigidFormInputSlotCodecIdentity,
+             kRigidFormInputSlotCodecCallShapeIdentity,
+             kRigidFormInputLayoutIdentity,
+             "gnc.operation.yyz.rigid-form-input")});
 
     gnc::model_sdk::StaticModelDescriptor aerodynamics;
     aerodynamics.definition = {
@@ -657,10 +663,7 @@ describe_yyz_rigid_step_base_package() {
             std::string(kAerodynamicTableQueryIdentity.version),
             gnc::model_sdk::StaticWorkspaceRequirement::None,
             std::string(kAerodynamicOperatingPointContractIdentity),
-            std::string(kAerodynamicTableQueryCallShapeIdentity),
-            std::string(kAerodynamicTableResultBinderIdentity.id),
-            std::string(kAerodynamicTableResultBinderIdentity.version),
-            std::string(kAerodynamicTableResultBinderCallShapeIdentity)};
+            std::string(kAerodynamicTableQueryCallShapeIdentity)};
     aerodynamics.ports.push_back(
         {"coefficients",
          std::string(kAerodynamicCoefficientsContractIdentity),
@@ -715,10 +718,7 @@ describe_yyz_rigid_step_base_package() {
             std::string(kUniformEnvironmentQueryIdentity.version),
             gnc::model_sdk::StaticWorkspaceRequirement::None,
             std::string(kEnvironmentQueryContractIdentity),
-            std::string(kUniformEnvironmentQueryCallShapeIdentity),
-            std::string(kUniformEnvironmentResultBinderIdentity.id),
-            std::string(kUniformEnvironmentResultBinderIdentity.version),
-            std::string(kUniformEnvironmentResultBinderCallShapeIdentity)};
+            std::string(kUniformEnvironmentQueryCallShapeIdentity)};
     environment.ports.push_back(
         {"environment-sample",
          std::string(kEnvironmentSampleContractIdentity),
@@ -812,7 +812,12 @@ describe_yyz_rigid_step_base_package() {
          gnc::model_sdk::StaticPortDirection::Output,
          gnc::model_sdk::BindingKind::SampledSignal,
          gnc::model_sdk::PortCardinality::OneOrMore,
-         gnc::model_sdk::TemporalRelation::CurrentCycle},
+         gnc::model_sdk::TemporalRelation::CurrentCycle,
+         make_yyz_slot_codec_descriptor(
+             kRigidObservationSlotCodecIdentity,
+             kRigidObservationSlotCodecCallShapeIdentity,
+             kRigidObservationLayoutIdentity,
+             "gnc.operation.yyz.committed-rigid-observation")},
     };
     gnc::model_sdk::StaticRuntimeComponentDescriptor rigid_runtime;
     rigid_runtime.recipe_id = std::string(kRigidStepRecipeIdentity);
@@ -882,6 +887,10 @@ describe_yyz_rigid_step_base_package() {
     rigid_runtime.lifecycle_capabilities = {
         gnc::model_sdk::RuntimeLifecycleCapability::Instantiate,
         gnc::model_sdk::RuntimeLifecycleCapability::Dispose};
+    rigid_runtime.resource_plan_id =
+        std::string(kYyzNoWorkspaceResourcePlanIdentity);
+    rigid_runtime.resource_workspace_requirement =
+        gnc::model_sdk::StaticWorkspaceRequirement::None;
     rigid_runtime.state_owner =
         gnc::model_sdk::StaticStateOwnerDescriptor{
             {std::string(kRigidStateSchemaIdentity), 1U,
@@ -922,7 +931,16 @@ describe_yyz_rigid_step_base_package() {
               {"velocity.z_meters_per_second",
                gnc::model_sdk::CanonicalConfigValueKind::Float64}}},
             gnc::model_sdk::StaticStateEvolution::ContinuousCandidate,
-            std::string(kRigidInitialStateCallShapeIdentity)};
+            std::string(kRigidInitialStateCallShapeIdentity),
+            {std::string(kRigidStateCodecIdentity.id),
+             std::string(kRigidStateCodecIdentity.version),
+             std::string(kRigidStateCodecCallShapeIdentity),
+             "gnc.operation.yyz.rigid-state.clone@1",
+             "gnc.operation.yyz.rigid-state.validate@1",
+             "gnc.operation.yyz.rigid-state.validate-finite@1",
+             "gnc.operation.yyz.rigid-state.validate-invariants@1",
+             "gnc.operation.yyz.rigid-state.noexcept-swap@1",
+             std::string(kRigidPublishProjectionIdentity.id)}};
     rigid.runtime_component = std::move(rigid_runtime);
 
     gnc::model_sdk::StaticAlgorithmDescriptor rigid_step;
@@ -1049,12 +1067,6 @@ using ForceMomentClosureEvaluation =
     gnc::model_sdk::AlgorithmEvaluation<ForceMomentClosureOutput,
                                         ForceMomentClosureTelemetry>;
 
-class ForceMomentClosureResultBinder {
-  public:
-    [[nodiscard]] static ForceMomentClosureOutput bind(
-        const ForceMomentClosureOutput& formal_output);
-};
-
 class ForceMomentClosureKernel {
   public:
     [[nodiscard]] static gnc::foundation::NumericalOutcome<
@@ -1080,34 +1092,53 @@ using RigidFrozenFormEvaluation =
 
 using UniformEnvironmentQueryEntry =
     decltype(&UniformEnvironmentQueryKernel::evaluate);
-using UniformEnvironmentResultBinderEntry =
-    decltype(&UniformEnvironmentResultBinder::bind);
 using AerodynamicTableQueryEntry =
     decltype(&AerodynamicTableQueryKernel::evaluate);
-using AerodynamicTableResultBinderEntry =
-    decltype(&AerodynamicTableResultBinder::bind);
 using ForceMomentClosureEntry =
     decltype(&ForceMomentClosureKernel::evaluate);
-using ForceMomentClosureResultBinderEntry =
-    decltype(&ForceMomentClosureResultBinder::bind);
+
+using BoundAerodynamicTableQuery = gnc::model_sdk::BoundQueryHandle<
+    PreparedAerodynamicTableModel, AerodynamicTableQueryEntry>;
+using BoundForceMomentClosure = gnc::model_sdk::BoundClosureHandle<
+    PreparedForceMomentClosureModel, ForceMomentClosureEntry>;
 
 // R3 materializes these exact process-local references from the authorized
 // invocation entries in ExecutionPlanImage. They are never serialized or
 // included in a stable fingerprint.
 struct RigidFrozenFormInvocationSet {
-    const PreparedAerodynamicTableModel* aerodynamic_model = nullptr;
-    AerodynamicTableQueryEntry aerodynamic_query = nullptr;
-    AerodynamicTableResultBinderEntry aerodynamic_result_binder = nullptr;
-    const PreparedForceMomentClosureModel* force_moment_closure_model =
-        nullptr;
-    ForceMomentClosureEntry force_moment_closure = nullptr;
-    ForceMomentClosureResultBinderEntry closure_result_binder = nullptr;
+    BoundAerodynamicTableQuery aerodynamic;
+    BoundForceMomentClosure closure;
 };
 
-// Authoritative responses returned by the package typed composition. These
-// are formal query/closure outputs; telemetry remains explanatory only.
+struct RigidFrozenFormQuerySet {
+    BoundAerodynamicTableQuery aerodynamic;
+};
+
+// Authoritative caller-local PureQuery response returned by the typed
+// package composition. Telemetry is explanatory only.
 struct RigidFrozenFormInvocationResults {
     AerodynamicTableQueryOutput aerodynamic_coefficients;
+};
+
+struct RigidFrozenFormPreparationOutput {
+    EnvironmentInput environment;
+    ForceMomentClosureInput closure_request;
+};
+
+struct RigidFrozenFormPreparationTelemetry {
+    AirDataOutput air_data;
+    AerodynamicLookupOutput aerodynamic_lookup;
+    AerodynamicTableQueryEvaluation aerodynamic_query;
+};
+
+using RigidFrozenFormPreparationEvaluation =
+    gnc::model_sdk::AlgorithmEvaluation<
+        RigidFrozenFormPreparationOutput,
+        RigidFrozenFormPreparationTelemetry>;
+
+struct RigidFrozenFormPreparationInvocationEvaluation {
+    RigidFrozenFormPreparationEvaluation evaluation;
+    RigidFrozenFormInvocationResults invocation_results;
 };
 
 struct RigidFrozenFormInvocationEvaluation {
@@ -1117,6 +1148,13 @@ struct RigidFrozenFormInvocationEvaluation {
 
 class RigidFrozenFormKernel {
   public:
+    [[nodiscard]] static gnc::foundation::NumericalOutcome<
+        RigidFrozenFormPreparationInvocationEvaluation>
+    prepare_closure_request(
+        const RigidFrozenFormRuntimeDefinition& definition,
+        const RigidFrozenFormQuerySet& queries,
+        const RigidStepInput& input);
+
     [[nodiscard]] static gnc::foundation::NumericalOutcome<
         RigidFrozenFormEvaluation>
     evaluate(const PreparedRigidStepModel& model,
@@ -1212,8 +1250,6 @@ using UniformEnvironmentQueryCall =
     gnc::foundation::NumericalOutcome<UniformEnvironmentQueryEvaluation> (*)(
         const PreparedUniformEnvironmentModel&,
         const UniformEnvironmentQueryInput&);
-using UniformEnvironmentResultBinderCall = EnvironmentInput (*)(
-    const EnvironmentInput&);
 using AerodynamicTablePreparationCall =
     gnc::foundation::NumericalOutcome<PreparedAerodynamicTableModel> (*)(
         AerodynamicTableDefinition, AerodynamicTableAsset);
@@ -1221,8 +1257,6 @@ using AerodynamicTableQueryCall =
     gnc::foundation::NumericalOutcome<AerodynamicTableQueryEvaluation> (*)(
         const PreparedAerodynamicTableModel&,
         const AerodynamicTableQueryInput&);
-using AerodynamicTableResultBinderCall = AerodynamicTableQueryOutput (*)(
-    const AerodynamicTableQueryOutput&);
 using ForceMomentClosurePreparationCall =
     gnc::foundation::NumericalOutcome<PreparedForceMomentClosureModel> (*)(
         ForceMomentClosureDefinition);
@@ -1230,8 +1264,6 @@ using ForceMomentClosureCall =
     gnc::foundation::NumericalOutcome<ForceMomentClosureEvaluation> (*)(
         const PreparedForceMomentClosureModel&,
         const ForceMomentClosureInput&);
-using ForceMomentClosureResultBinderCall = ForceMomentClosureOutput (*)(
-    const ForceMomentClosureOutput&);
 using RigidInitialStateCall =
     gnc::foundation::NumericalOutcome<RigidState> (*)(
         const RigidStepAlgorithmDefinition&, const RigidInitialStateInput&);
@@ -1240,5 +1272,33 @@ using RigidPublishProjectionCall = CommittedRigidObservation (*)(
 using RigidDerivativeCall =
     gnc::foundation::NumericalOutcome<RigidDerivativeOutput> (*)(
         const RigidStepAlgorithmDefinition&, const RigidDerivativeInput&);
+
+using RigidStateCloneCall = RigidState (*)(const RigidState&);
+using RigidStateValidateCall = bool (*)(const RigidState&) noexcept;
+using RigidStateSwapCall = void (*)(RigidState&, RigidState&) noexcept;
+using RigidStateCodec = gnc::model_sdk::InProcessStateCodec<
+    RigidStateCloneCall, RigidStateValidateCall,
+    RigidStateValidateCall, RigidStateValidateCall,
+    RigidStateSwapCall, RigidPublishProjectionCall>;
+using RigidStateCodecGetter =
+    gnc::model_sdk::InProcessCodecGetter<RigidStateCodec>;
+
+[[nodiscard]] RigidState clone_rigid_state(const RigidState& state);
+[[nodiscard]] bool validate_rigid_state(const RigidState& state) noexcept;
+[[nodiscard]] bool validate_rigid_state_finite(
+    const RigidState& state) noexcept;
+[[nodiscard]] bool validate_rigid_state_invariants(
+    const RigidState& state) noexcept;
+void swap_rigid_state(RigidState& lhs, RigidState& rhs) noexcept;
+[[nodiscard]] const RigidStateCodec& rigid_state_codec() noexcept;
+
+using RigidObservationSlotCodec =
+    gnc::model_sdk::TypedInProcessSlotCodec<CommittedRigidObservation>;
+using RigidObservationSlotCodecGetter =
+    gnc::model_sdk::InProcessCodecGetter<RigidObservationSlotCodec>;
+using RigidFormInputSlotCodec =
+    gnc::model_sdk::TypedInProcessSlotCodec<RigidFormInput>;
+using RigidFormInputSlotCodecGetter =
+    gnc::model_sdk::InProcessCodecGetter<RigidFormInputSlotCodec>;
 
 } // namespace gnc::packages::yyz

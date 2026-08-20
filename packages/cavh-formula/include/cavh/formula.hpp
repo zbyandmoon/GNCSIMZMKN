@@ -232,7 +232,7 @@ describe_cavh_formula_package() {
             std::string(kGlideEnvelopeQueryIdentity.version),
             gnc::model_sdk::StaticWorkspaceRequirement::None,
             std::string(kGlideEnvelopeRequestContractIdentity),
-            std::string(kGlideEnvelopeQueryCallShapeIdentity), {}, {}, {}};
+            std::string(kGlideEnvelopeQueryCallShapeIdentity)};
     envelope.ports.push_back(
         {"envelope", std::string(kGlideEnvelopeOutputContractIdentity),
          gnc::model_sdk::StaticPortDirection::Output,

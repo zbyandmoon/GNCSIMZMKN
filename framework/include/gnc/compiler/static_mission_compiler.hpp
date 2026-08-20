@@ -209,6 +209,9 @@ struct CompileOutcome {
 struct PackageLock {
     std::string package_id;
     std::string package_version;
+    // Empty for portable Catalog records. Complete R2 source selection must
+    // resolve this to one exact package build before proof/link.
+    std::string build_fingerprint{};
 };
 
 struct CatalogModelRecord {

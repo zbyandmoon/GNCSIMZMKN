@@ -1,5 +1,7 @@
 #pragma once
 
+#include "gnc/contracts/execution_semantics.hpp"
+
 #include <any>
 #include <cstdint>
 #include <string_view>
@@ -21,7 +23,8 @@ enum class PlanImageEntryKind : std::uint8_t {
     Prepare,
     PureQuery,
     Closure,
-    InvocationResultBinder,
+    StateCodec,
+    SlotCodec,
     InitialState,
     PublishProjection,
     BoundaryEvaluation,
@@ -76,7 +79,7 @@ struct PlanImageEntry {
     std::string state_layout_id;
     std::string workspace_layout_id;
     // A process-local, type-preserving reference to the exact package entry.
-    // R2 only copies it. A future package-owned R3 binder may recover
+    // R2 only copies it. Future package/generated R3 composition may recover
     // it with std::any_cast<decltype(&ExactCallable)>; this field alone is not
     // a RuntimeCell factory/materialization contract, and no untyped address
     // or cross-process ABI is implied.
@@ -124,6 +127,11 @@ struct PlanImagePreparation {
     std::string plan_element_id;
     std::uint32_t occurrence_handle = 0U;
     std::uint32_t prepare_entry_handle = 0U;
+    PreparationOwnership ownership = PreparationOwnership::Unspecified;
+    PreparationPhase phase = PreparationPhase::Unspecified;
+    PreparedModelCachePolicy cache_policy =
+        PreparedModelCachePolicy::Unspecified;
+    std::uint32_t order = 0U;
 };
 
 struct PlanImageQuery {
@@ -132,7 +140,6 @@ struct PlanImageQuery {
     std::uint32_t occurrence_handle = 0U;
     std::uint32_t preparation_handle = 0U;
     std::uint32_t query_entry_handle = 0U;
-    std::uint32_t result_binder_entry_handle = 0U;
     std::string workspace_requirement;
     std::vector<std::uint32_t> authorized_invocation_handles;
 };
@@ -143,7 +150,6 @@ struct PlanImageClosure {
     std::uint32_t occurrence_handle = 0U;
     std::uint32_t preparation_handle = 0U;
     std::uint32_t closure_entry_handle = 0U;
-    std::uint32_t result_binder_entry_handle = 0U;
     std::string strategy;
     std::string workspace_requirement;
     std::vector<std::uint32_t> authorized_invocation_handles;
@@ -167,9 +173,34 @@ struct PlanImageSlot {
     PlanImageSlotKind kind = PlanImageSlotKind::PortValue;
     std::uint32_t owner_occurrence_handle = 0U;
     std::uint32_t port_handle = 0U;
-    std::string contract_or_layout_id;
+    std::string contract_id;
+    std::string layout_id;
     std::uint64_t size_bytes = 0U;
     std::uint64_t alignment_bytes = 1U;
+    std::uint64_t offset_bytes = 0U;
+    std::uint32_t codec_entry_handle = 0U;
+    std::uint32_t writer_token_handle = 0U;
+    std::vector<std::uint32_t> reader_handles;
+    SlotStorageClass storage_class = SlotStorageClass::Unspecified;
+    SlotHoldPolicy hold_policy = SlotHoldPolicy::Unspecified;
+    bool valid_on_continue = false;
+    bool discarded_on_terminal = false;
+    bool discarded_on_failure = false;
+};
+
+enum class PlanImageWriterOwnerKind : std::uint8_t {
+    RuntimeCallsite,
+    IntegrationCoordinator,
+    InitialStateBuilder,
+};
+
+struct PlanImageWriterToken {
+    std::uint32_t handle = 0U;
+    std::string plan_element_id;
+    std::uint32_t slot_handle = 0U;
+    PlanImageWriterOwnerKind owner_kind =
+        PlanImageWriterOwnerKind::RuntimeCallsite;
+    std::uint32_t owner_handle = 0U;
 };
 
 struct PlanImageStateBlock {
@@ -181,6 +212,7 @@ struct PlanImageStateBlock {
     std::string layout_id;
     std::uint64_t size_bytes = 0U;
     std::uint64_t alignment_bytes = 0U;
+    std::uint32_t codec_entry_handle = 0U;
     std::string evolution;
     std::uint32_t committed_slot_handle = 0U;
     std::uint32_t candidate_slot_handle = 0U;
@@ -209,6 +241,7 @@ struct PlanImageBinding {
     std::uint32_t handle = 0U;
     std::string plan_element_id;
     std::string binding_id;
+    std::uint32_t provider_port_handle = 0U;
     std::uint32_t provider_slot_handle = 0U;
     std::uint32_t consumer_port_handle = 0U;
 };
@@ -225,6 +258,7 @@ struct PlanImageCallsite {
     std::string region_id;
     std::vector<std::uint32_t> input_slot_handles;
     std::vector<std::uint32_t> output_slot_handles;
+    std::vector<std::uint32_t> output_writer_token_handles;
     std::vector<std::uint32_t> authorized_invocation_handles;
 };
 
@@ -238,6 +272,8 @@ struct PlanImageRuntimeComponent {
     // Exact package-owned factory. R2 links this handle but never calls it or
     // creates the Session-local Runtime Cell returned by the typed entry.
     std::uint32_t runtime_cell_factory_entry_handle = 0U;
+    std::uint32_t runtime_instance_id = 0U;
+    std::uint32_t resource_plan_handle = 0U;
     std::string recipe_id;
     std::string profile;
     std::string schedule_trigger;
@@ -252,6 +288,14 @@ struct PlanImageRuntimeComponent {
     std::vector<std::uint32_t> state_block_handles;
 };
 
+struct PlanImageResourcePlan {
+    std::uint32_t handle = 0U;
+    std::string plan_element_id;
+    std::uint32_t runtime_component_handle = 0U;
+    std::string resource_plan_id;
+    std::string workspace_layout_id;
+};
+
 struct PlanImageInvocation {
     std::uint32_t handle = 0U;
     std::string plan_element_id;
@@ -259,9 +303,6 @@ struct PlanImageInvocation {
     std::uint32_t caller_callsite_handle = 0U;
     std::uint32_t provider_occurrence_handle = 0U;
     std::uint32_t entry_handle = 0U;
-    // Provider-owned projection from a successful typed evaluation's formal
-    // output to the response slot contract. Telemetry is not an input.
-    std::uint32_t result_binder_entry_handle = 0U;
     std::string requirement_id;
     // Zero-based position in the caller entry's package-authored invocation
     // requirements. This freezes typed factory wiring without an R3 string
@@ -270,12 +311,13 @@ struct PlanImageInvocation {
     std::string invocation_kind;
     std::string contract_id;
     std::string requirement_cardinality;
-    // Authorization and result flow are distinct facts. These handles name
-    // the one already-validated Binding that receives this invocation's
-    // response; the result slot is therefore not a pre-existing callsite
-    // input and must be populated only by the authorized invocation.
+    // Authorization and logical result flow are distinct from storage. Query
+    // results remain CallerLocal; FrozenInterval closure has one coordinator
+    // writer and one held interval slot.
+    InvocationResultRoute result_route = InvocationResultRoute::Unspecified;
     std::uint32_t result_binding_handle = 0U;
-    std::uint32_t provider_result_slot_handle = 0U;
+    std::uint32_t result_storage_slot_handle = 0U;
+    std::uint32_t result_writer_token_handle = 0U;
     std::uint32_t consumer_port_handle = 0U;
 };
 
@@ -312,22 +354,68 @@ struct PlanImageIntegrationScope {
     std::uint32_t candidate_state_slot_handle = 0U;
     std::uint32_t projection_callsite_handle = 0U;
     std::uint32_t form_callsite_handle = 0U;
+    std::uint32_t form_preparation_slot_handle = 0U;
     std::uint32_t derivative_callsite_handle = 0U;
     std::uint32_t held_form_slot_handle = 0U;
     std::string held_form_contract_id;
     std::string derivative_request_contract_id;
     std::string derivative_result_contract_id;
     std::vector<std::uint32_t> closure_invocation_handles;
+    std::vector<std::uint32_t> member_owner_occurrence_handles;
+    std::string integrator_id;
+    std::string integrator_version;
+    std::uint32_t clock_handle = 0U;
+    std::uint32_t step_ticks = 0U;
+    double fixed_step_seconds = 0.0;
+    double absolute_tolerance = 0.0;
+    double relative_tolerance = 0.0;
+    std::string check_finiteness;
+    double zero_threshold = 0.0;
+    double condition_limit = 0.0;
+    std::string workspace_layout_id;
+    std::uint32_t candidate_codec_entry_handle = 0U;
+    std::string candidate_project_operation_id;
+    std::string candidate_finite_validation_operation_id;
+    std::string candidate_invariant_validation_operation_id;
+};
+
+struct PlanImageTransactionCandidateMember {
+    std::uint32_t owner_occurrence_handle = 0U;
+    std::uint32_t candidate_state_slot_handle = 0U;
+    std::string producer_kind;
+    std::uint32_t producer_handle = 0U;
+    std::uint32_t writer_token_handle = 0U;
+};
+
+struct PlanImageTransactionBranch {
+    TransactionBranch branch = TransactionBranch::Continue;
+    std::vector<std::uint32_t> committed_candidate_slot_handles;
+    std::vector<std::uint32_t> discarded_candidate_slot_handles;
+    std::vector<std::uint32_t> retained_held_slot_handles;
+    std::vector<std::uint32_t> discarded_held_slot_handles;
+    bool model_commit = false;
+    bool observation_seal = false;
+    bool result_seal_after_observation = false;
+    std::int64_t epoch_delta = 0;
+    std::int64_t tick_delta = 0;
 };
 
 struct PlanImageTransaction {
     std::uint32_t handle = 0U;
     std::string plan_element_id;
     std::string transaction_id;
-    std::vector<std::uint32_t> owner_occurrence_handles;
-    std::vector<std::uint32_t> candidate_state_slot_handles;
-    std::vector<std::string> candidate_producer_kinds;
-    std::vector<std::uint32_t> candidate_producer_handles;
+    std::vector<PlanImageTransactionCandidateMember> candidates;
+    std::vector<std::uint32_t> held_slot_handles;
+    std::vector<PlanImageTransactionBranch> branches;
+};
+
+struct PlanImageLifecycle {
+    std::vector<std::uint32_t> preparation_handles;
+    std::vector<std::uint32_t> runtime_component_handles;
+    std::vector<std::uint32_t> initial_binding_handles;
+    std::vector<std::uint32_t> bound_provider_dispose_handles;
+    std::vector<std::uint32_t> runtime_component_dispose_handles;
+    std::vector<std::uint32_t> preparation_dispose_handles;
 };
 
 struct PlanImageEvaluatorHistoryMember {
@@ -362,7 +450,7 @@ struct PlanImageConformance {
 };
 
 struct ExecutionPlanImageData {
-    std::uint32_t revision = 1U;
+    std::uint32_t revision = 2U;
     std::string plan_id;
     std::string mission_id;
     std::string source_semantic_hash;
@@ -378,11 +466,13 @@ struct ExecutionPlanImageData {
     std::vector<PlanImageClosure> closures;
     std::vector<PlanImagePort> ports;
     std::vector<PlanImageSlot> slots;
+    std::vector<PlanImageWriterToken> writer_tokens;
     std::vector<PlanImageStateBlock> state_blocks;
     std::vector<PlanImageInitialBinding> initial_bindings;
     std::vector<PlanImageBinding> bindings;
     std::vector<PlanImageCallsite> callsites;
     std::vector<PlanImageRuntimeComponent> runtime_components;
+    std::vector<PlanImageResourcePlan> resource_plans;
     std::vector<PlanImageInvocation> invocations;
     std::vector<PlanImageRegion> regions;
     std::vector<PlanImageDagNode> dag_nodes;
@@ -390,11 +480,12 @@ struct ExecutionPlanImageData {
     std::vector<PlanImageIntegrationScope> integration_scopes;
     std::vector<PlanImageTransaction> transactions;
     std::vector<PlanImageEvaluatorHistory> evaluator_histories;
+    PlanImageLifecycle lifecycle;
     std::vector<PlanImageConformance> conformance;
 };
 
 // An image is immutable after freeze(). These planning/proof/link tables
-// contain exact package RuntimeCellFactory and invocation-result binder
+// contain exact package RuntimeCellFactory and codec
 // handles, but no Session-owned state/workspace/runtime objects. R2 never
 // invokes a linked entry; R3 owns materialization and execution.
 class ExecutionPlanImage final {
@@ -452,6 +543,9 @@ class ExecutionPlanImage final {
     [[nodiscard]] const std::vector<PlanImageSlot>& slots() const noexcept {
         return data_.slots;
     }
+    [[nodiscard]] const std::vector<PlanImageWriterToken>& writer_tokens() const noexcept {
+        return data_.writer_tokens;
+    }
     [[nodiscard]] const std::vector<PlanImageStateBlock>& state_blocks() const noexcept {
         return data_.state_blocks;
     }
@@ -466,6 +560,9 @@ class ExecutionPlanImage final {
     }
     [[nodiscard]] const std::vector<PlanImageRuntimeComponent>& runtime_components() const noexcept {
         return data_.runtime_components;
+    }
+    [[nodiscard]] const std::vector<PlanImageResourcePlan>& resource_plans() const noexcept {
+        return data_.resource_plans;
     }
     [[nodiscard]] const std::vector<PlanImageInvocation>& invocations() const noexcept {
         return data_.invocations;
@@ -487,6 +584,9 @@ class ExecutionPlanImage final {
     }
     [[nodiscard]] const std::vector<PlanImageEvaluatorHistory>& evaluator_histories() const noexcept {
         return data_.evaluator_histories;
+    }
+    [[nodiscard]] const PlanImageLifecycle& lifecycle() const noexcept {
+        return data_.lifecycle;
     }
     [[nodiscard]] const std::vector<PlanImageConformance>& conformance() const noexcept {
         return data_.conformance;

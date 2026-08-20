@@ -379,6 +379,16 @@ struct StaticAssetSlotDescriptor {
     PortCardinality cardinality = PortCardinality::ExactlyOne;
 };
 
+struct StaticSlotCodecDescriptor {
+    std::string layout_id;
+    std::string entry_id;
+    std::string entry_version;
+    std::string call_shape_id;
+    std::string copy_operation_id;
+    std::string validate_operation_id;
+    std::string project_operation_id;
+};
+
 struct StaticPortDescriptor {
     std::string port_id;
     std::string contract_id;
@@ -387,6 +397,9 @@ struct StaticPortDescriptor {
     PortCardinality cardinality = PortCardinality::Unspecified;
     TemporalRelation temporal_relation =
         TemporalRelation::NotApplicable;
+    // Required only for a stored output. PureQuery outputs remain caller
+    // local and deliberately do not acquire a CycleFrame codec or slot.
+    std::optional<StaticSlotCodecDescriptor> slot_codec = std::nullopt;
 };
 
 struct StaticRuntimeScheduleDescriptor {
@@ -430,6 +443,18 @@ struct StaticStateSchemaDescriptor {
     std::vector<StaticStateFieldDescriptor> fields;
 };
 
+struct StaticStateCodecDescriptor {
+    std::string entry_id;
+    std::string entry_version;
+    std::string call_shape_id;
+    std::string clone_operation_id;
+    std::string validate_operation_id;
+    std::string finite_validation_operation_id;
+    std::string invariant_validation_operation_id;
+    std::string noexcept_swap_operation_id;
+    std::string project_operation_id;
+};
+
 struct StaticStateOwnerDescriptor {
     StaticStateSchemaDescriptor schema;
     std::string initial_state_builder_id;
@@ -439,6 +464,7 @@ struct StaticStateOwnerDescriptor {
     // Stable package-authored C++ call shape. The implementation table must
     // independently contribute the same value before an Image can be linked.
     std::string initial_state_builder_call_shape_id;
+    StaticStateCodecDescriptor codec;
 };
 
 enum class StaticInvocationKind : std::uint8_t {
@@ -516,6 +542,9 @@ struct StaticRuntimeObligationEntryDescriptor {
     // Separate from the semantic request/result signature: this locks the
     // exact process-local C++ prototype expected from the package entry.
     std::string call_shape_id;
+    // Optional stored formal result for coordinator-owned composition. It is
+    // not a public port and is never used to materialize PureQuery output.
+    std::optional<StaticSlotCodecDescriptor> result_codec = std::nullopt;
 };
 
 struct StaticEvaluatorHistoryMemberDescriptor {
@@ -554,6 +583,12 @@ struct StaticRuntimeComponentDescriptor {
     std::string runtime_cell_factory_id;
     std::string runtime_cell_factory_version;
     std::string runtime_cell_factory_call_shape_id;
+    // Current R2 facts are intentionally narrow: REF-YYZ declares one
+    // immutable no-workspace resource plan per RuntimeComponent. R3 later
+    // supplies the Session-local view when it invokes the linked factory.
+    std::string resource_plan_id;
+    StaticWorkspaceRequirement resource_workspace_requirement =
+        StaticWorkspaceRequirement::Unspecified;
     // Present only for terminal Evaluator profiles whose exact package entry
     // consumes a bounded committed-state history.
     std::optional<StaticEvaluatorHistoryShapeDescriptor>
@@ -570,14 +605,6 @@ struct StaticPureQueryDescriptor {
         StaticWorkspaceRequirement::Unspecified;
     std::string request_contract_id;
     std::string query_call_shape_id;
-    // Maps a successful typed query evaluation's formal output to the
-    // response contract. It must not inspect telemetry. R2 exact-links this
-    // package entry. R3 binds the reference into the package-owned cell; the
-    // package composition invokes it once and returns the response that R3
-    // publishes through the authorized result-flow Binding.
-    std::string result_binder_id;
-    std::string result_binder_version;
-    std::string result_binder_call_shape_id;
 };
 
 struct StaticClosureDescriptor {
@@ -589,9 +616,6 @@ struct StaticClosureDescriptor {
         StaticWorkspaceRequirement::Unspecified;
     std::string request_contract_id;
     std::string closure_call_shape_id;
-    std::string result_binder_id;
-    std::string result_binder_version;
-    std::string result_binder_call_shape_id;
 };
 
 // Package-owned description of a model that can be read without preparing or

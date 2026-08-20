@@ -25,7 +25,8 @@ enum class StaticEntryKind : std::uint8_t {
     Prepare,
     PureQuery,
     Closure,
-    InvocationResultBinder,
+    StateCodec,
+    SlotCodec,
     InitialState,
     PublishProjection,
     BoundaryEvaluation,
@@ -46,8 +47,10 @@ enum class StaticEntryKind : std::uint8_t {
         return "PureQuery";
     case StaticEntryKind::Closure:
         return "Closure";
-    case StaticEntryKind::InvocationResultBinder:
-        return "InvocationResultBinder";
+    case StaticEntryKind::StateCodec:
+        return "StateCodec";
+    case StaticEntryKind::SlotCodec:
+        return "SlotCodec";
     case StaticEntryKind::InitialState:
         return "InitialState";
     case StaticEntryKind::PublishProjection:
@@ -83,6 +86,25 @@ struct StaticEvaluatorHistoryWitness {
     std::string request_contract_id;
     std::uint32_t depth = 0U;
     std::vector<StaticEvaluatorHistoryMemberWitness> ordered_members;
+};
+
+struct StaticStateCodecWitness {
+    std::string state_layout_id;
+    std::string clone_operation_id;
+    std::string validate_operation_id;
+    std::string finite_validation_operation_id;
+    std::string invariant_validation_operation_id;
+    std::string noexcept_swap_operation_id;
+    std::string project_operation_id;
+    bool swap_is_noexcept = false;
+};
+
+struct StaticSlotCodecWitness {
+    std::string contract_id;
+    std::string value_layout_id;
+    std::string copy_operation_id;
+    std::string validate_operation_id;
+    std::string project_operation_id;
 };
 
 // Taking the address of this specialization forces the real typed Callable to
@@ -128,7 +150,10 @@ struct StaticImplementationEntry {
     // Present only on the terminal Evaluator entry that consumes committed
     // history. It is process-independent stable evidence, but not a wire
     // schema, serializer, or runtime history object.
-    std::optional<StaticEvaluatorHistoryWitness> evaluator_history_witness;
+    std::optional<StaticEvaluatorHistoryWitness> evaluator_history_witness =
+        std::nullopt;
+    std::optional<StaticStateCodecWitness> state_codec_witness = std::nullopt;
+    std::optional<StaticSlotCodecWitness> slot_codec_witness = std::nullopt;
 };
 
 template <typename ExpectedCallable>
@@ -151,6 +176,18 @@ with_static_evaluator_history_witness(
     StaticImplementationEntry entry,
     StaticEvaluatorHistoryWitness witness) {
     entry.evaluator_history_witness = std::move(witness);
+    return entry;
+}
+
+[[nodiscard]] inline StaticImplementationEntry with_static_state_codec_witness(
+    StaticImplementationEntry entry, StaticStateCodecWitness witness) {
+    entry.state_codec_witness = std::move(witness);
+    return entry;
+}
+
+[[nodiscard]] inline StaticImplementationEntry with_static_slot_codec_witness(
+    StaticImplementationEntry entry, StaticSlotCodecWitness witness) {
+    entry.slot_codec_witness = std::move(witness);
     return entry;
 }
 
@@ -191,6 +228,7 @@ struct StaticValueLayoutImplementation {
     std::string contract_id;
     std::size_t size_bytes = 0U;
     std::size_t alignment_bytes = 0U;
+    std::string layout_id;
 };
 
 struct StaticPackageImplementation {
@@ -324,19 +362,58 @@ struct StaticPackageImplementation {
                                             {}, std::move(outputs));
 }
 
-[[nodiscard]] inline std::string
-canonical_invocation_result_binder_signature(
+[[nodiscard]] inline std::string canonical_state_codec_signature(
     const StaticModelDescriptor& model) {
-    std::vector<std::string> outputs;
-    for (const auto& port : model.ports) {
-        if (port.direction == StaticPortDirection::Output) {
-            outputs.push_back(port.port_id);
-        }
+    std::ostringstream stream;
+    stream << canonical_static_entry_signature(StaticEntryKind::StateCodec,
+                                                model);
+    if (model.runtime_component.has_value() &&
+        model.runtime_component->state_owner.has_value()) {
+        const auto& owner = *model.runtime_component->state_owner;
+        stream << "|schema=" << owner.schema.schema_id << '@'
+               << owner.schema.schema_version << "|layout="
+               << owner.schema.layout_id << "|clone="
+               << owner.codec.clone_operation_id << "|validate="
+               << owner.codec.validate_operation_id << "|finite="
+               << owner.codec.finite_validation_operation_id
+               << "|invariant="
+               << owner.codec.invariant_validation_operation_id
+               << "|swap="
+               << owner.codec.noexcept_swap_operation_id << "|project="
+               << owner.codec.project_operation_id;
     }
-    return canonical_static_entry_signature(
-               StaticEntryKind::InvocationResultBinder, model, {},
-               std::move(outputs)) +
-           "|formal-output-only=true";
+    return stream.str();
+}
+
+[[nodiscard]] inline std::string canonical_slot_codec_signature(
+    const StaticModelDescriptor& model, const StaticPortDescriptor& port) {
+    std::ostringstream stream;
+    stream << canonical_static_entry_signature(StaticEntryKind::SlotCodec,
+                                                model, {}, {port.port_id});
+    if (port.slot_codec.has_value()) {
+        stream << "|contract=" << port.contract_id << "|layout="
+               << port.slot_codec->layout_id << "|copy="
+               << port.slot_codec->copy_operation_id << "|validate="
+               << port.slot_codec->validate_operation_id << "|project="
+               << port.slot_codec->project_operation_id;
+    }
+    return stream.str();
+}
+
+[[nodiscard]] inline std::string canonical_result_slot_codec_signature(
+    const StaticModelDescriptor& model,
+    const StaticRuntimeObligationEntryDescriptor& entry) {
+    std::ostringstream stream;
+    stream << canonical_static_entry_signature(StaticEntryKind::SlotCodec,
+                                                model)
+           << "|result-contract=" << entry.result_contract_id;
+    if (entry.result_codec.has_value()) {
+        stream << "|layout=" << entry.result_codec->layout_id << "|copy="
+               << entry.result_codec->copy_operation_id << "|validate="
+               << entry.result_codec->validate_operation_id << "|project="
+               << entry.result_codec->project_operation_id;
+    }
+    return stream.str();
 }
 
 [[nodiscard]] inline std::string canonical_initial_state_signature(
@@ -379,7 +456,7 @@ canonical_runtime_invocation_requirements_suffix(
         kind = StaticEntryKind::DerivativeEvaluation;
         break;
     }
-    return canonical_static_entry_signature(
+    auto signature = canonical_static_entry_signature(
         kind, model, entry.input_port_ids, entry.output_port_ids,
         entry.state_read, entry.state_write) +
            "|phase=" + std::string(model_sdk::to_string(entry.phase)) +
@@ -387,6 +464,11 @@ canonical_runtime_invocation_requirements_suffix(
            "|result=" + entry.result_contract_id +
            canonical_runtime_invocation_requirements_suffix(
                entry.invocation_requirements);
+    if (entry.result_codec.has_value()) {
+        signature += "|result-layout=" + entry.result_codec->layout_id +
+                     "|result-codec=" + entry.result_codec->entry_id;
+    }
+    return signature;
 }
 
 template <auto Callable, typename ExpectedCallable>

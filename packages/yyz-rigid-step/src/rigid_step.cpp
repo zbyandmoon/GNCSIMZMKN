@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 namespace gnc::packages::yyz {
@@ -242,7 +243,6 @@ template <typename Value>
     const RigidStepModelDefinition& definition,
     const PreparedAerodynamicTableModel& aerodynamic_model,
     AerodynamicTableQueryEntry aerodynamic_query,
-    AerodynamicTableResultBinderEntry aerodynamic_result_binder,
     const RigidState& state,
     const EnvironmentInput& environment) {
     NumericalFlags flags = 0U;
@@ -321,7 +321,7 @@ template <typename Value>
     flags |= query.evidence().flags;
     approximate = approximate || approximate_status(query.status());
     const auto& result = query.value();
-    const auto response = aerodynamic_result_binder(result.output);
+    const auto& response = result.output;
 
     AirLookupComputation output;
     output.air_data.velocity_relative_inertial.value = relative_inertial;
@@ -774,11 +774,6 @@ UniformEnvironmentQueryKernel::evaluate(
         evidence);
 }
 
-EnvironmentInput UniformEnvironmentResultBinder::bind(
-    const EnvironmentInput& formal_output) {
-    return formal_output;
-}
-
 gnc::model_sdk::CanonicalConfigBlock
 canonical_force_moment_closure_config(
     const ForceMomentClosureDefinition& definition) {
@@ -1121,11 +1116,6 @@ AerodynamicTableQueryKernel::evaluate(
         evidence);
 }
 
-AerodynamicTableQueryOutput AerodynamicTableResultBinder::bind(
-    const AerodynamicTableQueryOutput& formal_output) {
-    return formal_output;
-}
-
 PreparedForceMomentClosureModel::PreparedForceMomentClosureModel(
     std::shared_ptr<const ForceMomentClosureDefinition> definition,
     gnc::model_sdk::PreparedModelMetadata metadata) noexcept
@@ -1281,11 +1271,6 @@ ForceMomentClosureKernel::evaluate(
         evidence);
 }
 
-ForceMomentClosureOutput ForceMomentClosureResultBinder::bind(
-    const ForceMomentClosureOutput& formal_output) {
-    return formal_output;
-}
-
 PreparedRigidStepModel::PreparedRigidStepModel(
     std::shared_ptr<const RigidStepModelDefinition> definition,
     PreparedAerodynamicTableModel aerodynamic_table_model,
@@ -1408,6 +1393,40 @@ CommittedRigidObservation project_committed_rigid_observation(
     return CommittedRigidObservation{context, state};
 }
 
+RigidState clone_rigid_state(const RigidState& state) {
+    return state;
+}
+
+bool validate_rigid_state_finite(const RigidState& state) noexcept {
+    return finite(state);
+}
+
+bool validate_rigid_state_invariants(const RigidState& state) noexcept {
+    const double squared_norm = state.attitude.value.squaredNorm();
+    return std::isfinite(squared_norm) && squared_norm > 0.0;
+}
+
+bool validate_rigid_state(const RigidState& state) noexcept {
+    return validate_rigid_state_finite(state) &&
+           validate_rigid_state_invariants(state);
+}
+
+void swap_rigid_state(RigidState& lhs, RigidState& rhs) noexcept {
+    static_assert(std::is_nothrow_swappable_v<RigidState>,
+                  "RigidState codec requires noexcept swap");
+    using std::swap;
+    swap(lhs, rhs);
+}
+
+const RigidStateCodec& rigid_state_codec() noexcept {
+    static const RigidStateCodec codec{
+        &clone_rigid_state, &validate_rigid_state,
+        &validate_rigid_state_finite,
+        &validate_rigid_state_invariants,
+        &swap_rigid_state, &project_committed_rigid_observation};
+    return codec;
+}
+
 NumericalOutcome<RigidDerivativeOutput>
 RigidDerivativeKernel::evaluate(
     const RigidStepAlgorithmDefinition& algorithm,
@@ -1444,35 +1463,37 @@ RigidDerivativeKernel::evaluate(
 
 namespace {
 
-NumericalOutcome<RigidFrozenFormInvocationEvaluation>
-evaluate_rigid_frozen_form(
+NumericalOutcome<RigidFrozenFormPreparationInvocationEvaluation>
+prepare_rigid_frozen_form_closure_request(
     const RigidFrozenFormRuntimeDefinition& runtime_definition,
-    const RigidFrozenFormInvocationSet& invocations,
+    const RigidFrozenFormQuerySet& queries,
     const RigidStepInput& input) {
     const auto failure = [](NumericalStatus status,
                             std::string_view detail,
                             NumericalFlags flags = 0U) {
-        return NumericalOutcome<RigidFrozenFormInvocationEvaluation>::failure(
-            status,
-            product_evidence(kRigidFrozenFormKernelIdentity,
-                             detail, flags));
+        return NumericalOutcome<
+            RigidFrozenFormPreparationInvocationEvaluation>::failure(
+                status,
+                product_evidence(kRigidFrozenFormKernelIdentity,
+                                 detail, flags));
     };
-    if (invocations.aerodynamic_model == nullptr ||
-        invocations.aerodynamic_query == nullptr ||
-        invocations.aerodynamic_result_binder == nullptr ||
-        invocations.force_moment_closure_model == nullptr ||
-        invocations.force_moment_closure == nullptr ||
-        invocations.closure_result_binder == nullptr) {
+    if (queries.aerodynamic.prepared_model == nullptr ||
+        queries.aerodynamic.callable == nullptr) {
         return failure(NumericalStatus::DomainError,
-                       "invocation-set");
+                       "aerodynamic-invocation");
     }
     RigidStepModelDefinition definition;
     definition.inertial_frame = runtime_definition.inertial_frame;
     definition.algorithm = runtime_definition.algorithm;
     definition.aerodynamics =
-        invocations.aerodynamic_model->definition();
-    definition.force_moment_closure =
-        invocations.force_moment_closure_model->definition();
+        queries.aerodynamic.prepared_model->definition();
+    definition.force_moment_closure.body_frame = input.context.body_frame;
+    definition.force_moment_closure.clock_domain =
+        input.context.clock_domain;
+    definition.force_moment_closure.configuration_revision =
+        input.context.configuration_revision;
+    definition.force_moment_closure.numerical_policy =
+        runtime_definition.algorithm.numerical_policy;
     if (const auto validation = validate_contexts(definition, input)) {
         return failure(validation->status, validation->detail);
     }
@@ -1493,10 +1514,9 @@ evaluate_rigid_frozen_form(
     approximate = approximate || approximate_status(inertia_check.status());
 
     const auto air_lookup = compute_air_lookup(
-        definition, *invocations.aerodynamic_model,
-        invocations.aerodynamic_query,
-        invocations.aerodynamic_result_binder,
-        input.committed_state, input.environment);
+        definition, *queries.aerodynamic.prepared_model,
+        queries.aerodynamic.callable, input.committed_state,
+        input.environment);
     if (!air_lookup.has_value()) {
         return failure(air_lookup.status(), air_lookup.evidence().detail,
                        flags | air_lookup.evidence().flags);
@@ -1531,12 +1551,11 @@ evaluate_rigid_frozen_form(
 
     AppliedBodyWrenchInput aerodynamic_wrench;
     aerodynamic_wrench.context = {
-        SampleContext{
-            definition.force_moment_closure.body_frame,
-            definition.force_moment_closure.clock_domain,
-            input.context.interval_start,
-            definition.force_moment_closure.configuration_revision,
-            input.context.quality},
+        SampleContext{input.context.body_frame,
+                      input.context.clock_domain,
+                      input.context.interval_start,
+                      input.context.configuration_revision,
+                      input.context.quality},
         gnc::contracts::HalfOpenValidityInterval{
             input.context.interval_start, input.context.interval_end}};
     aerodynamic_wrench.source_id = definition.aerodynamics.source_id;
@@ -1551,37 +1570,94 @@ evaluate_rigid_frozen_form(
         input.mass_properties.body_origin_to_center_of_mass;
     closure_input.contributions = {aerodynamic_wrench,
                                    input.supplied_wrench};
-    const auto closure = invocations.force_moment_closure(
-        *invocations.force_moment_closure_model, closure_input);
+    NumericalEvidence evidence = product_evidence(
+        kRigidFrozenFormKernelIdentity, "frozen-form-preparation", flags);
+    evidence.evaluations = air_lookup.evidence().evaluations;
+    evidence.last_step = definition.algorithm.fixed_step_seconds;
+    return NumericalOutcome<
+        RigidFrozenFormPreparationInvocationEvaluation>::with_value(
+            approximate ? NumericalStatus::Approximate
+                        : NumericalStatus::Success,
+            RigidFrozenFormPreparationInvocationEvaluation{
+                RigidFrozenFormPreparationEvaluation{
+                    RigidFrozenFormPreparationOutput{
+                        input.environment, std::move(closure_input)},
+                    RigidFrozenFormPreparationTelemetry{
+                        air, lookup,
+                        air_lookup.value().aerodynamic_query}},
+                RigidFrozenFormInvocationResults{
+                    air_lookup.value().aerodynamic_response}},
+            evidence);
+}
+
+NumericalOutcome<RigidFrozenFormInvocationEvaluation>
+evaluate_rigid_frozen_form(
+    const RigidFrozenFormRuntimeDefinition& runtime_definition,
+    const RigidFrozenFormInvocationSet& invocations,
+    const RigidStepInput& input) {
+    const auto failure = [](NumericalStatus status,
+                            std::string_view detail,
+                            NumericalFlags flags = 0U) {
+        return NumericalOutcome<RigidFrozenFormInvocationEvaluation>::failure(
+            status,
+            product_evidence(kRigidFrozenFormKernelIdentity,
+                             detail, flags));
+    };
+    if (invocations.closure.prepared_model == nullptr ||
+        invocations.closure.callable == nullptr) {
+        return failure(NumericalStatus::DomainError,
+                       "closure-invocation");
+    }
+    const auto prepared = prepare_rigid_frozen_form_closure_request(
+        runtime_definition,
+        RigidFrozenFormQuerySet{invocations.aerodynamic}, input);
+    if (!prepared.has_value()) {
+        return failure(prepared.status(), prepared.evidence().detail,
+                       prepared.evidence().flags);
+    }
+    const auto closure = invocations.closure.callable(
+        *invocations.closure.prepared_model,
+        prepared.value().evaluation.output.closure_request);
     if (!closure.has_value()) {
         return failure(closure.status(), closure.evidence().detail,
-                       flags | closure.evidence().flags);
+                       prepared.evidence().flags |
+                           closure.evidence().flags);
     }
-    flags |= closure.evidence().flags;
-    approximate = approximate || approximate_status(closure.status());
-    const auto form_input = invocations.closure_result_binder(
-        closure.value().output);
+    const NumericalFlags flags = prepared.evidence().flags |
+                                 closure.evidence().flags;
 
     NumericalEvidence evidence = product_evidence(
         kRigidFrozenFormKernelIdentity, "frozen-form", flags);
-    evidence.evaluations = air_lookup.evidence().evaluations +
+    evidence.evaluations = prepared.evidence().evaluations +
                            closure.evidence().evaluations;
-    evidence.last_step = definition.algorithm.fixed_step_seconds;
+    evidence.last_step = runtime_definition.algorithm.fixed_step_seconds;
     return NumericalOutcome<RigidFrozenFormInvocationEvaluation>::with_value(
-        approximate ? NumericalStatus::Approximate
-                    : NumericalStatus::Success,
+        approximate_status(prepared.status()) ||
+                approximate_status(closure.status())
+            ? NumericalStatus::Approximate
+            : NumericalStatus::Success,
         RigidFrozenFormInvocationEvaluation{
             RigidFrozenFormEvaluation{
-                RigidFrozenFormOutput{form_input.form_input()},
+                RigidFrozenFormOutput{closure.value().output.form_input()},
                 RigidFrozenFormTelemetry{
-                    air, lookup, air_lookup.value().aerodynamic_query,
+                    prepared.value().evaluation.telemetry.air_data,
+                    prepared.value().evaluation.telemetry.aerodynamic_lookup,
+                    prepared.value().evaluation.telemetry.aerodynamic_query,
                     closure.value()}},
-            RigidFrozenFormInvocationResults{
-                air_lookup.value().aerodynamic_response}},
+            prepared.value().invocation_results},
         evidence);
 }
 
 } // namespace
+
+NumericalOutcome<RigidFrozenFormPreparationInvocationEvaluation>
+RigidFrozenFormKernel::prepare_closure_request(
+    const RigidFrozenFormRuntimeDefinition& definition,
+    const RigidFrozenFormQuerySet& queries,
+    const RigidStepInput& input) {
+    return prepare_rigid_frozen_form_closure_request(
+        definition, queries, input);
+}
 
 NumericalOutcome<RigidFrozenFormEvaluation>
 RigidFrozenFormKernel::evaluate(const PreparedRigidStepModel& model,
@@ -1591,12 +1667,12 @@ RigidFrozenFormKernel::evaluate(const PreparedRigidStepModel& model,
             model.definition().inertial_frame,
             model.definition().algorithm},
         RigidFrozenFormInvocationSet{
-            &model.aerodynamic_table_model(),
-            &AerodynamicTableQueryKernel::evaluate,
-            &AerodynamicTableResultBinder::bind,
-            &model.force_moment_closure_model(),
-            &ForceMomentClosureKernel::evaluate,
-            &ForceMomentClosureResultBinder::bind},
+            BoundAerodynamicTableQuery{
+                0U, 0U, 0U, &model.aerodynamic_table_model(),
+                &AerodynamicTableQueryKernel::evaluate},
+            BoundForceMomentClosure{
+                0U, 0U, 0U, &model.force_moment_closure_model(),
+                &ForceMomentClosureKernel::evaluate}},
         input);
 }
 

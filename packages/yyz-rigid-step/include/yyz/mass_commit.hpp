@@ -131,6 +131,26 @@ inline constexpr std::string_view
         "gnc.contract.yyz.committed-rigid-mass-sequence@1";
 inline constexpr std::string_view kCommittedMissionResultContractIdentity =
     "gnc.contract.yyz.committed-mission-result@1";
+inline constexpr std::string_view
+    kControlledRigidBoundaryPreparationContractIdentity =
+        "gnc.contract.yyz.controlled-rigid-boundary-preparation@1";
+inline constexpr std::string_view kMassPropertiesLayoutIdentity =
+    "gnc.layout.yyz.mass-properties@1";
+inline constexpr std::string_view kGuidanceOutputLayoutIdentity =
+    "gnc.layout.yyz.altitude-pitch-guidance-output@1";
+inline constexpr std::string_view kControllerOutputLayoutIdentity =
+    "gnc.layout.yyz.pitch-moment-controller-output@1";
+inline constexpr std::string_view kActuatorOutputLayoutIdentity =
+    "gnc.layout.yyz.ideal-body-moment-actuator-output@1";
+inline constexpr std::string_view kPropulsionWrenchLayoutIdentity =
+    "gnc.layout.yyz.supplied-propulsion-body-wrench@1";
+inline constexpr std::string_view kMassFlowLayoutIdentity =
+    "gnc.layout.yyz.mass-flow-interval@1";
+inline constexpr std::string_view kMissionResultLayoutIdentity =
+    "gnc.layout.yyz.committed-mission-result@1";
+inline constexpr std::string_view
+    kControlledRigidBoundaryPreparationLayoutIdentity =
+        "gnc.layout.yyz.controlled-rigid-boundary-preparation@1";
 inline constexpr std::uint32_t kCommittedMissionHistoryDepth = 3U;
 inline constexpr std::string_view kCommittedMissionRigidHistoryMemberId =
     "rigid_states";
@@ -244,6 +264,37 @@ inline constexpr gnc::foundation::AlgorithmIdentity
     kCommittedMissionResultRuntimeCellFactoryIdentity{
         "gnc.package.yyz.committed-mission-result.runtime-cell-factory@1",
         "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity kMassStateCodecIdentity{
+    "gnc.package.yyz.mass.scalar-burn.state-codec@1", "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
+    kMassPropertiesSlotCodecIdentity{
+        "gnc.package.yyz.mass-properties.slot-codec@1", "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
+    kGuidanceOutputSlotCodecIdentity{
+        "gnc.package.yyz.altitude-pitch-guidance-output.slot-codec@1",
+        "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
+    kControllerOutputSlotCodecIdentity{
+        "gnc.package.yyz.pitch-moment-controller-output.slot-codec@1",
+        "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
+    kActuatorOutputSlotCodecIdentity{
+        "gnc.package.yyz.ideal-body-moment-actuator-output.slot-codec@1",
+        "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
+    kPropulsionWrenchSlotCodecIdentity{
+        "gnc.package.yyz.supplied-propulsion-body-wrench.slot-codec@1",
+        "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
+    kMassFlowSlotCodecIdentity{
+        "gnc.package.yyz.mass-flow-interval.slot-codec@1", "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
+    kMissionResultSlotCodecIdentity{
+        "gnc.package.yyz.committed-mission-result.slot-codec@1", "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
+    kControlledRigidBoundaryPreparationSlotCodecIdentity{
+        "gnc.package.yyz.controlled-rigid-boundary-preparation.slot-codec@1",
+        "0.1.0"};
 
 inline constexpr std::string_view kMassInitialStateCallShapeIdentity =
     "gnc.cpp-call-shape.yyz.mass.initial-state@1";
@@ -311,6 +362,25 @@ inline constexpr std::string_view
 inline constexpr std::string_view
     kCommittedMissionResultRuntimeCellFactoryCallShapeIdentity =
         "gnc.cpp-call-shape.yyz.evaluator.committed-mission.runtime-cell-factory@1";
+inline constexpr std::string_view kMassStateCodecCallShapeIdentity =
+    "gnc.cpp-call-shape.yyz.mass.state-codec.getter@1";
+inline constexpr std::string_view kMassPropertiesSlotCodecCallShapeIdentity =
+    "gnc.cpp-call-shape.yyz.mass-properties.slot-codec.getter@1";
+inline constexpr std::string_view kGuidanceOutputSlotCodecCallShapeIdentity =
+    "gnc.cpp-call-shape.yyz.guidance-output.slot-codec.getter@1";
+inline constexpr std::string_view kControllerOutputSlotCodecCallShapeIdentity =
+    "gnc.cpp-call-shape.yyz.controller-output.slot-codec.getter@1";
+inline constexpr std::string_view kActuatorOutputSlotCodecCallShapeIdentity =
+    "gnc.cpp-call-shape.yyz.actuator-output.slot-codec.getter@1";
+inline constexpr std::string_view kPropulsionWrenchSlotCodecCallShapeIdentity =
+    "gnc.cpp-call-shape.yyz.propulsion-wrench.slot-codec.getter@1";
+inline constexpr std::string_view kMassFlowSlotCodecCallShapeIdentity =
+    "gnc.cpp-call-shape.yyz.mass-flow.slot-codec.getter@1";
+inline constexpr std::string_view kMissionResultSlotCodecCallShapeIdentity =
+    "gnc.cpp-call-shape.yyz.mission-result.slot-codec.getter@1";
+inline constexpr std::string_view
+    kControlledRigidBoundaryPreparationSlotCodecCallShapeIdentity =
+        "gnc.cpp-call-shape.yyz.controlled-rigid-preparation.slot-codec.getter@1";
 
 struct ScalarBurnMassDefinition {
     std::string model_id;
@@ -715,11 +785,28 @@ struct ControlledRigidBoundaryResolvedEnvironmentInput {
 };
 
 struct ControlledRigidBoundaryInvocationSet {
-    const PreparedUniformEnvironmentModel* environment_model = nullptr;
-    UniformEnvironmentQueryEntry environment_query = nullptr;
-    UniformEnvironmentResultBinderEntry environment_result_binder = nullptr;
+    gnc::model_sdk::BoundQueryHandle<
+        PreparedUniformEnvironmentModel,
+        UniformEnvironmentQueryEntry> environment;
     RigidFrozenFormInvocationSet frozen_form;
 };
+
+struct ControlledRigidBoundaryPreparationOutput {
+    EnvironmentInput environment_response;
+    AerodynamicTableQueryOutput aerodynamic_coefficients;
+    ForceMomentClosureInput closure_request;
+};
+
+struct ControlledRigidBoundaryPreparationTelemetry {
+    AppliedBodyWrenchInput controlled_wrench;
+    UniformEnvironmentQueryTelemetry environment_query;
+    RigidFrozenFormPreparationTelemetry frozen_form;
+};
+
+using ControlledRigidBoundaryPreparationEvaluation =
+    gnc::model_sdk::AlgorithmEvaluation<
+        ControlledRigidBoundaryPreparationOutput,
+        ControlledRigidBoundaryPreparationTelemetry>;
 
 struct ControlledRigidBoundaryEvaluationOutput {
     AppliedBodyWrenchInput controlled_wrench;
@@ -753,6 +840,13 @@ struct ControlledRigidBoundaryInvocationEvaluation {
 
 class ControlledRigidBoundaryEvaluationKernel {
   public:
+    [[nodiscard]] static gnc::foundation::NumericalOutcome<
+        ControlledRigidBoundaryPreparationEvaluation>
+    prepare_for_integration(
+        const ControlledRigidBoundaryEvaluationDefinition& definition,
+        const ControlledRigidBoundaryInvocationSet& invocations,
+        const ControlledRigidBoundaryEvaluationInput& input);
+
     [[nodiscard]] static gnc::foundation::NumericalOutcome<
         ControlledRigidBoundaryEvaluation>
     evaluate(const ControlledRigidBoundaryEvaluationDefinition& definition,
@@ -1025,7 +1119,7 @@ using ControlledRigidBoundaryCall =
         const ControlledRigidBoundaryEvaluationInput&);
 using ControlledRigidBoundaryRuntimeCall =
     gnc::foundation::NumericalOutcome<
-        ControlledRigidBoundaryInvocationEvaluation> (*)(
+        ControlledRigidBoundaryPreparationEvaluation> (*)(
         const ControlledRigidBoundaryEvaluationDefinition&,
         const ControlledRigidBoundaryInvocationSet&,
         const ControlledRigidBoundaryEvaluationInput&);
@@ -1059,24 +1153,19 @@ using CommittedMissionHistoryEvaluationCall =
 // package facts. R2 only exact-links the factory entries without invoking
 // them.
 struct ControlledRigidRuntimeCellBindings {
-    std::uint32_t runtime_component_handle = 0U;
     std::uint32_t state_block_handle = 0U;
     std::uint32_t publish_projection_callsite_handle = 0U;
     std::uint32_t boundary_evaluation_callsite_handle = 0U;
     std::uint32_t derivative_evaluation_callsite_handle = 0U;
-    std::uint32_t observation_output_slot_handle = 0U;
+    gnc::model_sdk::CompiledOutputWriter<CommittedRigidObservation>
+        observation_output;
+    gnc::model_sdk::CompiledOutputWriter<
+        ControlledRigidBoundaryPreparationOutput>
+        boundary_preparation_output;
     std::uint32_t mass_properties_input_slot_handle = 0U;
     std::uint32_t propulsion_body_wrench_input_slot_handle = 0U;
     std::uint32_t actuator_output_input_slot_handle = 0U;
-    std::uint32_t environment_result_slot_handle = 0U;
-    std::uint32_t aerodynamic_result_slot_handle = 0U;
     std::uint32_t held_form_result_slot_handle = 0U;
-    // The three package-authored invocation roles are named explicitly. The
-    // Image additionally freezes their descriptor ordinals (environment=0,
-    // aerodynamic=1, closure=2), so R3 never discovers this mapping by name.
-    std::uint32_t environment_invocation_handle = 0U;
-    std::uint32_t aerodynamic_invocation_handle = 0U;
-    std::uint32_t closure_invocation_handle = 0U;
     RigidPublishProjectionCall publish_projection = nullptr;
     ControlledRigidBoundaryRuntimeCall boundary_evaluation = nullptr;
     RigidDerivativeCall derivative_evaluation = nullptr;
@@ -1085,25 +1174,29 @@ struct ControlledRigidRuntimeCellBindings {
 
 struct ControlledRigidRuntimeCell {
     const ControlledRigidBoundaryEvaluationDefinition definition;
+    const gnc::model_sdk::RuntimeCellFactoryContext context;
     const ControlledRigidRuntimeCellBindings bindings;
 };
 
 [[nodiscard]] gnc::foundation::NumericalOutcome<ControlledRigidRuntimeCell>
 create_controlled_rigid_runtime_cell(
     const ControlledRigidBoundaryEvaluationDefinition& definition,
+    const gnc::model_sdk::RuntimeCellFactoryContext& context,
     const ControlledRigidRuntimeCellBindings& bindings);
 
 using ControlledRigidRuntimeCellFactoryCall =
-    gnc::foundation::NumericalOutcome<ControlledRigidRuntimeCell> (*)(
-        const ControlledRigidBoundaryEvaluationDefinition&,
-        const ControlledRigidRuntimeCellBindings&);
+    gnc::model_sdk::RuntimeCellFactoryCall<
+        ControlledRigidRuntimeCell,
+        ControlledRigidBoundaryEvaluationDefinition,
+        ControlledRigidRuntimeCellBindings>;
 
 struct ScalarBurnMassRuntimeCellBindings {
-    std::uint32_t runtime_component_handle = 0U;
     std::uint32_t state_block_handle = 0U;
     std::uint32_t publish_projection_callsite_handle = 0U;
     std::uint32_t interval_evolution_callsite_handle = 0U;
-    std::uint32_t mass_properties_output_slot_handle = 0U;
+    gnc::model_sdk::CompiledOutputWriter<MassPropertiesInput>
+        mass_properties_output;
+    gnc::model_sdk::OutputWriterTokenId candidate_state_writer;
     std::uint32_t mass_flow_input_slot_handle = 0U;
     MassPublishProjectionCall publish_projection = nullptr;
     MassIntervalEvolutionCall interval_evolution = nullptr;
@@ -1111,29 +1204,32 @@ struct ScalarBurnMassRuntimeCellBindings {
 
 struct ScalarBurnMassRuntimeCell {
     const ScalarBurnMassDefinition definition;
+    const gnc::model_sdk::RuntimeCellFactoryContext context;
     const ScalarBurnMassRuntimeCellBindings bindings;
 };
 
 [[nodiscard]] gnc::foundation::NumericalOutcome<ScalarBurnMassRuntimeCell>
 create_scalar_burn_mass_runtime_cell(
     const ScalarBurnMassDefinition& definition,
+    const gnc::model_sdk::RuntimeCellFactoryContext& context,
     const ScalarBurnMassRuntimeCellBindings& bindings);
 
 using ScalarBurnMassRuntimeCellFactoryCall =
-    gnc::foundation::NumericalOutcome<ScalarBurnMassRuntimeCell> (*)(
-        const ScalarBurnMassDefinition&,
-        const ScalarBurnMassRuntimeCellBindings&);
+    gnc::model_sdk::RuntimeCellFactoryCall<
+        ScalarBurnMassRuntimeCell, ScalarBurnMassDefinition,
+        ScalarBurnMassRuntimeCellBindings>;
 
 struct AltitudePitchGuidanceRuntimeCellBindings {
-    std::uint32_t runtime_component_handle = 0U;
     std::uint32_t boundary_evaluation_callsite_handle = 0U;
     std::uint32_t observation_input_slot_handle = 0U;
-    std::uint32_t guidance_output_slot_handle = 0U;
+    gnc::model_sdk::CompiledOutputWriter<AltitudePitchGuidanceOutput>
+        guidance_output;
     AltitudePitchGuidanceCall boundary_evaluation = nullptr;
 };
 
 struct AltitudePitchGuidanceRuntimeCell {
     const AltitudePitchGuidanceDefinition definition;
+    const gnc::model_sdk::RuntimeCellFactoryContext context;
     const AltitudePitchGuidanceRuntimeCellBindings bindings;
 };
 
@@ -1141,24 +1237,26 @@ struct AltitudePitchGuidanceRuntimeCell {
     AltitudePitchGuidanceRuntimeCell>
 create_altitude_pitch_guidance_runtime_cell(
     const AltitudePitchGuidanceDefinition& definition,
+    const gnc::model_sdk::RuntimeCellFactoryContext& context,
     const AltitudePitchGuidanceRuntimeCellBindings& bindings);
 
 using AltitudePitchGuidanceRuntimeCellFactoryCall =
-    gnc::foundation::NumericalOutcome<
-        AltitudePitchGuidanceRuntimeCell> (*)(
-        const AltitudePitchGuidanceDefinition&,
-        const AltitudePitchGuidanceRuntimeCellBindings&);
+    gnc::model_sdk::RuntimeCellFactoryCall<
+        AltitudePitchGuidanceRuntimeCell,
+        AltitudePitchGuidanceDefinition,
+        AltitudePitchGuidanceRuntimeCellBindings>;
 
 struct PitchMomentControllerRuntimeCellBindings {
-    std::uint32_t runtime_component_handle = 0U;
     std::uint32_t boundary_evaluation_callsite_handle = 0U;
     std::uint32_t guidance_input_slot_handle = 0U;
-    std::uint32_t controller_output_slot_handle = 0U;
+    gnc::model_sdk::CompiledOutputWriter<PitchMomentControllerOutput>
+        controller_output;
     PitchMomentControllerCall boundary_evaluation = nullptr;
 };
 
 struct PitchMomentControllerRuntimeCell {
     const PitchMomentControllerDefinition definition;
+    const gnc::model_sdk::RuntimeCellFactoryContext context;
     const PitchMomentControllerRuntimeCellBindings bindings;
 };
 
@@ -1166,24 +1264,26 @@ struct PitchMomentControllerRuntimeCell {
     PitchMomentControllerRuntimeCell>
 create_pitch_moment_controller_runtime_cell(
     const PitchMomentControllerDefinition& definition,
+    const gnc::model_sdk::RuntimeCellFactoryContext& context,
     const PitchMomentControllerRuntimeCellBindings& bindings);
 
 using PitchMomentControllerRuntimeCellFactoryCall =
-    gnc::foundation::NumericalOutcome<
-        PitchMomentControllerRuntimeCell> (*)(
-        const PitchMomentControllerDefinition&,
-        const PitchMomentControllerRuntimeCellBindings&);
+    gnc::model_sdk::RuntimeCellFactoryCall<
+        PitchMomentControllerRuntimeCell,
+        PitchMomentControllerDefinition,
+        PitchMomentControllerRuntimeCellBindings>;
 
 struct IdealBodyMomentActuatorRuntimeCellBindings {
-    std::uint32_t runtime_component_handle = 0U;
     std::uint32_t boundary_evaluation_callsite_handle = 0U;
     std::uint32_t controller_input_slot_handle = 0U;
-    std::uint32_t actuator_output_slot_handle = 0U;
+    gnc::model_sdk::CompiledOutputWriter<IdealBodyMomentActuatorOutput>
+        actuator_output;
     IdealBodyMomentActuatorCall boundary_evaluation = nullptr;
 };
 
 struct IdealBodyMomentActuatorRuntimeCell {
     const IdealBodyMomentActuatorDefinition definition;
+    const gnc::model_sdk::RuntimeCellFactoryContext context;
     const IdealBodyMomentActuatorRuntimeCellBindings bindings;
 };
 
@@ -1191,24 +1291,27 @@ struct IdealBodyMomentActuatorRuntimeCell {
     IdealBodyMomentActuatorRuntimeCell>
 create_ideal_body_moment_actuator_runtime_cell(
     const IdealBodyMomentActuatorDefinition& definition,
+    const gnc::model_sdk::RuntimeCellFactoryContext& context,
     const IdealBodyMomentActuatorRuntimeCellBindings& bindings);
 
 using IdealBodyMomentActuatorRuntimeCellFactoryCall =
-    gnc::foundation::NumericalOutcome<
-        IdealBodyMomentActuatorRuntimeCell> (*)(
-        const IdealBodyMomentActuatorDefinition&,
-        const IdealBodyMomentActuatorRuntimeCellBindings&);
+    gnc::model_sdk::RuntimeCellFactoryCall<
+        IdealBodyMomentActuatorRuntimeCell,
+        IdealBodyMomentActuatorDefinition,
+        IdealBodyMomentActuatorRuntimeCellBindings>;
 
 struct FixedSuppliedPropulsionRuntimeCellBindings {
-    std::uint32_t runtime_component_handle = 0U;
     std::uint32_t boundary_evaluation_callsite_handle = 0U;
-    std::uint32_t propulsion_wrench_output_slot_handle = 0U;
-    std::uint32_t mass_flow_output_slot_handle = 0U;
+    gnc::model_sdk::CompiledOutputWriter<SuppliedPropulsionBodyWrench>
+        propulsion_wrench_output;
+    gnc::model_sdk::CompiledOutputWriter<MassFlowIntervalInput>
+        mass_flow_output;
     FixedSuppliedPropulsionCall boundary_evaluation = nullptr;
 };
 
 struct FixedSuppliedPropulsionRuntimeCell {
     const FixedSuppliedPropulsionDefinition definition;
+    const gnc::model_sdk::RuntimeCellFactoryContext context;
     const FixedSuppliedPropulsionRuntimeCellBindings bindings;
 };
 
@@ -1216,24 +1319,26 @@ struct FixedSuppliedPropulsionRuntimeCell {
     FixedSuppliedPropulsionRuntimeCell>
 create_fixed_supplied_propulsion_runtime_cell(
     const FixedSuppliedPropulsionDefinition& definition,
+    const gnc::model_sdk::RuntimeCellFactoryContext& context,
     const FixedSuppliedPropulsionRuntimeCellBindings& bindings);
 
 using FixedSuppliedPropulsionRuntimeCellFactoryCall =
-    gnc::foundation::NumericalOutcome<
-        FixedSuppliedPropulsionRuntimeCell> (*)(
-        const FixedSuppliedPropulsionDefinition&,
-        const FixedSuppliedPropulsionRuntimeCellBindings&);
+    gnc::model_sdk::RuntimeCellFactoryCall<
+        FixedSuppliedPropulsionRuntimeCell,
+        FixedSuppliedPropulsionDefinition,
+        FixedSuppliedPropulsionRuntimeCellBindings>;
 
 struct CommittedMissionResultRuntimeCellBindings {
-    std::uint32_t runtime_component_handle = 0U;
     std::uint32_t boundary_evaluation_callsite_handle = 0U;
     std::uint32_t committed_history_handle = 0U;
-    std::uint32_t mission_result_output_slot_handle = 0U;
+    gnc::model_sdk::CompiledOutputWriter<CommittedMissionResultOutput>
+        mission_result_output;
     CommittedMissionHistoryEvaluationCall boundary_evaluation = nullptr;
 };
 
 struct CommittedMissionResultRuntimeCell {
     const CommittedMissionResultDefinition definition;
+    const gnc::model_sdk::RuntimeCellFactoryContext context;
     const CommittedMissionResultRuntimeCellBindings bindings;
 };
 
@@ -1241,12 +1346,50 @@ struct CommittedMissionResultRuntimeCell {
     CommittedMissionResultRuntimeCell>
 create_committed_mission_result_runtime_cell(
     const CommittedMissionResultDefinition& definition,
+    const gnc::model_sdk::RuntimeCellFactoryContext& context,
     const CommittedMissionResultRuntimeCellBindings& bindings);
 
 using CommittedMissionResultRuntimeCellFactoryCall =
-    gnc::foundation::NumericalOutcome<
-        CommittedMissionResultRuntimeCell> (*)(
-        const CommittedMissionResultDefinition&,
-        const CommittedMissionResultRuntimeCellBindings&);
+    gnc::model_sdk::RuntimeCellFactoryCall<
+        CommittedMissionResultRuntimeCell,
+        CommittedMissionResultDefinition,
+        CommittedMissionResultRuntimeCellBindings>;
+
+using MassStateCloneCall = MassState (*)(const MassState&);
+using MassStateValidateCall = bool (*)(const MassState&) noexcept;
+using MassStateSwapCall = void (*)(MassState&, MassState&) noexcept;
+using MassStateCodec = gnc::model_sdk::InProcessStateCodec<
+    MassStateCloneCall, MassStateValidateCall,
+    MassStateValidateCall, MassStateValidateCall,
+    MassStateSwapCall, MassPublishProjectionCall>;
+using MassStateCodecGetter =
+    gnc::model_sdk::InProcessCodecGetter<MassStateCodec>;
+
+[[nodiscard]] MassState clone_mass_state(const MassState& state);
+[[nodiscard]] bool validate_mass_state(const MassState& state) noexcept;
+[[nodiscard]] bool validate_mass_state_finite(
+    const MassState& state) noexcept;
+[[nodiscard]] bool validate_mass_state_invariants(
+    const MassState& state) noexcept;
+void swap_mass_state(MassState& lhs, MassState& rhs) noexcept;
+[[nodiscard]] const MassStateCodec& mass_state_codec() noexcept;
+
+using MassPropertiesSlotCodec =
+    gnc::model_sdk::TypedInProcessSlotCodec<MassPropertiesInput>;
+using GuidanceOutputSlotCodec =
+    gnc::model_sdk::TypedInProcessSlotCodec<AltitudePitchGuidanceOutput>;
+using ControllerOutputSlotCodec =
+    gnc::model_sdk::TypedInProcessSlotCodec<PitchMomentControllerOutput>;
+using ActuatorOutputSlotCodec =
+    gnc::model_sdk::TypedInProcessSlotCodec<IdealBodyMomentActuatorOutput>;
+using PropulsionWrenchSlotCodec =
+    gnc::model_sdk::TypedInProcessSlotCodec<SuppliedPropulsionBodyWrench>;
+using MassFlowSlotCodec =
+    gnc::model_sdk::TypedInProcessSlotCodec<MassFlowIntervalInput>;
+using MissionResultSlotCodec =
+    gnc::model_sdk::TypedInProcessSlotCodec<CommittedMissionResultOutput>;
+using ControlledRigidBoundaryPreparationSlotCodec =
+    gnc::model_sdk::TypedInProcessSlotCodec<
+        ControlledRigidBoundaryPreparationOutput>;
 
 } // namespace gnc::packages::yyz
