@@ -40,6 +40,11 @@ target_link_libraries(compiler INTERFACE foundation contracts model_sdk)
 gnc_add_interface_module(kernel)
 target_link_libraries(kernel INTERFACE foundation contracts)
 
+add_library(kernel_session STATIC framework/src/kernel/session.cpp)
+target_link_libraries(kernel_session PUBLIC kernel)
+gnc_enable_warnings(kernel_session)
+add_library(gnc::kernel_session ALIAS kernel_session)
+
 gnc_add_interface_module(evidence)
 target_link_libraries(evidence INTERFACE foundation contracts)
 
