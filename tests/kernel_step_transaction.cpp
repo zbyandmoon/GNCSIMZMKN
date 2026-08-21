@@ -417,7 +417,8 @@ template <std::size_t Size>
 
 [[nodiscard]] bool exact_seal_metadata(
     const std::vector<gnc::kernel::SessionCommittedOutputInfo>& lhs,
-    const std::vector<gnc::kernel::SessionCommittedOutputInfo>& rhs) noexcept {
+    const std::vector<gnc::kernel::SessionCommittedOutputInfo>& rhs,
+    bool include_frame_coordinates = true) noexcept {
     if (lhs.size() != rhs.size()) return false;
     for (std::size_t index = 0U; index < lhs.size(); ++index) {
         const auto& left = lhs[index];
@@ -425,8 +426,9 @@ template <std::size_t Size>
         if (left.slot_handle != right.slot_handle ||
             left.codec_entry_handle != right.codec_entry_handle ||
             left.present != right.present ||
-            left.generation != right.generation ||
-            left.sequence != right.sequence ||
+            (include_frame_coordinates &&
+             (left.generation != right.generation ||
+              left.sequence != right.sequence)) ||
             left.sample_tick != right.sample_tick ||
             !exact_double(left.sample_time_seconds,
                           right.sample_time_seconds) ||
@@ -436,6 +438,26 @@ template <std::size_t Size>
                           right.interval_end_seconds) ||
             left.quality != right.quality ||
             left.terminal_result != right.terminal_result) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool exactly_same(
+    const std::vector<gnc::kernel::SessionCommittedHistoryInfo>& lhs,
+    const std::vector<gnc::kernel::SessionCommittedHistoryInfo>& rhs)
+    noexcept {
+    if (lhs.size() != rhs.size()) return false;
+    for (std::size_t index = 0U; index < lhs.size(); ++index) {
+        const auto& left = lhs[index];
+        const auto& right = rhs[index];
+        if (left.history_handle != right.history_handle ||
+            left.history_depth != right.history_depth ||
+            left.sample_count != right.sample_count ||
+            left.member_count != right.member_count ||
+            left.first_tick != right.first_tick ||
+            left.last_tick != right.last_tick) {
             return false;
         }
     }
@@ -452,8 +474,10 @@ template <typename Value, typename Equal>
 
 [[nodiscard]] bool exact_sealed_observation_snapshot(
     const SealedObservationSnapshot& lhs,
-    const SealedObservationSnapshot& rhs) noexcept {
-    return exact_seal_metadata(lhs.seals, rhs.seals) &&
+    const SealedObservationSnapshot& rhs,
+    bool include_frame_coordinates = true) noexcept {
+    return exact_seal_metadata(lhs.seals, rhs.seals,
+                               include_frame_coordinates) &&
            exact_optional_payload(lhs.rigid_observation,
                                   rhs.rigid_observation,
                                   exact_rigid_observation) &&
@@ -546,6 +570,16 @@ void require_sealed_boundary(const gnc::kernel::Session& session,
     return result;
 }
 
+[[nodiscard]] SealedObservationSnapshot sealed_snapshot(
+    const gnc::kernel::Session& session) {
+    SealedObservationSnapshot result;
+    const auto read = gnc::tests::ref_yyz::
+        read_sealed_observation_snapshot_for_qualification(session, result);
+    require(static_cast<bool>(read),
+            "typed sealed-output qualification read failed");
+    return result;
+}
+
 void require_mission_oracle(const MissionResultProbe& value) {
     require(value.present && value.completed && value.initial_tick == 0 &&
                 value.final_tick == 2 && near(value.final_time_seconds, 0.2) &&
@@ -604,7 +638,8 @@ void require_mission_oracle(const MissionResultProbe& value) {
         lhs.plan_id != rhs.plan_id || lhs.mission_id != rhs.mission_id ||
         lhs.source_semantic_hash != rhs.source_semantic_hash ||
         lhs.descriptor_semantic_hash != rhs.descriptor_semantic_hash ||
-        lhs.initialization_committed != rhs.initialization_committed ||
+        lhs.run_start_kind != rhs.run_start_kind ||
+        lhs.run_start_committed != rhs.run_start_committed ||
         lhs.final_status != rhs.final_status ||
         lhs.validity != rhs.validity ||
         lhs.initial_tick != rhs.initial_tick ||
@@ -692,6 +727,8 @@ void require_mission_oracle(const MissionResultProbe& value) {
         return RuntimeDiagnosticCode::None;
     case SessionError::EmptyRunId:
         return RuntimeDiagnosticCode::InitializationRequestInvalid;
+    case SessionError::DuplicateRunId:
+        return RuntimeDiagnosticCode::ResetRequestInvalid;
     case SessionError::RunBindingMismatch:
         return RuntimeDiagnosticCode::ImageBindingMismatch;
     case SessionError::NullImage:
@@ -710,6 +747,10 @@ void require_mission_oracle(const MissionResultProbe& value) {
     case SessionError::SlotConstructionFailed:
     case SessionError::InitialStateFailed:
         return RuntimeDiagnosticCode::MaterializationFailed;
+    case SessionError::ResetStateFailed:
+        return RuntimeDiagnosticCode::ResetStateRebuildFailed;
+    case SessionError::ResetPrecommitFailed:
+        return RuntimeDiagnosticCode::ResetPrecommitFailed;
     case SessionError::InvalidSchedule:
         return RuntimeDiagnosticCode::ScheduleFailed;
     case SessionError::FrameAlreadyOpen:
@@ -760,6 +801,12 @@ void require_mission_oracle(const MissionResultProbe& value) {
 [[nodiscard]] gnc::kernel::InitializationRequest initialization_request(
     const ExecutionPlanImage& image,
     std::string run_id = "run:step-transaction") {
+    return {gnc::kernel::RunId{std::move(run_id)},
+            gnc::kernel::exact_run_binding(image)};
+}
+
+[[nodiscard]] gnc::kernel::ResetRequest reset_request(
+    const ExecutionPlanImage& image, std::string run_id) {
     return {gnc::kernel::RunId{std::move(run_id)},
             gnc::kernel::exact_run_binding(image)};
 }
@@ -902,7 +949,9 @@ void verify_initialization_identity_and_commit(
     const auto* empty_outcome = created.session->run_outcome();
     require(empty_outcome != nullptr && empty_outcome->run_id.empty() &&
                 has_exact_image_binding(*empty_outcome, *image) &&
-                !empty_outcome->initialization_committed &&
+                empty_outcome->run_start_kind ==
+                    gnc::kernel::RunStartKind::Initialize &&
+                !empty_outcome->run_start_committed &&
                 empty_outcome->final_status ==
                     gnc::kernel::RunFinalStatus::Failed &&
                 empty_outcome->validity ==
@@ -1221,7 +1270,9 @@ void verify_complete_step_transactions(
                     image->source_semantic_hash() &&
                 completed_outcome->descriptor_semantic_hash ==
                     image->descriptor_semantic_hash() &&
-                completed_outcome->initialization_committed &&
+                completed_outcome->run_start_kind ==
+                    gnc::kernel::RunStartKind::Initialize &&
+                completed_outcome->run_start_committed &&
                 completed_outcome->final_status ==
                     gnc::kernel::RunFinalStatus::Completed &&
                 completed_outcome->validity ==
@@ -2018,6 +2069,577 @@ void verify_query_count_invariance(
             "discarded environment/aero queries changed committed state, termination, or a typed sealed payload");
 }
 
+void verify_completed_run_reset(
+    const std::shared_ptr<const ExecutionPlanImage>& image) {
+    auto bundle = initialize_session(
+        image, {}, "run:reset-sequence-0");
+    const auto opening_state = committed_probe(*bundle.session,
+                                               bundle.adapter);
+    const auto preparation_constructs =
+        bundle.adapter.trace->constructed_handles(
+            gnc::tests::ref_yyz::TraceObjectKind::Preparation);
+    const auto runtime_constructs =
+        bundle.adapter.trace->constructed_handles(
+            gnc::tests::ref_yyz::TraceObjectKind::RuntimeCell);
+    const auto preparation_count = bundle.session->preparation_count();
+    const auto runtime_count = bundle.session->runtime_cell_count();
+    const auto state_count = bundle.session->committed_state_count();
+
+    require(static_cast<bool>(bundle.session->run_to_terminal()),
+            "first reset qualification run failed");
+    const auto first_state = committed_probe(*bundle.session,
+                                             bundle.adapter);
+    const auto first_history = bundle.session->committed_histories();
+    const auto first_seal = sealed_snapshot(*bundle.session);
+    const auto first_result = mission_result_probe(*bundle.session,
+                                                   bundle.adapter);
+    const auto* first_outcome = bundle.session->run_outcome();
+    require(first_outcome != nullptr &&
+                first_outcome->run_sequence == 0U &&
+                first_outcome->run_start_kind ==
+                    gnc::kernel::RunStartKind::Initialize &&
+                first_outcome->run_start_committed &&
+                first_outcome->initial_committed_epoch == 0U &&
+                first_outcome->final_committed_epoch == 3U &&
+                bundle.session->run_outcome_for_sequence(0U) ==
+                    first_outcome,
+            "first completed outcome is not queryable by sequence");
+    const auto first_outcome_copy = *first_outcome;
+
+    const auto reset_one = bundle.session->reset(
+        reset_request(*image, "run:reset-sequence-1"));
+    const auto reset_opening_state = committed_probe(*bundle.session,
+                                                     bundle.adapter);
+    const auto reset_one_blocks = bundle.session->state_blocks();
+    const auto reset_one_seal = sealed_snapshot(*bundle.session);
+    const auto& empty_journal = bundle.session->last_step_journal();
+    require(reset_one &&
+                reset_one.status == gnc::kernel::ResetStatus::Committed &&
+                reset_one.run_id.value() == "run:reset-sequence-1" &&
+                reset_one.proposed_run_sequence == 1U &&
+                reset_one.binding_matched && reset_one.reset_commit &&
+                reset_one.committed_epoch == 4U &&
+                reset_one.committed_tick == 0 &&
+                !reset_one.primary_diagnostic.has_value() &&
+                bundle.session->state() ==
+                    gnc::kernel::SessionState::Initialized &&
+                bundle.session->run_sequence().has_value() &&
+                *bundle.session->run_sequence() == 1U &&
+                bundle.session->committed_epoch() == 4U &&
+                bundle.session->committed_tick() == 0 &&
+                bundle.session->committed_step_count() == 0U &&
+                bundle.session->active_run_id() != nullptr &&
+                bundle.session->active_run_id()->value() ==
+                    "run:reset-sequence-1" &&
+                bundle.session->active_run_binding() != nullptr &&
+                *bundle.session->active_run_binding() ==
+                    gnc::kernel::exact_run_binding(*image) &&
+                bundle.session->last_committed_run_id() != nullptr &&
+                bundle.session->last_committed_run_id()->value() ==
+                    "run:reset-sequence-1" &&
+                bundle.session->last_committed_run_binding() != nullptr &&
+                *bundle.session->last_committed_run_binding() ==
+                    gnc::kernel::exact_run_binding(*image) &&
+                bundle.session->run_outcome() == nullptr &&
+                bundle.session->run_outcome_for_sequence(0U) ==
+                    first_outcome &&
+                bundle.session->run_outcome_for_sequence(1U) == nullptr &&
+                exactly_same(*first_outcome, first_outcome_copy) &&
+                exactly_same(reset_opening_state, opening_state) &&
+                bundle.session->committed_histories().size() == 1U &&
+                bundle.session->committed_histories().front().sample_count ==
+                    0U &&
+                bundle.session->committed_outputs().empty() &&
+                reset_one_seal.seals.empty() &&
+                !reset_one_seal.mission_result.has_value() &&
+                !empty_journal.branch_selected &&
+                empty_journal.transaction_handle == 0U &&
+                empty_journal.executed_callsite_handles.empty() &&
+                empty_journal.integration_scope_handles.empty() &&
+                empty_journal.candidates.empty() &&
+                empty_journal.histories.empty() &&
+                empty_journal.seals.empty() &&
+                !empty_journal.committed &&
+                bundle.session->preparation_count() == preparation_count &&
+                bundle.session->runtime_cell_count() == runtime_count &&
+                bundle.session->committed_state_count() == state_count &&
+                &bundle.session->image() == image.get() &&
+                bundle.adapter.trace->constructed_handles(
+                    gnc::tests::ref_yyz::TraceObjectKind::Preparation) ==
+                    preparation_constructs &&
+                bundle.adapter.trace->constructed_handles(
+                    gnc::tests::ref_yyz::TraceObjectKind::RuntimeCell) ==
+                    runtime_constructs &&
+                std::all_of(
+                    reset_one_blocks.begin(), reset_one_blocks.end(),
+                    [](const auto& block) {
+                        return block.committed_epoch == 4U;
+                    }),
+            "ResetCommit did not publish a clean sequence-one initial boundary");
+
+    const auto integration_before_second =
+        bundle.adapter.step_execution->integration_attempts;
+    const auto mass_before_second =
+        bundle.adapter.step_execution->mass_evolution_attempts;
+    const auto terminal_before_second =
+        bundle.adapter.opening_boundary->terminal_evaluator_calls;
+    require(static_cast<bool>(bundle.session->run_to_terminal()),
+            "second reset qualification run failed");
+    const auto second_state = committed_probe(*bundle.session,
+                                              bundle.adapter);
+    const auto second_history = bundle.session->committed_histories();
+    const auto second_seal = sealed_snapshot(*bundle.session);
+    const auto second_result = mission_result_probe(*bundle.session,
+                                                    bundle.adapter);
+    const auto* second_outcome = bundle.session->run_outcome();
+    require(second_outcome != nullptr &&
+                second_outcome->run_id.value() ==
+                    "run:reset-sequence-1" &&
+                second_outcome->run_sequence == 1U &&
+                second_outcome->run_start_kind ==
+                    gnc::kernel::RunStartKind::Reset &&
+                second_outcome->run_start_committed &&
+                second_outcome->initial_committed_epoch == 4U &&
+                second_outcome->final_committed_epoch == 7U &&
+                second_outcome->final_tick == 2 &&
+                second_outcome->committed_step_count == 3U &&
+                second_outcome->terminal_branch_committed &&
+                second_outcome->mission_result_available &&
+                bundle.session->committed_epoch() == 7U &&
+                bundle.session->committed_tick() == 2 &&
+                bundle.adapter.step_execution->integration_attempts ==
+                    integration_before_second + 2U &&
+                bundle.adapter.step_execution->mass_evolution_attempts ==
+                    mass_before_second + 2U &&
+                bundle.adapter.opening_boundary->terminal_evaluator_calls ==
+                    terminal_before_second + 1U &&
+                bundle.session->last_step_journal().branch ==
+                    gnc::contracts::TransactionBranch::Terminal &&
+                !first_seal.seals.empty() &&
+                !second_seal.seals.empty() &&
+                second_seal.seals.front().generation ==
+                    first_seal.seals.front().generation + 3U &&
+                exactly_same(second_state, first_state) &&
+                exactly_same(second_history, first_history) &&
+                exact_sealed_observation_snapshot(second_seal, first_seal,
+                                                  false) &&
+                exactly_same(second_result, first_result) &&
+                bundle.session->run_outcome_for_sequence(0U) ==
+                    first_outcome &&
+                bundle.session->run_outcome_for_sequence(1U) ==
+                    second_outcome &&
+                exactly_same(*first_outcome, first_outcome_copy),
+            "second full run changed science, payloads, history, or the first outcome");
+    const auto second_outcome_copy = *second_outcome;
+
+    const auto reset_two = bundle.session->reset(
+        reset_request(*image, "run:reset-sequence-2"));
+    require(reset_two && reset_two.proposed_run_sequence == 2U &&
+                reset_two.committed_epoch == 8U &&
+                reset_two.committed_tick == 0 &&
+                bundle.session->run_outcome() == nullptr &&
+                bundle.session->run_outcome_for_sequence(0U) ==
+                    first_outcome &&
+                bundle.session->run_outcome_for_sequence(1U) ==
+                    second_outcome &&
+                exactly_same(*first_outcome, first_outcome_copy) &&
+                exactly_same(*second_outcome, second_outcome_copy) &&
+                exactly_same(committed_probe(*bundle.session,
+                                             bundle.adapter),
+                             opening_state) &&
+                bundle.session->committed_outputs().empty() &&
+                bundle.session->committed_histories().front().sample_count ==
+                    0U,
+            "second ResetCommit did not create a clean sequence-two run");
+    const auto third_first = bundle.session->execute_step();
+    const auto third_second = bundle.session->execute_step();
+    const auto third_terminal = bundle.session->execute_step();
+    const auto* third_outcome = bundle.session->run_outcome();
+    const auto third_seal = sealed_snapshot(*bundle.session);
+    require(third_first && third_second && third_terminal &&
+                third_first.branch ==
+                    gnc::contracts::TransactionBranch::Continue &&
+                third_second.branch ==
+                    gnc::contracts::TransactionBranch::Continue &&
+                third_terminal.branch ==
+                    gnc::contracts::TransactionBranch::Terminal &&
+                third_terminal.status ==
+                    gnc::kernel::StepStatus::Terminated &&
+                third_first.run_sequence == 2U &&
+                third_second.run_sequence == 2U &&
+                third_terminal.run_sequence == 2U &&
+                third_outcome != nullptr &&
+                third_outcome->run_sequence == 2U &&
+                third_outcome->run_start_kind ==
+                    gnc::kernel::RunStartKind::Reset &&
+                third_outcome->initial_committed_epoch == 8U &&
+                third_outcome->final_committed_epoch == 11U &&
+                bundle.session->committed_epoch() == 11U &&
+                bundle.session->committed_tick() == 2 &&
+                exactly_same(committed_probe(*bundle.session,
+                                             bundle.adapter),
+                             first_state) &&
+                exactly_same(bundle.session->committed_histories(),
+                             first_history) &&
+                !third_seal.seals.empty() &&
+                third_seal.seals.front().generation ==
+                    second_seal.seals.front().generation + 3U &&
+                exact_sealed_observation_snapshot(
+                    third_seal, first_seal, false) &&
+                exactly_same(mission_result_probe(*bundle.session,
+                                                  bundle.adapter),
+                             first_result) &&
+                bundle.session->run_outcome_for_sequence(0U) ==
+                    first_outcome &&
+                bundle.session->run_outcome_for_sequence(1U) ==
+                    second_outcome &&
+                bundle.session->run_outcome_for_sequence(2U) ==
+                    third_outcome &&
+                exactly_same(*first_outcome, first_outcome_copy) &&
+                exactly_same(*second_outcome, second_outcome_copy),
+            "third full run was hard-coded to a two-run lifecycle");
+}
+
+enum class ResetFault : std::uint8_t {
+    EmptyRunId,
+    DuplicateRunId,
+    BindingMismatch,
+    InitialStateConstruct,
+    StateCopy,
+    StateReplace,
+    StateValidation,
+    FinalPrecheck,
+};
+
+void verify_reset_precommit_failure(
+    const std::shared_ptr<const ExecutionPlanImage>& image,
+    ResetFault fault, SessionError expected_error,
+    RuntimeDiagnosticCode expected_code,
+    RuntimeDiagnosticStage expected_stage,
+    std::string_view label) {
+    const std::string initial_id =
+        std::string("run:reset-failure-base:") + std::string(label);
+    const std::string attempted_id =
+        std::string("run:reset-failure-attempt:") + std::string(label);
+    auto bundle = initialize_session(image, {}, initial_id);
+    require(static_cast<bool>(bundle.session->run_to_terminal()),
+            "reset-failure fixture could not complete its first run");
+    const auto before_state = committed_probe(*bundle.session,
+                                              bundle.adapter);
+    const auto before_blocks = bundle.session->state_blocks();
+    const auto before_history = bundle.session->committed_histories();
+    const auto before_seal = sealed_snapshot(*bundle.session);
+    const auto before_result = mission_result_probe(*bundle.session,
+                                                    bundle.adapter);
+    const auto before_journal_epoch =
+        bundle.session->last_step_journal().committed_epoch;
+    const auto* first_outcome = bundle.session->run_outcome();
+    require(first_outcome != nullptr,
+            "reset-failure fixture lacks its completed outcome");
+    const auto first_outcome_copy = *first_outcome;
+
+    auto request = reset_request(*image, attempted_id);
+    bool binding_matched = true;
+    switch (fault) {
+    case ResetFault::EmptyRunId:
+        request.run_id = gnc::kernel::RunId{};
+        break;
+    case ResetFault::DuplicateRunId:
+        request.run_id = gnc::kernel::RunId{initial_id};
+        break;
+    case ResetFault::BindingMismatch:
+        request.binding.source_semantic_hash += ".mismatch";
+        binding_matched = false;
+        break;
+    case ResetFault::InitialStateConstruct:
+        require(bundle.adapter.fail_next_initial_state_construct != nullptr,
+                "initial-state reset failure seam is absent");
+        *bundle.adapter.fail_next_initial_state_construct = true;
+        break;
+    case ResetFault::StateCopy:
+        require(bundle.adapter.fail_next_state_copy != nullptr,
+                "state-copy reset failure seam is absent");
+        *bundle.adapter.fail_next_state_copy = true;
+        break;
+    case ResetFault::StateReplace:
+        require(bundle.adapter.fail_next_state_replace != nullptr,
+                "state-replace reset failure seam is absent");
+        *bundle.adapter.fail_next_state_replace = true;
+        break;
+    case ResetFault::StateValidation:
+        require(bundle.adapter.fail_next_state_validation != nullptr,
+                "state-validation reset failure seam is absent");
+        *bundle.adapter.fail_next_state_validation = true;
+        break;
+    case ResetFault::FinalPrecheck:
+        require(bundle.adapter.disable_state_nofail_swap != nullptr,
+                "reset precheck failure seam is absent");
+        *bundle.adapter.disable_state_nofail_swap = true;
+        break;
+    }
+    const auto attempted_run_id = request.run_id;
+    const auto failed = bundle.session->reset(std::move(request));
+    const auto* failed_outcome = bundle.session->run_outcome();
+    require(!failed && failed.status == gnc::kernel::ResetStatus::Failed &&
+                failed.result.error == expected_error &&
+                failed.run_id == attempted_run_id &&
+                failed.proposed_run_sequence == 1U &&
+                failed.binding_matched == binding_matched &&
+                !failed.reset_commit && failed.committed_epoch == 3U &&
+                failed.committed_tick == 2 &&
+                failed.primary_diagnostic.has_value() &&
+                failed.primary_diagnostic->code == expected_code &&
+                failed.primary_diagnostic->stage == expected_stage &&
+                failed.primary_diagnostic->run_id == attempted_run_id &&
+                failed.primary_diagnostic->base_epoch == 3U &&
+                failed.primary_diagnostic->tick == 2 &&
+                failed.primary_diagnostic->cause_code == expected_error &&
+                failed.primary_diagnostic->validity_effect ==
+                    gnc::contracts::EvidenceValidity::Unknown &&
+                bundle.session->state() ==
+                    gnc::kernel::SessionState::Failed &&
+                bundle.session->active_run_id() == nullptr &&
+                bundle.session->active_run_binding() == nullptr &&
+                bundle.session->last_committed_run_id() != nullptr &&
+                bundle.session->last_committed_run_id()->value() ==
+                    initial_id &&
+                bundle.session->last_committed_run_binding() != nullptr &&
+                *bundle.session->last_committed_run_binding() ==
+                    gnc::kernel::exact_run_binding(*image) &&
+                bundle.session->run_sequence().has_value() &&
+                *bundle.session->run_sequence() == 0U &&
+                bundle.session->committed_epoch() == 3U &&
+                bundle.session->committed_tick() == 2 &&
+                bundle.session->committed_step_count() == 3U &&
+                exactly_same(committed_probe(*bundle.session,
+                                             bundle.adapter),
+                             before_state) &&
+                same_state_blocks(bundle.session->state_blocks(),
+                                  before_blocks) &&
+                exactly_same(bundle.session->committed_histories(),
+                             before_history) &&
+                exact_sealed_observation_snapshot(
+                    sealed_snapshot(*bundle.session), before_seal) &&
+                exactly_same(mission_result_probe(*bundle.session,
+                                                  bundle.adapter),
+                             before_result) &&
+                bundle.session->last_step_journal().committed_epoch ==
+                    before_journal_epoch &&
+                bundle.session->run_outcome_for_sequence(0U) ==
+                    first_outcome &&
+                exactly_same(*first_outcome, first_outcome_copy) &&
+                failed_outcome != nullptr &&
+                failed_outcome != first_outcome &&
+                failed_outcome->run_id == attempted_run_id &&
+                failed_outcome->run_sequence == 1U &&
+                has_exact_image_binding(*failed_outcome, *image) &&
+                failed_outcome->run_start_kind ==
+                    gnc::kernel::RunStartKind::Reset &&
+                !failed_outcome->run_start_committed &&
+                failed_outcome->final_status ==
+                    gnc::kernel::RunFinalStatus::Failed &&
+                failed_outcome->validity ==
+                    gnc::contracts::EvidenceValidity::Unknown &&
+                failed_outcome->initial_committed_epoch == 3U &&
+                failed_outcome->final_committed_epoch == 3U &&
+                failed_outcome->final_tick == 2 &&
+                failed_outcome->committed_step_count == 0U &&
+                failed_outcome->primary_diagnostic.has_value() &&
+                exactly_same(*failed_outcome->primary_diagnostic,
+                             *failed.primary_diagnostic) &&
+                failed_outcome->finalization_status ==
+                    gnc::kernel::RunFinalizationStatus::Succeeded &&
+                bundle.session->run_outcome_for_sequence(1U) ==
+                    failed_outcome,
+            "reset precommit failure changed committed evidence or lost its attempt outcome");
+}
+
+void verify_reset_failure_matrix(
+    const std::shared_ptr<const ExecutionPlanImage>& image) {
+    verify_reset_precommit_failure(
+        image, ResetFault::EmptyRunId, SessionError::EmptyRunId,
+        RuntimeDiagnosticCode::ResetRequestInvalid,
+        RuntimeDiagnosticStage::ResetRequest, "empty");
+    verify_reset_precommit_failure(
+        image, ResetFault::DuplicateRunId, SessionError::DuplicateRunId,
+        RuntimeDiagnosticCode::ResetRequestInvalid,
+        RuntimeDiagnosticStage::ResetRequest, "duplicate");
+    verify_reset_precommit_failure(
+        image, ResetFault::BindingMismatch,
+        SessionError::RunBindingMismatch,
+        RuntimeDiagnosticCode::ImageBindingMismatch,
+        RuntimeDiagnosticStage::ResetRequest, "binding");
+    verify_reset_precommit_failure(
+        image, ResetFault::InitialStateConstruct,
+        SessionError::InitialStateFailed,
+        RuntimeDiagnosticCode::MaterializationFailed,
+        RuntimeDiagnosticStage::ResetState, "construct");
+    verify_reset_precommit_failure(
+        image, ResetFault::StateCopy, SessionError::ResetStateFailed,
+        RuntimeDiagnosticCode::ResetStateRebuildFailed,
+        RuntimeDiagnosticStage::ResetState, "copy");
+    verify_reset_precommit_failure(
+        image, ResetFault::StateReplace, SessionError::ResetStateFailed,
+        RuntimeDiagnosticCode::ResetStateRebuildFailed,
+        RuntimeDiagnosticStage::ResetState, "replace");
+    verify_reset_precommit_failure(
+        image, ResetFault::StateValidation,
+        SessionError::ObjectValidationFailed,
+        RuntimeDiagnosticCode::ObjectValidationFailed,
+        RuntimeDiagnosticStage::ResetState, "validation");
+    verify_reset_precommit_failure(
+        image, ResetFault::FinalPrecheck,
+        SessionError::ResetPrecommitFailed,
+        RuntimeDiagnosticCode::ResetPrecommitFailed,
+        RuntimeDiagnosticStage::ResetPrecommit, "precheck");
+
+    auto fresh = initialize_session(
+        image, {}, "run:reset-failure-recovery");
+    require(fresh.session->run_to_terminal() &&
+                fresh.session->state() ==
+                    gnc::kernel::SessionState::Completed &&
+                fresh.session->run_outcome() != nullptr &&
+                fresh.session->run_outcome()->validity ==
+                    gnc::contracts::EvidenceValidity::Valid,
+            "fresh Session did not recover after reset failure injection");
+}
+
+void verify_dispose_lifecycle(
+    const std::shared_ptr<const ExecutionPlanImage>& image) {
+    {
+        auto adapter = gnc::tests::ref_yyz::make_session_adapter(*image);
+        require(static_cast<bool>(adapter), adapter.error);
+        auto created = gnc::kernel::create_session(image, adapter.provider);
+        require(static_cast<bool>(created),
+                "Created dispose fixture could not create a Session");
+        const auto created_reset = created.session->reset(
+            reset_request(*image, "run:created-reset"));
+        require(!created_reset &&
+                    created_reset.result.error ==
+                        SessionError::InvalidLifecycleTransition &&
+                    created.session->state() ==
+                        gnc::kernel::SessionState::Created &&
+                    created.session->run_outcome() == nullptr &&
+                    created.session->dispose() &&
+                    created.session->state() ==
+                        gnc::kernel::SessionState::Disposed &&
+                    created.session->preparation_count() == 0U &&
+                    created.session->runtime_cell_count() == 0U &&
+                    created.session->committed_state_count() == 0U &&
+                    &created.session->image() == image.get() &&
+                    created.session->last_committed_run_id() == nullptr &&
+                    created.session->run_outcome() == nullptr,
+                "Created Session did not dispose cleanly");
+        const auto rejected_reset = created.session->reset(
+            reset_request(*image, "run:disposed-reset"));
+        const auto event_count = adapter.trace->events.size();
+        const auto repeated = created.session->dispose();
+        require(!rejected_reset &&
+                    rejected_reset.result.error ==
+                        SessionError::InvalidLifecycleTransition &&
+                    !repeated &&
+                    repeated.error ==
+                        SessionError::InvalidLifecycleTransition &&
+                    adapter.trace->events.size() == event_count,
+                "Disposed Session accepted reset/dispose reentry");
+        created.session.reset();
+        require(adapter.trace->events.size() == event_count,
+                "Created dispose was repeated by the destructor");
+    }
+
+    {
+        auto bundle = initialize_session(
+            image, {}, "run:dispose-completed");
+        const auto live_initialized =
+            bundle.adapter.trace->live_object_count();
+        const auto rejected_reset = bundle.session->reset(
+            reset_request(*image, "run:dispose-active-reset"));
+        const auto rejected_dispose = bundle.session->dispose();
+        require(!rejected_reset &&
+                    rejected_reset.result.error ==
+                        SessionError::InvalidLifecycleTransition &&
+                    !rejected_dispose &&
+                    rejected_dispose.error ==
+                        SessionError::InvalidLifecycleTransition &&
+                    bundle.session->state() ==
+                        gnc::kernel::SessionState::Initialized &&
+                    bundle.session->run_outcome() == nullptr &&
+                    bundle.adapter.trace->live_object_count() ==
+                        live_initialized,
+                "active run was reset or disposed implicitly");
+        require(static_cast<bool>(bundle.session->run_to_terminal()),
+                "Completed dispose fixture did not terminate");
+        const auto* outcome = bundle.session->run_outcome();
+        require(outcome != nullptr,
+                "Completed dispose fixture lacks an outcome");
+        const auto outcome_copy = *outcome;
+        const auto run_id = *bundle.session->last_committed_run_id();
+        require(bundle.adapter.trace->live_object_count() > 0U &&
+                    bundle.session->dispose() &&
+                    bundle.session->state() ==
+                        gnc::kernel::SessionState::Disposed &&
+                    bundle.session->preparation_count() == 0U &&
+                    bundle.session->runtime_cell_count() == 0U &&
+                    bundle.session->committed_state_count() == 0U &&
+                    bundle.session->storage_extents().empty() &&
+                    bundle.session->committed_histories().empty() &&
+                    bundle.session->committed_outputs().empty() &&
+                    bundle.adapter.trace->live_object_count() == 0U &&
+                    &bundle.session->image() == image.get() &&
+                    bundle.session->last_committed_run_id() != nullptr &&
+                    *bundle.session->last_committed_run_id() == run_id &&
+                    bundle.session->run_outcome() == outcome &&
+                    bundle.session->run_outcome_for_sequence(0U) == outcome &&
+                    exactly_same(*outcome, outcome_copy),
+                "Completed dispose lost identity/outcome or retained resources");
+        const auto event_count = bundle.adapter.trace->events.size();
+        const auto repeated = bundle.session->dispose();
+        require(!repeated &&
+                    repeated.error ==
+                        SessionError::InvalidLifecycleTransition &&
+                    bundle.adapter.trace->events.size() == event_count,
+                "Completed dispose ran cleanup twice");
+        bundle.session.reset();
+        require(bundle.adapter.trace->events.size() == event_count,
+                "Completed dispose was repeated by the destructor");
+    }
+
+    {
+        AdapterOptions options;
+        options.failure = {FailurePhase::Boundary, 0U};
+        auto bundle = initialize_session(
+            image, options, "run:dispose-execution-failed");
+        const auto failed_step = bundle.session->execute_step();
+        const auto* outcome = bundle.session->run_outcome();
+        require(!failed_step && outcome != nullptr &&
+                    bundle.session->state() ==
+                        gnc::kernel::SessionState::Failed &&
+                    bundle.adapter.trace->live_object_count() > 0U,
+                "execution-failed dispose fixture did not fail in-run");
+        const auto outcome_copy = *outcome;
+        const auto rejected_reset = bundle.session->reset(
+            reset_request(*image, "run:dispose-failed-reset"));
+        require(!rejected_reset &&
+                    rejected_reset.result.error ==
+                        SessionError::InvalidLifecycleTransition &&
+                    bundle.session->dispose() &&
+                    bundle.session->state() ==
+                        gnc::kernel::SessionState::Disposed &&
+                    bundle.session->preparation_count() == 0U &&
+                    bundle.session->runtime_cell_count() == 0U &&
+                    bundle.session->committed_state_count() == 0U &&
+                    bundle.adapter.trace->live_object_count() == 0U &&
+                    bundle.session->run_outcome() == outcome &&
+                    bundle.session->run_outcome_for_sequence(0U) == outcome &&
+                    exactly_same(*outcome, outcome_copy),
+                "execution-failed dispose lost its frozen outcome or leaked resources");
+        const auto event_count = bundle.adapter.trace->events.size();
+        bundle.session.reset();
+        require(bundle.adapter.trace->events.size() == event_count,
+                "execution-failed dispose was repeated by the destructor");
+    }
+}
+
 void run() {
     const auto image = build_image();
     verify_initialization_identity_and_commit(image);
@@ -2028,6 +2650,9 @@ void run() {
     verify_terminal_failure_matrix(image);
     verify_two_session_isolation(image);
     verify_query_count_invariance(image);
+    verify_completed_run_reset(image);
+    verify_reset_failure_matrix(image);
+    verify_dispose_lifecycle(image);
 }
 
 } // namespace

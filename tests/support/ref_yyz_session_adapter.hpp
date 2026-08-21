@@ -245,6 +245,11 @@ struct RefYyzSessionAdapter {
     std::shared_ptr<StepExecutionProbe> step_execution;
     std::shared_ptr<CapturedFrameView> captured_input;
     std::shared_ptr<bool> undeclared_preparation_visible;
+    std::shared_ptr<bool> fail_next_initial_state_construct;
+    std::shared_ptr<bool> fail_next_state_copy;
+    std::shared_ptr<bool> fail_next_state_replace;
+    std::shared_ptr<bool> fail_next_state_validation;
+    std::shared_ptr<bool> disable_state_nofail_swap;
     std::uint32_t mass_state_block_handle = 0U;
     std::uint32_t rigid_state_block_handle = 0U;
     std::uint32_t mission_result_slot_handle = 0U;

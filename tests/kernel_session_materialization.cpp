@@ -4,8 +4,10 @@
 #include "support/ref_yyz_session_adapter.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <memory>
 #include <new>
@@ -19,17 +21,32 @@
 namespace allocation_fault {
 
 thread_local std::int64_t fail_after = -1;
+thread_local bool failure_triggered = false;
+thread_local std::size_t allocations_after_failure = 0U;
 
 void arm(std::int64_t allocations_before_failure) noexcept {
     fail_after = allocations_before_failure;
+    failure_triggered = false;
+    allocations_after_failure = 0U;
 }
 
-void disarm() noexcept { fail_after = -1; }
+void disarm() noexcept {
+    fail_after = -1;
+    failure_triggered = false;
+}
+
+[[nodiscard]] std::size_t post_failure_allocation_count() noexcept {
+    return allocations_after_failure;
+}
 
 [[nodiscard]] bool should_fail() noexcept {
-    if (fail_after < 0) return false;
+    if (fail_after < 0) {
+        if (failure_triggered) ++allocations_after_failure;
+        return false;
+    }
     if (fail_after == 0) {
         fail_after = -1;
+        failure_triggered = true;
         return true;
     }
     --fail_after;
@@ -74,7 +91,9 @@ using gnc::contracts::ExecutionPlanImage;
 using gnc::kernel::SessionError;
 using gnc::kernel::SessionState;
 using gnc::tests::ref_yyz::AdapterOptions;
+using gnc::tests::ref_yyz::CommittedRigidMassProbe;
 using gnc::tests::ref_yyz::FailurePhase;
+using gnc::tests::ref_yyz::MissionResultProbe;
 using gnc::tests::ref_yyz::TraceObjectKind;
 
 template <typename Value, typename = void>
@@ -176,11 +195,210 @@ void require(bool condition, std::string_view message) {
     }
 }
 
+[[nodiscard]] bool exact_double(double lhs, double rhs) noexcept {
+    static_assert(sizeof(double) == sizeof(std::uint64_t));
+    std::uint64_t lhs_bits = 0U;
+    std::uint64_t rhs_bits = 0U;
+    std::memcpy(&lhs_bits, &lhs, sizeof(lhs_bits));
+    std::memcpy(&rhs_bits, &rhs, sizeof(rhs_bits));
+    return lhs_bits == rhs_bits;
+}
+
+template <std::size_t Size>
+[[nodiscard]] bool exact_array(const std::array<double, Size>& lhs,
+                               const std::array<double, Size>& rhs) noexcept {
+    for (std::size_t index = 0U; index < Size; ++index) {
+        if (!exact_double(lhs[index], rhs[index])) return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool exactly_same(const CommittedRigidMassProbe& lhs,
+                                const CommittedRigidMassProbe& rhs) noexcept {
+    return exact_array(lhs.position, rhs.position) &&
+           exact_array(lhs.velocity, rhs.velocity) &&
+           exact_array(lhs.attitude_wxyz, rhs.attitude_wxyz) &&
+           exact_array(lhs.angular_rate, rhs.angular_rate) &&
+           exact_double(lhs.mass_kilograms, rhs.mass_kilograms) &&
+           exact_array(lhs.center_of_mass, rhs.center_of_mass) &&
+           exact_array(lhs.inertia, rhs.inertia) &&
+           lhs.mass_sample_tick == rhs.mass_sample_tick;
+}
+
+[[nodiscard]] bool exactly_same(const MissionResultProbe& lhs,
+                                const MissionResultProbe& rhs) noexcept {
+    return lhs.present == rhs.present && lhs.completed == rhs.completed &&
+           lhs.initial_tick == rhs.initial_tick &&
+           lhs.final_tick == rhs.final_tick &&
+           exact_double(lhs.final_time_seconds, rhs.final_time_seconds) &&
+           lhs.reason_code == rhs.reason_code && lhs.priority == rhs.priority &&
+           lhs.evaluated_sample_count == rhs.evaluated_sample_count &&
+           exact_double(lhs.duration_seconds, rhs.duration_seconds) &&
+           exact_double(lhs.downrange_meters, rhs.downrange_meters) &&
+           exact_double(lhs.remaining_mass_kilograms,
+                        rhs.remaining_mass_kilograms) &&
+           exact_double(lhs.consumed_mass_kilograms,
+                        rhs.consumed_mass_kilograms) &&
+           exact_double(lhs.terminal_speed_meters_per_second,
+                        rhs.terminal_speed_meters_per_second) &&
+           lhs.terminal_tick == rhs.terminal_tick;
+}
+
+[[nodiscard]] bool same_state_blocks(
+    const std::vector<gnc::kernel::SessionStateBlockInfo>& lhs,
+    const std::vector<gnc::kernel::SessionStateBlockInfo>& rhs) noexcept {
+    if (lhs.size() != rhs.size()) return false;
+    for (std::size_t index = 0U; index < lhs.size(); ++index) {
+        if (lhs[index].state_block_handle != rhs[index].state_block_handle ||
+            lhs[index].owner_runtime_component_handle !=
+                rhs[index].owner_runtime_component_handle ||
+            lhs[index].committed_slot_handle !=
+                rhs[index].committed_slot_handle ||
+            lhs[index].candidate_slot_handle !=
+                rhs[index].candidate_slot_handle ||
+            lhs[index].codec_entry_handle != rhs[index].codec_entry_handle ||
+            lhs[index].committed_epoch != rhs[index].committed_epoch) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool same_histories(
+    const std::vector<gnc::kernel::SessionCommittedHistoryInfo>& lhs,
+    const std::vector<gnc::kernel::SessionCommittedHistoryInfo>& rhs)
+    noexcept {
+    if (lhs.size() != rhs.size()) return false;
+    for (std::size_t index = 0U; index < lhs.size(); ++index) {
+        if (lhs[index].history_handle != rhs[index].history_handle ||
+            lhs[index].history_depth != rhs[index].history_depth ||
+            lhs[index].sample_count != rhs[index].sample_count ||
+            lhs[index].member_count != rhs[index].member_count ||
+            lhs[index].first_tick != rhs[index].first_tick ||
+            lhs[index].last_tick != rhs[index].last_tick) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool same_outputs(
+    const std::vector<gnc::kernel::SessionCommittedOutputInfo>& lhs,
+    const std::vector<gnc::kernel::SessionCommittedOutputInfo>& rhs)
+    noexcept {
+    if (lhs.size() != rhs.size()) return false;
+    for (std::size_t index = 0U; index < lhs.size(); ++index) {
+        const auto& left = lhs[index];
+        const auto& right = rhs[index];
+        if (left.slot_handle != right.slot_handle ||
+            left.codec_entry_handle != right.codec_entry_handle ||
+            left.present != right.present ||
+            left.generation != right.generation ||
+            left.sequence != right.sequence ||
+            left.sample_tick != right.sample_tick ||
+            !exact_double(left.sample_time_seconds,
+                          right.sample_time_seconds) ||
+            !exact_double(left.interval_start_seconds,
+                          right.interval_start_seconds) ||
+            !exact_double(left.interval_end_seconds,
+                          right.interval_end_seconds) ||
+            left.quality != right.quality ||
+            left.terminal_result != right.terminal_result) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool exactly_same(
+    const gnc::kernel::RuntimeDiagnostic& lhs,
+    const gnc::kernel::RuntimeDiagnostic& rhs) noexcept {
+    return lhs.code == rhs.code && lhs.stage == rhs.stage &&
+           lhs.subject_handle == rhs.subject_handle &&
+           lhs.run_id == rhs.run_id && lhs.tick == rhs.tick &&
+           lhs.base_epoch == rhs.base_epoch &&
+           lhs.cause_code == rhs.cause_code &&
+           lhs.cause_ref == rhs.cause_ref &&
+           lhs.validity_effect == rhs.validity_effect &&
+           lhs.disposition == rhs.disposition &&
+           lhs.message_key == rhs.message_key && lhs.detail == rhs.detail;
+}
+
+[[nodiscard]] bool exactly_same(const gnc::kernel::RunOutcome& lhs,
+                                const gnc::kernel::RunOutcome& rhs) noexcept {
+    if (lhs.run_id != rhs.run_id ||
+        lhs.run_sequence != rhs.run_sequence ||
+        lhs.image_fingerprint != rhs.image_fingerprint ||
+        lhs.plan_id != rhs.plan_id || lhs.mission_id != rhs.mission_id ||
+        lhs.source_semantic_hash != rhs.source_semantic_hash ||
+        lhs.descriptor_semantic_hash != rhs.descriptor_semantic_hash ||
+        lhs.run_start_kind != rhs.run_start_kind ||
+        lhs.run_start_committed != rhs.run_start_committed ||
+        lhs.final_status != rhs.final_status ||
+        lhs.validity != rhs.validity ||
+        lhs.initial_tick != rhs.initial_tick ||
+        lhs.final_tick != rhs.final_tick ||
+        lhs.initial_committed_epoch != rhs.initial_committed_epoch ||
+        lhs.final_committed_epoch != rhs.final_committed_epoch ||
+        lhs.committed_step_count != rhs.committed_step_count ||
+        lhs.terminal_branch_committed != rhs.terminal_branch_committed ||
+        lhs.mission_result_available != rhs.mission_result_available ||
+        lhs.primary_diagnostic.has_value() !=
+            rhs.primary_diagnostic.has_value() ||
+        lhs.related_diagnostics.size() != rhs.related_diagnostics.size() ||
+        lhs.finalization_status != rhs.finalization_status) {
+        return false;
+    }
+    if (lhs.primary_diagnostic.has_value() &&
+        !exactly_same(*lhs.primary_diagnostic,
+                      *rhs.primary_diagnostic)) {
+        return false;
+    }
+    for (std::size_t index = 0U;
+         index < lhs.related_diagnostics.size(); ++index) {
+        if (!exactly_same(lhs.related_diagnostics[index],
+                          rhs.related_diagnostics[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 [[nodiscard]] gnc::kernel::InitializationRequest initialization_request(
     const ExecutionPlanImage& image,
     std::string run_id = "run:materialization") {
     return {gnc::kernel::RunId{std::move(run_id)},
             gnc::kernel::exact_run_binding(image)};
+}
+
+[[nodiscard]] gnc::kernel::ResetRequest reset_request(
+    const ExecutionPlanImage& image, std::string run_id) {
+    return {gnc::kernel::RunId{std::move(run_id)},
+            gnc::kernel::exact_run_binding(image)};
+}
+
+[[nodiscard]] CommittedRigidMassProbe committed_probe(
+    const gnc::kernel::Session& session,
+    const gnc::tests::ref_yyz::RefYyzSessionAdapter& adapter) {
+    CommittedRigidMassProbe result;
+    const auto read =
+        gnc::tests::ref_yyz::read_committed_rigid_mass_for_qualification(
+            session, adapter, result);
+    require(static_cast<bool>(read),
+            "committed state qualification read failed");
+    return result;
+}
+
+[[nodiscard]] MissionResultProbe mission_result_probe(
+    const gnc::kernel::Session& session,
+    const gnc::tests::ref_yyz::RefYyzSessionAdapter& adapter) {
+    MissionResultProbe result;
+    const auto read =
+        gnc::tests::ref_yyz::read_mission_result_for_qualification(
+            session, adapter, result);
+    require(static_cast<bool>(read),
+            "mission-result qualification read failed");
+    return result;
 }
 
 [[nodiscard]] std::shared_ptr<const ExecutionPlanImage> image_from(
@@ -329,7 +547,9 @@ void verify_failure_unwind(
                 creation.session->run_outcome()->validity ==
                     gnc::contracts::EvidenceValidity::Unknown &&
                 !creation.session->run_outcome()
-                     ->initialization_committed &&
+                     ->run_start_committed &&
+                creation.session->run_outcome()->run_start_kind ==
+                    gnc::kernel::RunStartKind::Initialize &&
                 creation.session->run_outcome()
                     ->final_committed_epoch == 0U &&
                 creation.session->run_outcome()->final_tick == 0 &&
@@ -339,6 +559,24 @@ void verify_failure_unwind(
                 creation.session->storage_extents().empty() &&
                 adapter.trace->live_object_count() == 0U,
             "failed initialization exposed or leaked partial state");
+    const auto* failed_outcome = creation.session->run_outcome();
+    const auto event_count_before_dispose = adapter.trace->events.size();
+    require(failed_outcome != nullptr && creation.session->dispose() &&
+                creation.session->state() == SessionState::Disposed &&
+                creation.session->preparation_count() == 0U &&
+                creation.session->runtime_cell_count() == 0U &&
+                creation.session->committed_state_count() == 0U &&
+                creation.session->storage_extents().empty() &&
+                creation.session->run_outcome() == failed_outcome &&
+                creation.session->run_outcome_for_sequence(0U) ==
+                    failed_outcome &&
+                &creation.session->image() == image.get() &&
+                adapter.trace->events.size() ==
+                    event_count_before_dispose,
+            "initialization-failed dispose repeated cleanup or lost outcome identity");
+    creation.session.reset();
+    require(adapter.trace->events.size() == event_count_before_dispose,
+            "initialization-failed destructor repeated cleanup");
     require_reverse_lifetime(*adapter.trace, TraceObjectKind::Preparation,
                              "failure did not reverse preparations");
     require_reverse_lifetime(*adapter.trace, TraceObjectKind::RuntimeCell,
@@ -629,6 +867,135 @@ void verify_allocation_failure_unwind(
             "allocation injection did not cover reserve, placement and success");
 }
 
+void verify_reset_allocation_failure_atomicity(
+    const std::shared_ptr<const ExecutionPlanImage>& image) {
+    bool observed_outcome_staging_failure = false;
+    bool observed_history_staging_failure = false;
+    bool observed_success = false;
+    for (std::int64_t fail_after = 0;
+         fail_after < 256 && !observed_success; ++fail_after) {
+        auto adapter = gnc::tests::ref_yyz::make_session_adapter(*image);
+        require(static_cast<bool>(adapter), adapter.error);
+        adapter.trace->events.reserve(4096U);
+        auto creation = gnc::kernel::create_session(image, adapter.provider);
+        require(creation &&
+                    creation.session->initialize(initialization_request(
+                        *image,
+                        std::string("run:reset-allocation-base:") +
+                            std::to_string(fail_after))) &&
+                    creation.session->run_to_terminal(),
+                "reset allocation fixture could not complete its first run");
+
+        const auto before_state = committed_probe(*creation.session, adapter);
+        const auto before_blocks = creation.session->state_blocks();
+        const auto before_histories =
+            creation.session->committed_histories();
+        const auto before_outputs = creation.session->committed_outputs();
+        const auto before_result = mission_result_probe(*creation.session,
+                                                        adapter);
+        const auto* first_outcome = creation.session->run_outcome();
+        require(first_outcome != nullptr,
+                "reset allocation fixture lacks a completed outcome");
+        const auto first_outcome_copy = *first_outcome;
+        auto request = reset_request(
+            *image, std::string("run:reset-allocation-attempt:") +
+                        std::to_string(fail_after));
+
+        allocation_fault::arm(fail_after);
+        const auto reset = creation.session->reset(std::move(request));
+        const auto post_failure_allocations =
+            allocation_fault::post_failure_allocation_count();
+        allocation_fault::disarm();
+
+        if (reset) {
+            observed_success = true;
+            require(creation.session->state() == SessionState::Initialized &&
+                        observed_outcome_staging_failure &&
+                        observed_history_staging_failure,
+                    "reset allocation sweep reached success before both staging failures");
+        } else {
+            observed_outcome_staging_failure =
+                observed_outcome_staging_failure ||
+                reset.result.detail ==
+                    "reset outcome staging allocation failed";
+            observed_history_staging_failure =
+                observed_history_staging_failure ||
+                reset.result.detail ==
+                    "reset history staging allocation failed";
+            if (reset.result.detail ==
+                    "reset outcome staging allocation failed" ||
+                reset.result.detail ==
+                    "reset history staging allocation failed") {
+                require(reset.result.error == SessionError::AllocationFailure &&
+                            reset.primary_diagnostic.has_value() &&
+                            reset.primary_diagnostic->code ==
+                                gnc::kernel::RuntimeDiagnosticCode::
+                                    AllocationFailed &&
+                            reset.primary_diagnostic->stage ==
+                                gnc::kernel::RuntimeDiagnosticStage::
+                                    ResetPrecommit,
+                        "reset staging allocation failure lost its diagnostic");
+            }
+            const auto* failed_outcome = creation.session->run_outcome();
+            require(post_failure_allocations == 0U &&
+                        creation.session->state() == SessionState::Failed &&
+                        !reset.reset_commit &&
+                        reset.proposed_run_sequence == 1U &&
+                        reset.committed_epoch == 3U &&
+                        reset.committed_tick == 2 &&
+                        creation.session->active_run_id() == nullptr &&
+                        creation.session->run_sequence().has_value() &&
+                        *creation.session->run_sequence() == 0U &&
+                        creation.session->committed_epoch() == 3U &&
+                        creation.session->committed_tick() == 2 &&
+                        creation.session->committed_step_count() == 3U &&
+                        exactly_same(committed_probe(*creation.session,
+                                                     adapter),
+                                     before_state) &&
+                        same_state_blocks(creation.session->state_blocks(),
+                                          before_blocks) &&
+                        same_histories(
+                            creation.session->committed_histories(),
+                            before_histories) &&
+                        same_outputs(creation.session->committed_outputs(),
+                                     before_outputs) &&
+                        exactly_same(mission_result_probe(*creation.session,
+                                                          adapter),
+                                     before_result) &&
+                        creation.session->run_outcome_for_sequence(0U) ==
+                            first_outcome &&
+                        exactly_same(*first_outcome, first_outcome_copy) &&
+                        failed_outcome != nullptr &&
+                        failed_outcome != first_outcome &&
+                        failed_outcome->run_sequence == 1U &&
+                        failed_outcome->run_start_kind ==
+                            gnc::kernel::RunStartKind::Reset &&
+                        !failed_outcome->run_start_committed &&
+                        failed_outcome->final_status ==
+                            gnc::kernel::RunFinalStatus::Failed &&
+                        failed_outcome->validity ==
+                            gnc::contracts::EvidenceValidity::Unknown &&
+                        failed_outcome->primary_diagnostic.has_value() &&
+                        creation.session->run_outcome_for_sequence(1U) ==
+                            failed_outcome,
+                    "reset allocation failure allocated while freezing or changed committed evidence");
+            require(creation.session->dispose() &&
+                        creation.session->state() == SessionState::Disposed &&
+                        creation.session->preparation_count() == 0U &&
+                        creation.session->runtime_cell_count() == 0U &&
+                        creation.session->committed_state_count() == 0U &&
+                        adapter.trace->live_object_count() == 0U,
+                    "failed reset allocation pass did not dispose cleanly");
+        }
+        creation.session.reset();
+        require(adapter.trace->live_object_count() == 0U,
+                "reset allocation sweep leaked a Session object");
+    }
+    require(observed_outcome_staging_failure &&
+                observed_history_staging_failure && observed_success,
+            "reset allocation sweep missed outcome/history staging or success");
+}
+
 void run() {
     const auto image = build_deterministic_image();
     require(image->preparations().size() == 3U &&
@@ -646,6 +1013,7 @@ void run() {
     verify_metadata_failures(image);
     verify_materializer_identity_failures(image);
     verify_allocation_failure_unwind(image);
+    verify_reset_allocation_failure_atomicity(image);
 }
 
 } // namespace

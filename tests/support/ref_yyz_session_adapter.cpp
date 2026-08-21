@@ -157,7 +157,11 @@ make_state_materializer(
     const Codec& codec, std::uint32_t initial_binding_handle,
     std::uint32_t builder_entry_handle,
     std::shared_ptr<MaterializationTrace> trace,
+    std::shared_ptr<bool> fail_next_construct,
+    std::shared_ptr<bool> fail_next_copy,
     std::shared_ptr<bool> fail_next_replace,
+    std::shared_ptr<bool> fail_next_validate,
+    std::shared_ptr<bool> disable_nofail_swap,
     std::size_t fail_copy_ordinal, Construct construct);
 
 template <typename Value>
@@ -562,6 +566,16 @@ void build_initial_states(
     CompiledProvider& provider, RefYyzSessionAdapter& adapter) {
     auto fail_next_state_replace =
         std::make_shared<bool>(options.fail_first_candidate_rearm);
+    auto fail_next_initial_state_construct = std::make_shared<bool>(false);
+    auto fail_next_state_copy = std::make_shared<bool>(false);
+    auto fail_next_state_validation = std::make_shared<bool>(false);
+    auto disable_state_nofail_swap = std::make_shared<bool>(false);
+    adapter.fail_next_initial_state_construct =
+        fail_next_initial_state_construct;
+    adapter.fail_next_state_copy = fail_next_state_copy;
+    adapter.fail_next_state_replace = fail_next_state_replace;
+    adapter.fail_next_state_validation = fail_next_state_validation;
+    adapter.disable_state_nofail_swap = disable_state_nofail_swap;
     for (std::size_t ordinal = 0U;
          ordinal < image.lifecycle().initial_binding_handles.size();
          ++ordinal) {
@@ -619,7 +633,11 @@ void build_initial_states(
                     std::string(yyz::kRigidStateLayoutIdentity),
                     block.codec_entry_handle, codec_getter(), handle,
                     binding->builder_entry_handle, trace,
+                    fail_next_initial_state_construct,
+                    fail_next_state_copy,
                     fail_next_state_replace,
+                    fail_next_state_validation,
+                    disable_state_nofail_swap,
                     options.fail_state_copy_ordinal,
                     [algorithm = definition.rigid.algorithm,
                      input = std::move(input), initial, fail, trace,
@@ -665,7 +683,11 @@ void build_initial_states(
                     std::string(yyz::kMassStateLayoutIdentity),
                     block.codec_entry_handle, codec_getter(), handle,
                     binding->builder_entry_handle, trace,
+                    fail_next_initial_state_construct,
+                    fail_next_state_copy,
                     fail_next_state_replace,
+                    fail_next_state_validation,
+                    disable_state_nofail_swap,
                     options.fail_state_copy_ordinal,
                     [definition = std::move(definition),
                      input = std::move(input), initial, fail, trace,
@@ -1027,12 +1049,18 @@ class StateOperations final : public InProcessObjectOperations {
                     std::uint32_t codec_entry_handle, const Codec& codec,
                     std::uint32_t handle,
                     std::shared_ptr<MaterializationTrace> trace,
+                    std::shared_ptr<bool> fail_next_copy,
                     std::shared_ptr<bool> fail_next_replace,
+                    std::shared_ptr<bool> fail_next_validate,
+                    std::shared_ptr<bool> disable_nofail_swap,
                     std::size_t fail_copy_ordinal)
         : layout_identity_(std::move(layout_identity)),
           codec_entry_handle_(codec_entry_handle), codec_(codec),
           handle_(handle), trace_(std::move(trace)),
+          fail_next_copy_(std::move(fail_next_copy)),
           fail_next_replace_(std::move(fail_next_replace)),
+          fail_next_validate_(std::move(fail_next_validate)),
+          disable_nofail_swap_(std::move(disable_nofail_swap)),
           fail_copy_ordinal_(fail_copy_ordinal) {}
 
     [[nodiscard]] InProcessObjectLayout layout() const noexcept override {
@@ -1046,7 +1074,9 @@ class StateOperations final : public InProcessObjectOperations {
         const void* source, void* destination) const noexcept override {
         try {
             const auto ordinal = copy_count_++;
-            if (ordinal == fail_copy_ordinal_) {
+            if ((fail_next_copy_ != nullptr && *fail_next_copy_) ||
+                ordinal == fail_copy_ordinal_) {
+                if (fail_next_copy_ != nullptr) *fail_next_copy_ = false;
                 record(trace_, TraceAction::InjectedFailure,
                        TraceObjectKind::State, handle_);
                 return false;
@@ -1085,6 +1115,12 @@ class StateOperations final : public InProcessObjectOperations {
     }
 
     [[nodiscard]] bool validate(const void* object) const noexcept override {
+        if (fail_next_validate_ != nullptr && *fail_next_validate_) {
+            *fail_next_validate_ = false;
+            record(trace_, TraceAction::InjectedFailure,
+                   TraceObjectKind::State, handle_);
+            return false;
+        }
         const auto& value = *static_cast<const Value*>(object);
         return codec_.validate != nullptr && codec_.validate_finite != nullptr &&
                codec_.validate_invariants != nullptr &&
@@ -1093,7 +1129,9 @@ class StateOperations final : public InProcessObjectOperations {
     }
 
     [[nodiscard]] bool supports_nofail_swap() const noexcept override {
-        return codec_.noexcept_swap != nullptr;
+        return codec_.noexcept_swap != nullptr &&
+               (disable_nofail_swap_ == nullptr ||
+                !*disable_nofail_swap_);
     }
 
     void nofail_swap(void* lhs, void* rhs) const noexcept override {
@@ -1116,7 +1154,10 @@ class StateOperations final : public InProcessObjectOperations {
     Codec codec_;
     std::uint32_t handle_;
     std::shared_ptr<MaterializationTrace> trace_;
+    std::shared_ptr<bool> fail_next_copy_;
     std::shared_ptr<bool> fail_next_replace_;
+    std::shared_ptr<bool> fail_next_validate_;
+    std::shared_ptr<bool> disable_nofail_swap_;
     std::size_t fail_copy_ordinal_ =
         (std::numeric_limits<std::size_t>::max)();
     mutable std::size_t copy_count_ = 0U;
@@ -1559,20 +1600,34 @@ make_state_materializer(
     const Codec& codec, std::uint32_t initial_binding_handle,
     std::uint32_t builder_entry_handle,
     std::shared_ptr<MaterializationTrace> trace,
+    std::shared_ptr<bool> fail_next_construct,
+    std::shared_ptr<bool> fail_next_copy,
     std::shared_ptr<bool> fail_next_replace,
+    std::shared_ptr<bool> fail_next_validate,
+    std::shared_ptr<bool> disable_nofail_swap,
     std::size_t fail_copy_ordinal, Construct construct) {
+    auto construct_trace = trace;
     auto operations = std::make_shared<StateOperations<Value, Codec>>(
         std::move(layout_identity), codec_entry_handle, codec,
-        initial_binding_handle, trace, std::move(fail_next_replace),
-        fail_copy_ordinal);
+        initial_binding_handle, std::move(trace), std::move(fail_next_copy),
+        std::move(fail_next_replace), std::move(fail_next_validate),
+        std::move(disable_nofail_swap), fail_copy_ordinal);
     return std::make_shared<FixedMaterializer>(
         operations,
         SessionMaterializerIdentity{
             initial_binding_handle, SessionObjectRole::InitialStateValue,
             builder_entry_handle, codec_entry_handle},
-        [operations, construct = std::move(construct)](
+        [operations, fail_next_construct = std::move(fail_next_construct),
+         construct_trace = std::move(construct_trace),
+         initial_binding_handle, construct = std::move(construct)](
             const SessionObjectAccess& objects,
             void* destination) mutable noexcept {
+            if (fail_next_construct != nullptr && *fail_next_construct) {
+                *fail_next_construct = false;
+                record(construct_trace, TraceAction::InjectedFailure,
+                       TraceObjectKind::State, initial_binding_handle);
+                return false;
+            }
             if (!construct(objects, destination)) {
                 return false;
             }

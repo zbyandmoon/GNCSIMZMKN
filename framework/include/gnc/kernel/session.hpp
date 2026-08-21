@@ -24,6 +24,7 @@ enum class SessionState : std::uint8_t {
     Initialized,
     Completed,
     Failed,
+    Disposed,
 };
 
 enum class SessionError : std::uint8_t {
@@ -31,6 +32,7 @@ enum class SessionError : std::uint8_t {
     NullImage,
     NullMaterializationProvider,
     EmptyRunId,
+    DuplicateRunId,
     RunBindingMismatch,
     UnsupportedImageRevision,
     InvalidImageHandle,
@@ -50,6 +52,8 @@ enum class SessionError : std::uint8_t {
     RuntimeCellFailed,
     SlotConstructionFailed,
     InitialStateFailed,
+    ResetStateFailed,
+    ResetPrecommitFailed,
     ObjectValidationFailed,
     InvalidLifecycleTransition,
     InvalidSchedule,
@@ -106,6 +110,8 @@ class RunId final {
         return !(lhs == rhs);
     }
 
+    void swap(RunId& other) noexcept { value_.swap(other.value_); }
+
   private:
     std::shared_ptr<const std::string> value_;
 };
@@ -132,6 +138,14 @@ struct RunBinding {
     friend bool operator!=(const RunBinding& lhs,
                            const RunBinding& rhs) noexcept {
         return !(lhs == rhs);
+    }
+
+    void swap(RunBinding& other) noexcept {
+        image_fingerprint.swap(other.image_fingerprint);
+        plan_id.swap(other.plan_id);
+        mission_id.swap(other.mission_id);
+        source_semantic_hash.swap(other.source_semantic_hash);
+        descriptor_semantic_hash.swap(other.descriptor_semantic_hash);
     }
 };
 
@@ -161,6 +175,9 @@ enum class RuntimeDiagnosticCode : std::uint8_t {
     AllocationFailed,
     InternalFailure,
     LifecycleTransitionRejected,
+    ResetRequestInvalid,
+    ResetStateRebuildFailed,
+    ResetPrecommitFailed,
 };
 
 enum class RuntimeDiagnosticStage : std::uint8_t {
@@ -176,6 +193,9 @@ enum class RuntimeDiagnosticStage : std::uint8_t {
     Precommit,
     Finalization,
     Lifecycle,
+    ResetRequest,
+    ResetState,
+    ResetPrecommit,
 };
 
 enum class RuntimeFailureDisposition : std::uint8_t {
@@ -224,6 +244,32 @@ struct InitializationOutcome {
     [[nodiscard]] explicit operator bool() const noexcept {
         return status == InitializationStatus::Committed &&
                initialization_commit && result;
+    }
+};
+
+struct ResetRequest {
+    RunId run_id;
+    RunBinding binding;
+};
+
+enum class ResetStatus : std::uint8_t {
+    Committed,
+    Failed,
+};
+
+struct ResetOutcome {
+    ResetStatus status = ResetStatus::Failed;
+    SessionResult result;
+    RunId run_id;
+    std::uint64_t proposed_run_sequence = 0U;
+    bool binding_matched = false;
+    bool reset_commit = false;
+    std::uint64_t committed_epoch = 0U;
+    std::int64_t committed_tick = 0;
+    std::optional<RuntimeDiagnostic> primary_diagnostic;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return status == ResetStatus::Committed && reset_commit && result;
     }
 };
 
@@ -292,6 +338,12 @@ enum class RunFinalizationStatus : std::uint8_t {
     Succeeded,
 };
 
+enum class RunStartKind : std::uint8_t {
+    Initialize,
+    Reset,
+    RestoreBranch,
+};
+
 struct RunOutcome {
     RunId run_id;
     std::uint64_t run_sequence = 0U;
@@ -300,7 +352,8 @@ struct RunOutcome {
     std::string mission_id;
     std::string source_semantic_hash;
     std::string descriptor_semantic_hash;
-    bool initialization_committed = false;
+    RunStartKind run_start_kind = RunStartKind::Initialize;
+    bool run_start_committed = false;
     RunFinalStatus final_status = RunFinalStatus::Failed;
     contracts::EvidenceValidity validity =
         contracts::EvidenceValidity::Unknown;
@@ -915,16 +968,23 @@ class Session final {
     [[nodiscard]] const contracts::ExecutionPlanImage& image() const noexcept;
     [[nodiscard]] InitializationOutcome initialize(
         InitializationRequest request) noexcept;
+    [[nodiscard]] ResetOutcome reset(ResetRequest request) noexcept;
+    [[nodiscard]] SessionResult dispose() noexcept;
     [[nodiscard]] StepOutcome execute_step() noexcept;
     [[nodiscard]] SessionResult run_to_terminal() noexcept;
     [[nodiscard]] const SessionResult& last_result() const noexcept;
     [[nodiscard]] const InitializationOutcome&
     last_initialization_outcome() const noexcept;
+    [[nodiscard]] const ResetOutcome& last_reset_outcome() const noexcept;
     [[nodiscard]] const StepOutcome& last_step_outcome() const noexcept;
     [[nodiscard]] const RunId* active_run_id() const noexcept;
     [[nodiscard]] const RunBinding* active_run_binding() const noexcept;
+    [[nodiscard]] const RunId* last_committed_run_id() const noexcept;
+    [[nodiscard]] const RunBinding* last_committed_run_binding() const noexcept;
     [[nodiscard]] std::optional<std::uint64_t> run_sequence() const noexcept;
     [[nodiscard]] const RunOutcome* run_outcome() const noexcept;
+    [[nodiscard]] const RunOutcome* run_outcome_for_sequence(
+        std::uint64_t run_sequence) const noexcept;
     [[nodiscard]] const SessionBoundarySummary& last_boundary_summary()
         const noexcept;
     [[nodiscard]] const SessionStepSummary& last_step_summary()

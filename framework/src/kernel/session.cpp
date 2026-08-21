@@ -255,6 +255,8 @@ template <typename Value>
         return RuntimeDiagnosticCode::None;
     case SessionError::EmptyRunId:
         return RuntimeDiagnosticCode::InitializationRequestInvalid;
+    case SessionError::DuplicateRunId:
+        return RuntimeDiagnosticCode::ResetRequestInvalid;
     case SessionError::RunBindingMismatch:
         return RuntimeDiagnosticCode::ImageBindingMismatch;
     case SessionError::NullImage:
@@ -273,6 +275,10 @@ template <typename Value>
     case SessionError::SlotConstructionFailed:
     case SessionError::InitialStateFailed:
         return RuntimeDiagnosticCode::MaterializationFailed;
+    case SessionError::ResetStateFailed:
+        return RuntimeDiagnosticCode::ResetStateRebuildFailed;
+    case SessionError::ResetPrecommitFailed:
+        return RuntimeDiagnosticCode::ResetPrecommitFailed;
     case SessionError::InvalidSchedule:
         return RuntimeDiagnosticCode::ScheduleFailed;
     case SessionError::FrameAlreadyOpen:
@@ -350,6 +356,12 @@ template <typename Value>
         return "run.internal.failure";
     case RuntimeDiagnosticCode::LifecycleTransitionRejected:
         return "run.lifecycle.transition_rejected";
+    case RuntimeDiagnosticCode::ResetRequestInvalid:
+        return "run.reset_request.invalid";
+    case RuntimeDiagnosticCode::ResetStateRebuildFailed:
+        return "run.reset_state.rebuild_failed";
+    case RuntimeDiagnosticCode::ResetPrecommitFailed:
+        return "run.reset.precommit_failed";
     }
     return "run.internal.failure";
 }
@@ -369,6 +381,7 @@ std::string_view to_string(SessionError error) noexcept {
     case SessionError::NullMaterializationProvider:
         return "NullMaterializationProvider";
     case SessionError::EmptyRunId: return "EmptyRunId";
+    case SessionError::DuplicateRunId: return "DuplicateRunId";
     case SessionError::RunBindingMismatch: return "RunBindingMismatch";
     case SessionError::UnsupportedImageRevision:
         return "UnsupportedImageRevision";
@@ -391,6 +404,8 @@ std::string_view to_string(SessionError error) noexcept {
     case SessionError::RuntimeCellFailed: return "RuntimeCellFailed";
     case SessionError::SlotConstructionFailed: return "SlotConstructionFailed";
     case SessionError::InitialStateFailed: return "InitialStateFailed";
+    case SessionError::ResetStateFailed: return "ResetStateFailed";
+    case SessionError::ResetPrecommitFailed: return "ResetPrecommitFailed";
     case SessionError::ObjectValidationFailed: return "ObjectValidationFailed";
     case SessionError::InvalidLifecycleTransition:
         return "InvalidLifecycleTransition";
@@ -459,6 +474,12 @@ std::string_view to_string(RuntimeDiagnosticCode code) noexcept {
         return "GNC-RUN-INT-0001";
     case RuntimeDiagnosticCode::LifecycleTransitionRejected:
         return "GNC-RUN-LIF-0001";
+    case RuntimeDiagnosticCode::ResetRequestInvalid:
+        return "GNC-RUN-RST-0001";
+    case RuntimeDiagnosticCode::ResetStateRebuildFailed:
+        return "GNC-RUN-RST-0002";
+    case RuntimeDiagnosticCode::ResetPrecommitFailed:
+        return "GNC-RUN-RST-0003";
     }
     return "GNC-RUN-INT-0001";
 }
@@ -483,6 +504,9 @@ std::string_view to_string(RuntimeDiagnosticStage stage) noexcept {
     case RuntimeDiagnosticStage::Precommit: return "Precommit";
     case RuntimeDiagnosticStage::Finalization: return "Finalization";
     case RuntimeDiagnosticStage::Lifecycle: return "Lifecycle";
+    case RuntimeDiagnosticStage::ResetRequest: return "ResetRequest";
+    case RuntimeDiagnosticStage::ResetState: return "ResetState";
+    case RuntimeDiagnosticStage::ResetPrecommit: return "ResetPrecommit";
     }
     return "Lifecycle";
 }
@@ -753,6 +777,57 @@ struct Session::Impl final : SessionObjectAccess,
         }
     };
 
+    struct ResetStateReplacement {
+        const SessionObjectMaterializer* materializer = nullptr;
+        void* committed_address = nullptr;
+        void* candidate_address = nullptr;
+        std::uint64_t alignment = 0U;
+
+        ResetStateReplacement() = default;
+        ResetStateReplacement(const ResetStateReplacement&) = delete;
+        ResetStateReplacement& operator=(const ResetStateReplacement&) =
+            delete;
+        ResetStateReplacement(ResetStateReplacement&& other) noexcept {
+            take(other);
+        }
+        ResetStateReplacement& operator=(
+            ResetStateReplacement&& other) noexcept {
+            if (this != &other) {
+                reset();
+                take(other);
+            }
+            return *this;
+        }
+        ~ResetStateReplacement() { reset(); }
+
+        void reset() noexcept {
+            if (candidate_address != nullptr && materializer != nullptr) {
+                materializer->operations().destroy(candidate_address);
+                release_raw(candidate_address, alignment);
+            }
+            if (committed_address != nullptr && materializer != nullptr) {
+                materializer->operations().destroy(committed_address);
+                release_raw(committed_address, alignment);
+            }
+            materializer = nullptr;
+            committed_address = nullptr;
+            candidate_address = nullptr;
+            alignment = 0U;
+        }
+
+      private:
+        void take(ResetStateReplacement& other) noexcept {
+            materializer = other.materializer;
+            committed_address = other.committed_address;
+            candidate_address = other.candidate_address;
+            alignment = other.alignment;
+            other.materializer = nullptr;
+            other.committed_address = nullptr;
+            other.candidate_address = nullptr;
+            other.alignment = 0U;
+        }
+    };
+
     struct HistorySample {
         std::int64_t tick = 0;
         std::uint64_t committed_epoch = 0U;
@@ -803,14 +878,20 @@ struct Session::Impl final : SessionObjectAccess,
     SessionState state = SessionState::Created;
     SessionResult last_result;
     InitializationOutcome initialization_outcome;
+    ResetOutcome reset_outcome;
     StepOutcome step_outcome;
     std::optional<InitializationRequest> pending_run_attempt;
+    std::optional<ResetRequest> pending_reset_attempt;
+    std::uint64_t pending_reset_run_sequence = 0U;
     std::optional<RunId> committed_run_id;
     std::optional<RunBinding> committed_run_binding;
     std::uint64_t committed_run_sequence = 0U;
-    bool initialization_committed = false;
-    RunOutcome run_outcome_storage;
+    bool has_committed_run = false;
+    std::vector<std::unique_ptr<RunOutcome>> run_outcome_storages;
+    RunOutcome* current_run_outcome = nullptr;
+    std::unique_ptr<RunOutcome> reset_failure_outcome_storage;
     bool run_outcome_frozen = false;
+    bool resources_disposed = false;
     RuntimeDiagnosticStage current_diagnostic_stage =
         RuntimeDiagnosticStage::Lifecycle;
     SessionBoundarySummary boundary_summary;
@@ -838,19 +919,67 @@ struct Session::Impl final : SessionObjectAccess,
         return last_result;
     }
 
+    void prepare_outcome_identity(RunOutcome& outcome) const {
+        outcome.image_fingerprint = image->fingerprint();
+        outcome.plan_id = image->plan_id();
+        outcome.mission_id = image->mission_id();
+        outcome.source_semantic_hash = image->source_semantic_hash();
+        outcome.descriptor_semantic_hash = image->descriptor_semantic_hash();
+        outcome.initial_tick = image->clock().initial_tick;
+        outcome.final_tick = image->clock().initial_tick;
+    }
+
+    void prepare_run_start(RunOutcome& outcome, const RunId& run_id,
+                           std::uint64_t run_sequence,
+                           RunStartKind run_start_kind,
+                           bool run_start_committed,
+                           std::uint64_t initial_epoch) const noexcept {
+        outcome.run_id = run_id;
+        outcome.run_sequence = run_sequence;
+        outcome.run_start_kind = run_start_kind;
+        outcome.run_start_committed = run_start_committed;
+        outcome.final_status = RunFinalStatus::Failed;
+        outcome.validity = contracts::EvidenceValidity::Unknown;
+        outcome.initial_tick = image->clock().initial_tick;
+        outcome.final_tick = image->clock().initial_tick;
+        outcome.initial_committed_epoch = initial_epoch;
+        outcome.final_committed_epoch = initial_epoch;
+        outcome.committed_step_count = 0U;
+        outcome.terminal_branch_committed = false;
+        outcome.mission_result_available = false;
+        outcome.primary_diagnostic.reset();
+        outcome.related_diagnostics.clear();
+        outcome.finalization_status = RunFinalizationStatus::NotStarted;
+    }
+
+    [[nodiscard]] bool run_id_seen(const RunId& run_id) const noexcept {
+        return std::any_of(
+            run_outcome_storages.begin(), run_outcome_storages.end(),
+            [&run_id](const auto& outcome) {
+                return outcome != nullptr && outcome->run_id == run_id;
+            });
+    }
+
     [[nodiscard]] RuntimeDiagnostic make_diagnostic(
         SessionResult cause, RuntimeDiagnosticStage stage,
         contracts::EvidenceValidity validity) const noexcept {
         RuntimeDiagnostic result;
         result.code = diagnostic_code_for(cause.error);
+        if (stage == RuntimeDiagnosticStage::ResetRequest &&
+            (cause.error == SessionError::EmptyRunId ||
+             cause.error == SessionError::DuplicateRunId)) {
+            result.code = RuntimeDiagnosticCode::ResetRequestInvalid;
+        }
         result.stage = stage;
         result.subject_handle = cause.image_handle;
-        if (committed_run_id.has_value()) {
-            result.run_id = *committed_run_id;
+        if (pending_reset_attempt.has_value()) {
+            result.run_id = pending_reset_attempt->run_id;
         } else if (pending_run_attempt.has_value()) {
             result.run_id = pending_run_attempt->run_id;
-        } else if (run_outcome_frozen) {
-            result.run_id = run_outcome_storage.run_id;
+        } else if (committed_run_id.has_value()) {
+            result.run_id = *committed_run_id;
+        } else if (current_run_outcome != nullptr) {
+            result.run_id = current_run_outcome->run_id;
         }
         result.tick = committed_tick;
         result.base_epoch = committed_epoch;
@@ -864,51 +993,53 @@ struct Session::Impl final : SessionObjectAccess,
     }
 
     void freeze_failed_run(const RuntimeDiagnostic& diagnostic) noexcept {
-        if (run_outcome_frozen) return;
+        if (run_outcome_frozen || current_run_outcome == nullptr) return;
+        auto& outcome = *current_run_outcome;
         if (committed_run_id.has_value()) {
-            run_outcome_storage.run_id = *committed_run_id;
+            outcome.run_id = *committed_run_id;
         } else if (pending_run_attempt.has_value()) {
-            run_outcome_storage.run_id = pending_run_attempt->run_id;
+            outcome.run_id = pending_run_attempt->run_id;
+            outcome.run_start_kind = RunStartKind::Initialize;
+            outcome.run_start_committed = false;
         }
-        run_outcome_storage.run_sequence = committed_run_sequence;
-        run_outcome_storage.initialization_committed =
-            initialization_committed;
-        run_outcome_storage.final_status = RunFinalStatus::Failed;
-        run_outcome_storage.validity = diagnostic.validity_effect;
-        run_outcome_storage.final_tick = committed_tick;
-        run_outcome_storage.final_committed_epoch = committed_epoch;
-        run_outcome_storage.committed_step_count = committed_step_count;
-        run_outcome_storage.terminal_branch_committed = false;
-        run_outcome_storage.mission_result_available = false;
-        run_outcome_storage.primary_diagnostic = diagnostic;
-        run_outcome_storage.related_diagnostics.clear();
-        run_outcome_storage.finalization_status =
+        outcome.run_sequence = committed_run_sequence;
+        outcome.final_status = RunFinalStatus::Failed;
+        outcome.validity = diagnostic.validity_effect;
+        outcome.final_tick = committed_tick;
+        outcome.final_committed_epoch = committed_epoch;
+        outcome.committed_step_count = committed_step_count;
+        outcome.terminal_branch_committed = false;
+        outcome.mission_result_available = false;
+        outcome.primary_diagnostic = diagnostic;
+        outcome.related_diagnostics.clear();
+        outcome.finalization_status =
             RunFinalizationStatus::Succeeded;
         run_outcome_frozen = true;
     }
 
     void freeze_completed_run() noexcept {
-        if (run_outcome_frozen) return;
+        if (run_outcome_frozen || current_run_outcome == nullptr) return;
+        auto& outcome = *current_run_outcome;
         if (committed_run_id.has_value()) {
-            run_outcome_storage.run_id = *committed_run_id;
+            outcome.run_id = *committed_run_id;
         }
-        run_outcome_storage.run_sequence = committed_run_sequence;
-        run_outcome_storage.initialization_committed = true;
-        run_outcome_storage.final_status = RunFinalStatus::Completed;
-        run_outcome_storage.validity =
+        outcome.run_sequence = committed_run_sequence;
+        outcome.run_start_committed = true;
+        outcome.final_status = RunFinalStatus::Completed;
+        outcome.validity =
             contracts::EvidenceValidity::Valid;
-        run_outcome_storage.final_tick = committed_tick;
-        run_outcome_storage.final_committed_epoch = committed_epoch;
-        run_outcome_storage.committed_step_count = committed_step_count;
-        run_outcome_storage.terminal_branch_committed = true;
-        run_outcome_storage.mission_result_available =
+        outcome.final_tick = committed_tick;
+        outcome.final_committed_epoch = committed_epoch;
+        outcome.committed_step_count = committed_step_count;
+        outcome.terminal_branch_committed = true;
+        outcome.mission_result_available =
             step_summary.result_seal_staged &&
             step_summary.terminal_result_present;
-        run_outcome_storage.primary_diagnostic.reset();
-        run_outcome_storage.related_diagnostics.clear();
+        outcome.primary_diagnostic.reset();
+        outcome.related_diagnostics.clear();
         // The current Image declares no run-scoped finalization hooks. Its
         // empty finalization set is therefore a completed finalization.
-        run_outcome_storage.finalization_status =
+        outcome.finalization_status =
             RunFinalizationStatus::Succeeded;
         run_outcome_frozen = true;
     }
@@ -986,8 +1117,8 @@ struct Session::Impl final : SessionObjectAccess,
         outcome.result = result;
         if (committed_run_id.has_value()) {
             outcome.run_id = *committed_run_id;
-        } else if (run_outcome_frozen) {
-            outcome.run_id = run_outcome_storage.run_id;
+        } else if (current_run_outcome != nullptr) {
+            outcome.run_id = current_run_outcome->run_id;
         }
         outcome.run_sequence = committed_run_sequence;
         outcome.base_epoch = committed_epoch;
@@ -1003,7 +1134,7 @@ struct Session::Impl final : SessionObjectAccess,
         last_result = cause;
         unwind();
         state = SessionState::Failed;
-        initialization_committed = false;
+        has_committed_run = false;
         committed_run_id.reset();
         committed_run_binding.reset();
         const auto diagnostic = make_diagnostic(
@@ -1026,6 +1157,54 @@ struct Session::Impl final : SessionObjectAccess,
         freeze_failed_run(diagnostic);
         pending_run_attempt.reset();
         return initialization_outcome;
+    }
+
+    [[nodiscard]] ResetOutcome fail_reset(
+        SessionResult cause, RuntimeDiagnosticStage stage) noexcept {
+        last_result = cause;
+        const auto diagnostic = make_diagnostic(
+            cause, stage, contracts::EvidenceValidity::Unknown);
+        reset_outcome = {};
+        reset_outcome.status = ResetStatus::Failed;
+        reset_outcome.result = cause;
+        if (pending_reset_attempt.has_value()) {
+            reset_outcome.run_id = pending_reset_attempt->run_id;
+            reset_outcome.binding_matched = binding_matches_image(
+                pending_reset_attempt->binding, *image);
+        }
+        reset_outcome.proposed_run_sequence =
+            pending_reset_run_sequence;
+        reset_outcome.reset_commit = false;
+        reset_outcome.committed_epoch = committed_epoch;
+        reset_outcome.committed_tick = committed_tick;
+        reset_outcome.primary_diagnostic = diagnostic;
+
+        if (reset_failure_outcome_storage != nullptr &&
+            run_outcome_storages.size() <
+                run_outcome_storages.capacity()) {
+            auto& outcome = *reset_failure_outcome_storage;
+            prepare_run_start(
+                outcome,
+                pending_reset_attempt.has_value()
+                    ? pending_reset_attempt->run_id
+                    : RunId{},
+                pending_reset_run_sequence, RunStartKind::Reset, false,
+                committed_epoch);
+            outcome.final_status = RunFinalStatus::Failed;
+            outcome.validity = contracts::EvidenceValidity::Unknown;
+            outcome.final_tick = committed_tick;
+            outcome.final_committed_epoch = committed_epoch;
+            outcome.primary_diagnostic = diagnostic;
+            outcome.finalization_status =
+                RunFinalizationStatus::Succeeded;
+            current_run_outcome = reset_failure_outcome_storage.get();
+            run_outcome_storages.push_back(
+                std::move(reset_failure_outcome_storage));
+            run_outcome_frozen = true;
+        }
+        state = SessionState::Failed;
+        pending_reset_attempt.reset();
+        return reset_outcome;
     }
 
     [[nodiscard]] const contracts::PlanImageInitialBinding*
@@ -2330,6 +2509,219 @@ struct Session::Impl final : SessionObjectAccess,
         return {};
     }
 
+    [[nodiscard]] SessionResult stage_reset_states(
+        std::vector<ResetStateReplacement>& replacements) noexcept {
+        for (const auto& committed : committed_state_store.blocks) {
+            if (committed.block == nullptr || committed.initial == nullptr ||
+                committed.materializer == nullptr ||
+                committed.address == nullptr) {
+                return failure(SessionError::ResetStateFailed, 0U,
+                               "reset state metadata is incomplete");
+            }
+            auto* candidate = candidate_for_slot(
+                committed.block->candidate_slot_handle);
+            if (candidate == nullptr || candidate->materializer == nullptr ||
+                candidate->address == nullptr ||
+                candidate->block != committed.block ||
+                candidate->materializer != committed.materializer) {
+                return failure(SessionError::ResetStateFailed,
+                               committed.block->handle,
+                               "reset candidate state identity mismatch");
+            }
+            const auto& materializer = *committed.materializer;
+            const auto& operations = materializer.operations();
+            const auto layout = operations.layout();
+            RawBlock initial(layout.size_bytes, layout.alignment_bytes);
+            if (initial.get() == nullptr) {
+                return failure(SessionError::AllocationFailure,
+                               committed.initial->handle,
+                               "reset initial-state allocation failed");
+            }
+            const ScopedObjectAccess no_dependencies(*this, nullptr);
+            if (!materializer.construct(no_dependencies, initial.get())) {
+                return failure(SessionError::InitialStateFailed,
+                               committed.initial->handle,
+                               "reset initial-state builder failed");
+            }
+            ConstructedObject initial_guard(initial.get(), operations);
+            if (!operations.validate(initial.get())) {
+                return failure(SessionError::ObjectValidationFailed,
+                               committed.initial->handle,
+                               "reset initial state validation failed");
+            }
+
+            RawBlock staged_committed(layout.size_bytes,
+                                      layout.alignment_bytes);
+            if (staged_committed.get() == nullptr) {
+                return failure(SessionError::AllocationFailure,
+                               committed.block->handle,
+                               "reset committed-state allocation failed");
+            }
+            if (!operations.copy_construct(initial.get(),
+                                           staged_committed.get())) {
+                return failure(SessionError::ResetStateFailed,
+                               committed.block->handle,
+                               "reset committed-state clone failed");
+            }
+            ConstructedObject committed_guard(staged_committed.get(),
+                                              operations);
+            if (!operations.validate(staged_committed.get())) {
+                return failure(SessionError::ObjectValidationFailed,
+                               committed.block->handle,
+                               "reset committed state validation failed");
+            }
+
+            RawBlock staged_candidate(layout.size_bytes,
+                                      layout.alignment_bytes);
+            if (staged_candidate.get() == nullptr) {
+                return failure(SessionError::AllocationFailure,
+                               committed.block->handle,
+                               "reset candidate-state allocation failed");
+            }
+            if (!operations.copy_construct(initial.get(),
+                                           staged_candidate.get())) {
+                return failure(SessionError::ResetStateFailed,
+                               committed.block->handle,
+                               "reset candidate-state clone failed");
+            }
+            ConstructedObject candidate_guard(staged_candidate.get(),
+                                              operations);
+            if (!operations.validate(staged_candidate.get())) {
+                return failure(SessionError::ObjectValidationFailed,
+                               committed.block->handle,
+                               "reset candidate state validation failed");
+            }
+            if (!operations.replace(staged_candidate.get(), initial.get())) {
+                return failure(SessionError::ResetStateFailed,
+                               committed.block->handle,
+                               "reset candidate-state replace failed");
+            }
+            if (!operations.validate(staged_candidate.get())) {
+                return failure(SessionError::ObjectValidationFailed,
+                               committed.block->handle,
+                               "reset replaced candidate state validation failed");
+            }
+
+            ResetStateReplacement replacement;
+            replacement.materializer = &materializer;
+            replacement.alignment = layout.alignment_bytes;
+            committed_guard.release();
+            candidate_guard.release();
+            replacement.committed_address = staged_committed.release();
+            replacement.candidate_address = staged_candidate.release();
+            replacements.push_back(std::move(replacement));
+        }
+        return {};
+    }
+
+    void prepare_reset_histories(
+        std::vector<EvaluatorHistoryStore>& histories) const {
+        histories.reserve(image->evaluator_histories().size());
+        for (const auto& plan : image->evaluator_histories()) {
+            EvaluatorHistoryStore history;
+            history.plan = &plan;
+            history.samples.reserve(plan.history_depth);
+            histories.push_back(std::move(history));
+        }
+    }
+
+    [[nodiscard]] SessionResult validate_reset_precommit(
+        const std::vector<ResetStateReplacement>& replacements,
+        const std::vector<EvaluatorHistoryStore>& histories) noexcept {
+        if (state != SessionState::Completed || cycle_frame.open ||
+            active_transaction_handle != 0U ||
+            !cycle_frame.construction_order.empty() ||
+            committed_run_sequence ==
+                (std::numeric_limits<std::uint64_t>::max)() ||
+            committed_epoch ==
+                (std::numeric_limits<std::uint64_t>::max)() ||
+            committed_state_store.blocks.size() !=
+                image->state_blocks().size() ||
+            candidate_state_store.blocks.size() !=
+                committed_state_store.blocks.size() ||
+            replacements.size() != committed_state_store.blocks.size() ||
+            histories.size() != image->evaluator_histories().size()) {
+            return failure(SessionError::ResetPrecommitFailed, 0U,
+                           "reset final precommit shape is invalid");
+        }
+        for (std::size_t index = 0U; index < replacements.size(); ++index) {
+            const auto& replacement = replacements[index];
+            const auto& committed = committed_state_store.blocks[index];
+            if (replacement.materializer == nullptr ||
+                replacement.materializer != committed.materializer ||
+                replacement.committed_address == nullptr ||
+                replacement.candidate_address == nullptr ||
+                !replacement.materializer->operations()
+                     .supports_nofail_swap()) {
+                return failure(SessionError::ResetPrecommitFailed,
+                               committed.block == nullptr
+                                   ? 0U
+                                   : committed.block->handle,
+                               "reset state lacks a no-fail commit operation");
+            }
+        }
+        return {};
+    }
+
+    void clear_run_journals_noexcept() noexcept {
+        boundary_summary.generation = 0U;
+        boundary_summary.output_write_count = 0U;
+        boundary_summary.executed_callsite_handles.clear();
+        boundary_summary.skipped_callsite_handles.clear();
+
+        step_summary.transaction_handle = 0U;
+        step_summary.branch = contracts::TransactionBranch::Continue;
+        step_summary.branch_selected = false;
+        step_summary.generation = 0U;
+        step_summary.base_epoch = 0U;
+        step_summary.committed_epoch = 0U;
+        step_summary.base_tick = image->clock().initial_tick;
+        step_summary.committed_tick = image->clock().initial_tick;
+        step_summary.output_write_count = 0U;
+        step_summary.committed = false;
+        step_summary.history_staged = false;
+        step_summary.observation_seal_staged = false;
+        step_summary.result_seal_staged = false;
+        step_summary.terminal_result_present = false;
+        step_summary.prevalidated = false;
+        step_summary.primary_failure = {};
+        step_summary.executed_callsite_handles.clear();
+        step_summary.skipped_callsite_handles.clear();
+        step_summary.integration_scope_handles.clear();
+        step_summary.candidate_slot_handles.clear();
+        step_summary.candidates.clear();
+        step_summary.histories.clear();
+        step_summary.seals.clear();
+
+        step_outcome = {};
+        cycle_frame.sequence = 0U;
+        cycle_frame.write_count = 0U;
+        cycle_frame.open = false;
+        cycle_frame.construction_order.clear();
+        for (auto& slot : cycle_frame.slots) {
+            slot.present = false;
+            slot.generation = 0U;
+            slot.sequence = 0U;
+            slot.sample_tick = image->clock().initial_tick;
+            slot.sample_time_seconds = 0.0;
+            slot.interval_start_seconds = 0.0;
+            slot.interval_end_seconds = 0.0;
+            slot.quality = contracts::DataQuality::Invalid;
+        }
+        for (auto& candidate : candidate_state_store.blocks) {
+            candidate.candidate_present = false;
+            candidate.candidate_generation = 0U;
+            candidate.candidate_base_epoch = 0U;
+            candidate.candidate_producer_handle = 0U;
+            candidate.candidate_writer_token_handle = 0U;
+        }
+        staged_evaluator_histories.clear();
+        staged_sealed_boundary.outputs.clear();
+        staged_sealed_boundary.committed_epoch = 0U;
+        staged_sealed_boundary.committed_tick = image->clock().initial_tick;
+        active_transaction_handle = 0U;
+    }
+
     [[nodiscard]] SessionResult prepare_evaluator_histories() {
         evaluator_histories.clear();
         for (const auto& history : image->evaluator_histories()) {
@@ -2814,8 +3206,12 @@ struct Session::Impl final : SessionObjectAccess,
     }
 
     void unwind() noexcept {
+        if (resources_disposed) return;
+        resources_disposed = true;
         close_frame();
+        staged_sealed_boundary.outputs.clear();
         sealed_boundary.outputs.clear();
+        staged_evaluator_histories.clear();
         evaluator_histories.clear();
         for (auto found = candidate_state_store.blocks.rbegin();
              found != candidate_state_store.blocks.rend(); ++found) {
@@ -2836,6 +3232,7 @@ struct Session::Impl final : SessionObjectAccess,
             }
         }
         cycle_frame.slots.clear();
+        cycle_frame.construction_order.clear();
         for (auto found = runtime_bindings.cells.rbegin();
              found != runtime_bindings.cells.rend(); ++found) {
             found->materializer->operations().destroy(found->address);
@@ -3532,6 +3929,10 @@ const InitializationOutcome& Session::last_initialization_outcome()
     return implementation_->initialization_outcome;
 }
 
+const ResetOutcome& Session::last_reset_outcome() const noexcept {
+    return implementation_->reset_outcome;
+}
+
 const StepOutcome& Session::last_step_outcome() const noexcept {
     return implementation_->step_outcome;
 }
@@ -3552,17 +3953,47 @@ const RunBinding* Session::active_run_binding() const noexcept {
                : nullptr;
 }
 
+const RunId* Session::last_committed_run_id() const noexcept {
+    return implementation_->committed_run_id.has_value()
+               ? &*implementation_->committed_run_id
+               : nullptr;
+}
+
+const RunBinding* Session::last_committed_run_binding() const noexcept {
+    return implementation_->committed_run_binding.has_value()
+               ? &*implementation_->committed_run_binding
+               : nullptr;
+}
+
 std::optional<std::uint64_t> Session::run_sequence() const noexcept {
     const auto& impl = *implementation_;
-    return impl.initialization_committed
+    return impl.has_committed_run
                ? std::optional<std::uint64_t>{impl.committed_run_sequence}
                : std::nullopt;
 }
 
 const RunOutcome* Session::run_outcome() const noexcept {
     return implementation_->run_outcome_frozen
-               ? &implementation_->run_outcome_storage
+               ? implementation_->current_run_outcome
                : nullptr;
+}
+
+const RunOutcome* Session::run_outcome_for_sequence(
+    std::uint64_t run_sequence) const noexcept {
+    const auto& impl = *implementation_;
+    const auto found = std::find_if(
+        impl.run_outcome_storages.begin(),
+        impl.run_outcome_storages.end(),
+        [run_sequence](const auto& outcome) {
+            return outcome != nullptr &&
+                   outcome->run_sequence == run_sequence;
+        });
+    if (found == impl.run_outcome_storages.end() ||
+        (found->get() == impl.current_run_outcome &&
+         !impl.run_outcome_frozen)) {
+        return nullptr;
+    }
+    return found->get();
 }
 
 const SessionBoundarySummary& Session::last_boundary_summary() const noexcept {
@@ -3586,8 +4017,8 @@ InitializationOutcome Session::initialize(
             "initialize requires Created Session");
         auto diagnostic = impl.make_diagnostic(
             result, RuntimeDiagnosticStage::Lifecycle,
-            impl.run_outcome_frozen
-                ? impl.run_outcome_storage.validity
+            impl.run_outcome_frozen && impl.current_run_outcome != nullptr
+                ? impl.current_run_outcome->validity
                 : contracts::EvidenceValidity::Unknown);
         diagnostic.run_id = request.run_id;
         InitializationOutcome rejected;
@@ -3686,13 +4117,15 @@ InitializationOutcome Session::initialize(
         impl.committed_run_binding.emplace(
             std::move(impl.pending_run_attempt->binding));
         impl.committed_run_sequence = 0U;
-        impl.initialization_committed = true;
+        impl.has_committed_run = true;
         impl.committed_step_count = 0U;
         impl.state = SessionState::Initialized;
         impl.last_result = {};
-        impl.run_outcome_storage.run_id = *impl.committed_run_id;
-        impl.run_outcome_storage.run_sequence = 0U;
-        impl.run_outcome_storage.initialization_committed = true;
+        impl.prepare_run_start(*impl.current_run_outcome,
+                               *impl.committed_run_id, 0U,
+                               RunStartKind::Initialize, true,
+                               impl.committed_epoch);
+        impl.run_outcome_frozen = false;
         impl.initialization_outcome = {};
         impl.initialization_outcome.status =
             InitializationStatus::Committed;
@@ -3718,6 +4151,204 @@ InitializationOutcome Session::initialize(
         return impl.fail_initialization(
             result, impl.current_diagnostic_stage);
     }
+}
+
+ResetOutcome Session::reset(ResetRequest request) noexcept {
+    auto& impl = *implementation_;
+    if (impl.state != SessionState::Completed) {
+        const auto result = impl.failure(
+            SessionError::InvalidLifecycleTransition, 0U,
+            "reset requires Completed Session");
+        auto diagnostic = impl.make_diagnostic(
+            result, RuntimeDiagnosticStage::Lifecycle,
+            impl.run_outcome_frozen && impl.current_run_outcome != nullptr
+                ? impl.current_run_outcome->validity
+                : contracts::EvidenceValidity::Unknown);
+        diagnostic.run_id = request.run_id;
+        impl.reset_outcome = {};
+        impl.reset_outcome.status = ResetStatus::Failed;
+        impl.reset_outcome.result = result;
+        impl.reset_outcome.run_id = request.run_id;
+        impl.reset_outcome.proposed_run_sequence =
+            impl.has_committed_run &&
+                    impl.committed_run_sequence !=
+                        (std::numeric_limits<std::uint64_t>::max)()
+                ? impl.committed_run_sequence + 1U
+                : 0U;
+        impl.reset_outcome.binding_matched =
+            binding_matches_image(request.binding, *impl.image);
+        impl.reset_outcome.reset_commit = false;
+        impl.reset_outcome.committed_epoch = impl.committed_epoch;
+        impl.reset_outcome.committed_tick = impl.committed_tick;
+        impl.reset_outcome.primary_diagnostic = diagnostic;
+        return impl.reset_outcome;
+    }
+
+    impl.pending_reset_run_sequence =
+        impl.committed_run_sequence ==
+                (std::numeric_limits<std::uint64_t>::max)()
+            ? impl.committed_run_sequence
+            : impl.committed_run_sequence + 1U;
+    impl.pending_reset_attempt.emplace(std::move(request));
+    if (impl.pending_reset_attempt->run_id.empty()) {
+        return impl.fail_reset(
+            impl.failure(SessionError::EmptyRunId, 0U,
+                         "reset requires a non-empty caller RunId"),
+            RuntimeDiagnosticStage::ResetRequest);
+    }
+    if (impl.run_id_seen(impl.pending_reset_attempt->run_id)) {
+        return impl.fail_reset(
+            impl.failure(SessionError::DuplicateRunId, 0U,
+                         "reset RunId is already known to this Session"),
+            RuntimeDiagnosticStage::ResetRequest);
+    }
+    if (!binding_matches_image(impl.pending_reset_attempt->binding,
+                               *impl.image)) {
+        return impl.fail_reset(
+            impl.failure(SessionError::RunBindingMismatch, 0U,
+                         "reset RunBinding does not match the Session Image"),
+            RuntimeDiagnosticStage::ResetRequest);
+    }
+    if (impl.committed_run_sequence ==
+            (std::numeric_limits<std::uint64_t>::max)() ||
+        impl.committed_epoch ==
+            (std::numeric_limits<std::uint64_t>::max)()) {
+        return impl.fail_reset(
+            impl.failure(SessionError::ResetPrecommitFailed, 0U,
+                         "reset sequence or epoch cannot advance"),
+            RuntimeDiagnosticStage::ResetPrecommit);
+    }
+
+    std::string_view allocation_detail =
+        "reset outcome staging allocation failed";
+    try {
+        impl.current_diagnostic_stage =
+            RuntimeDiagnosticStage::ResetPrecommit;
+        impl.run_outcome_storages.reserve(
+            impl.run_outcome_storages.size() + 2U);
+        auto next_outcome = std::make_unique<RunOutcome>();
+        impl.prepare_outcome_identity(*next_outcome);
+        impl.prepare_run_start(
+            *next_outcome, impl.pending_reset_attempt->run_id,
+            impl.pending_reset_run_sequence, RunStartKind::Reset, true,
+            impl.committed_epoch + 1U);
+        auto next_failure_outcome = std::make_unique<RunOutcome>();
+        impl.prepare_outcome_identity(*next_failure_outcome);
+
+        allocation_detail = "reset state staging allocation failed";
+        std::vector<Impl::ResetStateReplacement> replacements;
+        replacements.reserve(impl.committed_state_store.blocks.size());
+        impl.current_diagnostic_stage = RuntimeDiagnosticStage::ResetState;
+        auto result = impl.stage_reset_states(replacements);
+        if (!result) {
+            return impl.fail_reset(impl.last_result,
+                                   impl.current_diagnostic_stage);
+        }
+
+        allocation_detail = "reset history staging allocation failed";
+        impl.current_diagnostic_stage =
+            RuntimeDiagnosticStage::ResetPrecommit;
+        std::vector<Impl::EvaluatorHistoryStore> histories;
+        impl.prepare_reset_histories(histories);
+        Impl::SealedBoundaryStore empty_seal;
+        empty_seal.outputs.reserve(impl.image->slots().size());
+
+        impl.current_diagnostic_stage =
+            RuntimeDiagnosticStage::ResetPrecommit;
+        result = impl.validate_reset_precommit(replacements, histories);
+        if (!result || impl.reset_failure_outcome_storage == nullptr ||
+            impl.run_outcome_storages.size() >=
+                impl.run_outcome_storages.capacity()) {
+            if (result) {
+                result = impl.failure(
+                    SessionError::ResetPrecommitFailed, 0U,
+                    "reset outcome retention precheck failed");
+            }
+            return impl.fail_reset(result,
+                                   RuntimeDiagnosticStage::ResetPrecommit);
+        }
+
+        RunId next_run_id = impl.pending_reset_attempt->run_id;
+        RunBinding next_binding =
+            std::move(impl.pending_reset_attempt->binding);
+        impl.current_run_outcome = next_outcome.get();
+        impl.run_outcome_storages.push_back(std::move(next_outcome));
+        impl.reset_failure_outcome_storage =
+            std::move(next_failure_outcome);
+
+        for (std::size_t index = 0U; index < replacements.size(); ++index) {
+            auto& replacement = replacements[index];
+            auto& committed = impl.committed_state_store.blocks[index];
+            auto* candidate = impl.candidate_for_slot(
+                committed.block->candidate_slot_handle);
+            replacement.materializer->operations().nofail_swap(
+                committed.address, replacement.committed_address);
+            replacement.materializer->operations().nofail_swap(
+                candidate->address, replacement.candidate_address);
+        }
+
+        ++impl.committed_epoch;
+        impl.committed_tick = impl.image->clock().initial_tick;
+        for (auto& committed : impl.committed_state_store.blocks) {
+            committed.committed_epoch = impl.committed_epoch;
+        }
+        for (auto& candidate : impl.candidate_state_store.blocks) {
+            candidate.committed_epoch = impl.committed_epoch;
+        }
+        impl.evaluator_histories.swap(histories);
+        impl.sealed_boundary.outputs.swap(empty_seal.outputs);
+        impl.sealed_boundary.committed_epoch = 0U;
+        impl.sealed_boundary.committed_tick =
+            impl.image->clock().initial_tick;
+        impl.committed_run_id->swap(next_run_id);
+        impl.committed_run_binding->swap(next_binding);
+        impl.committed_run_sequence = impl.pending_reset_run_sequence;
+        impl.committed_step_count = 0U;
+        impl.clear_run_journals_noexcept();
+        impl.run_outcome_frozen = false;
+        impl.has_committed_run = true;
+        impl.state = SessionState::Initialized;
+        impl.last_result = {};
+        impl.current_diagnostic_stage = RuntimeDiagnosticStage::Lifecycle;
+
+        impl.reset_outcome = {};
+        impl.reset_outcome.status = ResetStatus::Committed;
+        impl.reset_outcome.result = {};
+        impl.reset_outcome.run_id = *impl.committed_run_id;
+        impl.reset_outcome.proposed_run_sequence =
+            impl.committed_run_sequence;
+        impl.reset_outcome.binding_matched = true;
+        impl.reset_outcome.reset_commit = true;
+        impl.reset_outcome.committed_epoch = impl.committed_epoch;
+        impl.reset_outcome.committed_tick = impl.committed_tick;
+        impl.pending_reset_attempt.reset();
+        return impl.reset_outcome;
+    } catch (const std::bad_alloc&) {
+        return impl.fail_reset(
+            impl.failure(SessionError::AllocationFailure, 0U,
+                         allocation_detail),
+            impl.current_diagnostic_stage);
+    } catch (...) {
+        return impl.fail_reset(
+            impl.failure(SessionError::InternalFailure, 0U,
+                         "reset staging failed unexpectedly"),
+            impl.current_diagnostic_stage);
+    }
+}
+
+SessionResult Session::dispose() noexcept {
+    auto& impl = *implementation_;
+    if (impl.state != SessionState::Created &&
+        impl.state != SessionState::Completed &&
+        impl.state != SessionState::Failed) {
+        return impl.failure(
+            SessionError::InvalidLifecycleTransition, 0U,
+            "dispose requires Created, Completed, or Failed Session");
+    }
+    impl.unwind();
+    impl.state = SessionState::Disposed;
+    impl.last_result = {};
+    return {};
 }
 
 SessionResult Session::qualification_execute_opening_boundary() noexcept {
@@ -3755,8 +4386,8 @@ StepOutcome Session::execute_step() noexcept {
             "step execution requires Initialized Session");
         const auto diagnostic = impl.make_diagnostic(
             result, RuntimeDiagnosticStage::Lifecycle,
-            impl.run_outcome_frozen
-                ? impl.run_outcome_storage.validity
+            impl.run_outcome_frozen && impl.current_run_outcome != nullptr
+                ? impl.current_run_outcome->validity
                 : contracts::EvidenceValidity::Unknown);
         impl.step_outcome = impl.make_lifecycle_rejection_outcome(
             result, diagnostic);
@@ -4337,20 +4968,16 @@ SessionCreation create_session(
         implementation->provider = std::move(provider);
         implementation->committed_tick =
             implementation->image->clock().initial_tick;
-        implementation->run_outcome_storage.image_fingerprint =
-            implementation->image->fingerprint();
-        implementation->run_outcome_storage.plan_id =
-            implementation->image->plan_id();
-        implementation->run_outcome_storage.mission_id =
-            implementation->image->mission_id();
-        implementation->run_outcome_storage.source_semantic_hash =
-            implementation->image->source_semantic_hash();
-        implementation->run_outcome_storage.descriptor_semantic_hash =
-            implementation->image->descriptor_semantic_hash();
-        implementation->run_outcome_storage.initial_tick =
-            implementation->image->clock().initial_tick;
-        implementation->run_outcome_storage.final_tick =
-            implementation->image->clock().initial_tick;
+        implementation->run_outcome_storages.reserve(2U);
+        auto initial_outcome = std::make_unique<RunOutcome>();
+        implementation->prepare_outcome_identity(*initial_outcome);
+        implementation->current_run_outcome = initial_outcome.get();
+        implementation->run_outcome_storages.push_back(
+            std::move(initial_outcome));
+        implementation->reset_failure_outcome_storage =
+            std::make_unique<RunOutcome>();
+        implementation->prepare_outcome_identity(
+            *implementation->reset_failure_outcome_storage);
         return {std::unique_ptr<Session>(
                     new Session(std::move(implementation))),
                 {}};
