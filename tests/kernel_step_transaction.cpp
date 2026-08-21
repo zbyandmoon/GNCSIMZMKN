@@ -21,6 +21,8 @@ namespace {
 
 using gnc::contracts::ExecutionPlanImage;
 using gnc::kernel::SessionError;
+using gnc::kernel::RuntimeDiagnosticCode;
+using gnc::kernel::RuntimeDiagnosticStage;
 using gnc::tests::ref_yyz::AdapterOptions;
 using gnc::tests::ref_yyz::CommittedRigidMassProbe;
 using gnc::tests::ref_yyz::FailurePhase;
@@ -545,10 +547,136 @@ void require_mission_oracle(const MissionResultProbe& value) {
            lhs.terminal_tick == rhs.terminal_tick;
 }
 
+[[nodiscard]] bool exactly_same(
+    const gnc::kernel::RuntimeDiagnostic& lhs,
+    const gnc::kernel::RuntimeDiagnostic& rhs) noexcept {
+    return lhs.code == rhs.code && lhs.stage == rhs.stage &&
+           lhs.subject_handle == rhs.subject_handle &&
+           lhs.run_id == rhs.run_id && lhs.tick == rhs.tick &&
+           lhs.base_epoch == rhs.base_epoch &&
+           lhs.cause_code == rhs.cause_code &&
+           lhs.cause_ref == rhs.cause_ref &&
+           lhs.validity_effect == rhs.validity_effect &&
+           lhs.disposition == rhs.disposition &&
+           lhs.message_key == rhs.message_key && lhs.detail == rhs.detail;
+}
+
+[[nodiscard]] bool exactly_same(
+    const gnc::kernel::RunOutcome& lhs,
+    const gnc::kernel::RunOutcome& rhs) noexcept {
+    if (lhs.run_id != rhs.run_id ||
+        lhs.run_sequence != rhs.run_sequence ||
+        lhs.image_fingerprint != rhs.image_fingerprint ||
+        lhs.plan_id != rhs.plan_id || lhs.mission_id != rhs.mission_id ||
+        lhs.descriptor_semantic_hash != rhs.descriptor_semantic_hash ||
+        lhs.initialization_committed != rhs.initialization_committed ||
+        lhs.final_status != rhs.final_status ||
+        lhs.validity != rhs.validity ||
+        lhs.initial_tick != rhs.initial_tick ||
+        lhs.final_tick != rhs.final_tick ||
+        lhs.initial_committed_epoch != rhs.initial_committed_epoch ||
+        lhs.final_committed_epoch != rhs.final_committed_epoch ||
+        lhs.committed_step_count != rhs.committed_step_count ||
+        lhs.terminal_branch_committed != rhs.terminal_branch_committed ||
+        lhs.mission_result_available != rhs.mission_result_available ||
+        lhs.primary_diagnostic.has_value() !=
+            rhs.primary_diagnostic.has_value() ||
+        lhs.related_diagnostics.size() != rhs.related_diagnostics.size() ||
+        lhs.finalization_status != rhs.finalization_status) {
+        return false;
+    }
+    if (lhs.primary_diagnostic.has_value() &&
+        !exactly_same(*lhs.primary_diagnostic,
+                      *rhs.primary_diagnostic)) {
+        return false;
+    }
+    for (std::size_t index = 0U;
+         index < lhs.related_diagnostics.size(); ++index) {
+        if (!exactly_same(lhs.related_diagnostics[index],
+                          rhs.related_diagnostics[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] RuntimeDiagnosticCode expected_runtime_code(
+    SessionError error) noexcept {
+    switch (error) {
+    case SessionError::None:
+        return RuntimeDiagnosticCode::None;
+    case SessionError::EmptyRunId:
+        return RuntimeDiagnosticCode::InitializationRequestInvalid;
+    case SessionError::RunBindingMismatch:
+        return RuntimeDiagnosticCode::ImageBindingMismatch;
+    case SessionError::NullImage:
+    case SessionError::NullMaterializationProvider:
+    case SessionError::UnsupportedImageRevision:
+    case SessionError::InvalidImageHandle:
+    case SessionError::InvalidImageStructure:
+    case SessionError::InvalidStorageLayout:
+    case SessionError::StorageBoundsViolation:
+    case SessionError::StorageOverlap:
+        return RuntimeDiagnosticCode::ImageValidationFailed;
+    case SessionError::MissingMaterializer:
+    case SessionError::InvalidMaterializerIdentity:
+    case SessionError::PreparationFailed:
+    case SessionError::RuntimeCellFailed:
+    case SessionError::SlotConstructionFailed:
+    case SessionError::InitialStateFailed:
+        return RuntimeDiagnosticCode::MaterializationFailed;
+    case SessionError::InvalidSchedule:
+        return RuntimeDiagnosticCode::ScheduleFailed;
+    case SessionError::FrameAlreadyOpen:
+    case SessionError::FrameNotOpen:
+    case SessionError::FrameSlotAbsent:
+    case SessionError::StaleFrameView:
+        return RuntimeDiagnosticCode::FrameFailed;
+    case SessionError::StateAuthorizationFailure:
+    case SessionError::ReaderAuthorizationFailure:
+    case SessionError::WriterAuthorizationFailure:
+    case SessionError::CandidateAuthorizationFailure:
+    case SessionError::HistoryAuthorizationFailure:
+        return RuntimeDiagnosticCode::AuthorizationFailed;
+    case SessionError::HistoryValidationFailed:
+        return RuntimeDiagnosticCode::HistoryFailed;
+    case SessionError::CandidateRearmFailed:
+    case SessionError::CandidateValidationFailed:
+        return RuntimeDiagnosticCode::CandidateFailed;
+    case SessionError::ObservationSealFailed:
+        return RuntimeDiagnosticCode::ObservationSealFailed;
+    case SessionError::TransactionPrecommitFailed:
+        return RuntimeDiagnosticCode::TransactionPrecommitFailed;
+    case SessionError::InvocationFailed:
+        return RuntimeDiagnosticCode::InvocationFailed;
+    case SessionError::ObjectSizeMismatch:
+    case SessionError::ObjectAlignmentMismatch:
+    case SessionError::ObjectLayoutMismatch:
+    case SessionError::ObjectCodecMismatch:
+    case SessionError::ObjectTypeMismatch:
+    case SessionError::ObjectValidationFailed:
+        return RuntimeDiagnosticCode::ObjectValidationFailed;
+    case SessionError::AllocationFailure:
+        return RuntimeDiagnosticCode::AllocationFailed;
+    case SessionError::InternalFailure:
+        return RuntimeDiagnosticCode::InternalFailure;
+    case SessionError::InvalidLifecycleTransition:
+        return RuntimeDiagnosticCode::LifecycleTransitionRejected;
+    }
+    return RuntimeDiagnosticCode::InternalFailure;
+}
+
 [[nodiscard]] std::shared_ptr<const ExecutionPlanImage> build_image() {
     const auto compiled = gnc::tests::ref_yyz::compile_complete_image();
     require(compiled.succeeded(), "REF-YYZ Image compilation failed");
     return std::make_shared<const ExecutionPlanImage>(*compiled.value);
+}
+
+[[nodiscard]] gnc::kernel::InitializationRequest initialization_request(
+    const ExecutionPlanImage& image,
+    std::string run_id = "run:step-transaction") {
+    return {gnc::kernel::RunId{std::move(run_id)},
+            gnc::kernel::exact_run_binding(image)};
 }
 
 struct SessionBundle {
@@ -558,19 +686,36 @@ struct SessionBundle {
 
 [[nodiscard]] SessionBundle initialize_session(
     const std::shared_ptr<const ExecutionPlanImage>& image,
-    AdapterOptions options = {}) {
+    AdapterOptions options = {},
+    std::string run_id = "run:step-transaction") {
     auto adapter = gnc::tests::ref_yyz::make_session_adapter(*image, options);
     require(static_cast<bool>(adapter), adapter.error);
     auto creation = gnc::kernel::create_session(image, adapter.provider);
     require(static_cast<bool>(creation), "Session creation failed");
-    const auto initialized = creation.session->initialize();
+    const auto initialized = creation.session->initialize(
+        initialization_request(*image, std::move(run_id)));
     if (!initialized) {
         throw std::runtime_error(
             std::string("Session initialization failed: ") +
-            std::string(gnc::kernel::to_string(initialized.error)) + " / " +
-            std::string(initialized.detail) + " / handle=" +
-            std::to_string(initialized.image_handle));
+            std::string(gnc::kernel::to_string(initialized.result.error)) +
+            " / " + std::string(initialized.result.detail) + " / handle=" +
+            std::to_string(initialized.result.image_handle));
     }
+    require(initialized.status ==
+                    gnc::kernel::InitializationStatus::Committed &&
+                initialized.binding_matched &&
+                initialized.initialization_commit &&
+                initialized.proposed_run_sequence == 0U &&
+                initialized.committed_epoch == 0U &&
+                initialized.committed_tick == 0 &&
+                !initialized.primary_diagnostic.has_value() &&
+                creation.session->active_run_id() != nullptr &&
+                creation.session->active_run_binding() != nullptr &&
+                creation.session->run_sequence().has_value() &&
+                *creation.session->run_sequence() == 0U &&
+                creation.session->run_outcome() == nullptr &&
+                creation.session->committed_step_count() == 0U,
+            "InitializationCommit did not publish the exact run context");
     return {std::move(adapter), std::move(creation.session)};
 }
 
@@ -631,6 +776,115 @@ void require_tick_two_oracle(const CommittedRigidMassProbe& value) {
             "constant mass geometry changed across two commits");
 }
 
+void verify_initialization_identity_and_commit(
+    const std::shared_ptr<const ExecutionPlanImage>& image) {
+    auto adapter = gnc::tests::ref_yyz::make_session_adapter(*image);
+    require(static_cast<bool>(adapter), adapter.error);
+
+    auto created = gnc::kernel::create_session(image, adapter.provider);
+    require(created &&
+                created.session->state() ==
+                    gnc::kernel::SessionState::Created &&
+                created.session->active_run_id() == nullptr &&
+                created.session->active_run_binding() == nullptr &&
+                !created.session->run_sequence().has_value() &&
+                created.session->run_outcome() == nullptr &&
+                created.session->committed_epoch() == 0U &&
+                created.session->committed_tick() == 0,
+            "Created Session exposed a committed run identity");
+
+    const auto empty = created.session->initialize(
+        {gnc::kernel::RunId{}, gnc::kernel::exact_run_binding(*image)});
+    require(!empty &&
+                empty.result.error == SessionError::EmptyRunId &&
+                empty.binding_matched && !empty.initialization_commit &&
+                empty.committed_epoch == 0U && empty.committed_tick == 0 &&
+                empty.primary_diagnostic.has_value() &&
+                empty.primary_diagnostic->code ==
+                    RuntimeDiagnosticCode::InitializationRequestInvalid &&
+                empty.primary_diagnostic->stage ==
+                    RuntimeDiagnosticStage::InitializationRequest &&
+                empty.primary_diagnostic->validity_effect ==
+                    gnc::contracts::EvidenceValidity::Unknown &&
+                created.session->state() ==
+                    gnc::kernel::SessionState::Failed &&
+                created.session->active_run_id() == nullptr &&
+                !created.session->run_sequence().has_value() &&
+                created.session->committed_state_count() == 0U &&
+                created.session->committed_epoch() == 0U &&
+                created.session->committed_tick() == 0,
+            "empty RunId crossed InitializationCommit");
+    const auto* empty_outcome = created.session->run_outcome();
+    require(empty_outcome != nullptr && empty_outcome->run_id.empty() &&
+                !empty_outcome->initialization_committed &&
+                empty_outcome->final_status ==
+                    gnc::kernel::RunFinalStatus::Failed &&
+                empty_outcome->validity ==
+                    gnc::contracts::EvidenceValidity::Unknown &&
+                empty_outcome->final_committed_epoch == 0U &&
+                empty_outcome->final_tick == 0 &&
+                empty_outcome->committed_step_count == 0U &&
+                empty_outcome->primary_diagnostic.has_value() &&
+                empty_outcome->finalization_status ==
+                    gnc::kernel::RunFinalizationStatus::Succeeded,
+            "empty RunId did not freeze a precommit failure outcome");
+
+    auto mismatch = gnc::kernel::create_session(image, adapter.provider);
+    require(static_cast<bool>(mismatch),
+            "binding-mismatch Session creation failed");
+    auto wrong_binding = gnc::kernel::exact_run_binding(*image);
+    wrong_binding.image_fingerprint += ".wrong";
+    const gnc::kernel::RunId mismatch_id{"run:binding-mismatch"};
+    const auto mismatched = mismatch.session->initialize(
+        {mismatch_id, std::move(wrong_binding)});
+    require(!mismatched &&
+                mismatched.result.error ==
+                    SessionError::RunBindingMismatch &&
+                mismatched.run_id == mismatch_id &&
+                !mismatched.binding_matched &&
+                !mismatched.initialization_commit &&
+                mismatched.primary_diagnostic.has_value() &&
+                mismatched.primary_diagnostic->code ==
+                    RuntimeDiagnosticCode::ImageBindingMismatch &&
+                mismatched.primary_diagnostic->run_id == mismatch_id &&
+                mismatch.session->state() ==
+                    gnc::kernel::SessionState::Failed &&
+                mismatch.session->active_run_id() == nullptr &&
+                mismatch.session->run_outcome() != nullptr &&
+                mismatch.session->committed_epoch() == 0U &&
+                mismatch.session->committed_tick() == 0,
+            "mismatched RunBinding crossed InitializationCommit");
+    const auto frozen_mismatch = *mismatch.session->run_outcome();
+    const auto rejected_step = mismatch.session->execute_step();
+    const auto rejected_run = mismatch.session->run_to_terminal();
+    require(!rejected_step &&
+                rejected_step.result.error ==
+                    SessionError::InvalidLifecycleTransition &&
+                !rejected_run &&
+                rejected_run.error ==
+                    SessionError::InvalidLifecycleTransition &&
+                exactly_same(*mismatch.session->run_outcome(),
+                             frozen_mismatch),
+            "post-initialization-failure rejection changed frozen evidence");
+
+    auto successful = initialize_session(
+        image, {}, "run:initialization-commit");
+    require(successful.session->active_run_id()->value() ==
+                    "run:initialization-commit" &&
+                *successful.session->active_run_binding() ==
+                    gnc::kernel::exact_run_binding(*image) &&
+                successful.session->state() ==
+                    gnc::kernel::SessionState::Initialized,
+            "successful initialization published the wrong active run");
+    const auto completed = successful.session->run_to_terminal();
+    require(completed && successful.session->run_outcome() != nullptr &&
+                successful.session->run_outcome()->final_status ==
+                    gnc::kernel::RunFinalStatus::Completed,
+            "fresh Session did not complete after initialization failures");
+    require_mission_oracle(mission_result_probe(*successful.session,
+                                                successful.adapter));
+}
+
 void verify_complete_step_transactions(
     const std::shared_ptr<const ExecutionPlanImage>& image) {
     auto bundle = initialize_session(image);
@@ -653,6 +907,30 @@ void verify_complete_step_transactions(
 
     const auto first = bundle.session->execute_step();
     require(static_cast<bool>(first), "first Continue step failed");
+    require(first.status == gnc::kernel::StepStatus::Committed &&
+                first.run_id.value() == "run:step-transaction" &&
+                first.run_sequence == 0U &&
+                first.transaction_handle == transaction.handle &&
+                first.branch ==
+                    gnc::contracts::TransactionBranch::Continue &&
+                first.base_epoch == 0U && first.committed_epoch == 1U &&
+                first.tick_before == 0 && first.tick_after == 1 &&
+                first.last_region_handle != 0U &&
+                first.last_callsite_handle != 0U &&
+                first.last_image_handle == first.last_callsite_handle &&
+                first.candidates.planned_count == 2U &&
+                first.candidates.present_count == 2U &&
+                first.candidates.valid_count == 2U &&
+                first.histories.staged &&
+                first.histories.history_count == 1U &&
+                first.histories.prospective_sample_count == 1U &&
+                first.observation_seal.staged &&
+                first.observation_seal.output_count ==
+                    continue_branch->sealed_output_slot_handles.size() &&
+                !first.result_seal.staged &&
+                !first.result_seal.result_present &&
+                !first.primary_diagnostic.has_value(),
+            "first Continue StepOutcome is incomplete");
     require_tick_one_oracle(committed_probe(*bundle.session,
                                             bundle.adapter));
     const auto& first_journal = bundle.session->last_step_journal();
@@ -703,6 +981,24 @@ void verify_complete_step_transactions(
 
     const auto second = bundle.session->execute_step();
     require(static_cast<bool>(second), "second Continue step failed");
+    require(second.status == gnc::kernel::StepStatus::Committed &&
+                second.run_id == first.run_id &&
+                second.run_sequence == 0U &&
+                second.transaction_handle == transaction.handle &&
+                second.branch ==
+                    gnc::contracts::TransactionBranch::Continue &&
+                second.base_epoch == 1U &&
+                second.committed_epoch == 2U &&
+                second.tick_before == 1 && second.tick_after == 2 &&
+                second.candidates.planned_count == 2U &&
+                second.candidates.present_count == 2U &&
+                second.candidates.valid_count == 2U &&
+                second.histories.staged &&
+                second.histories.prospective_sample_count == 2U &&
+                second.observation_seal.staged &&
+                !second.result_seal.staged &&
+                !second.primary_diagnostic.has_value(),
+            "second Continue StepOutcome is incomplete");
     require_tick_two_oracle(committed_probe(*bundle.session,
                                             bundle.adapter));
     const auto& second_journal = bundle.session->last_step_journal();
@@ -735,13 +1031,13 @@ void verify_complete_step_transactions(
         const auto failed_slot = std::find_if(
             image->slots().begin(), image->slots().end(),
             [&terminal](const auto& slot) {
-                return slot.handle == terminal.image_handle;
+                return slot.handle == terminal.result.image_handle;
             });
         throw std::runtime_error(
             std::string("Terminal step failed: ") +
-            std::string(gnc::kernel::to_string(terminal.error)) + " / " +
-            std::string(terminal.detail) + " / handle=" +
-            std::to_string(terminal.image_handle) + " / slot=" +
+            std::string(gnc::kernel::to_string(terminal.result.error)) +
+            " / " + std::string(terminal.result.detail) + " / handle=" +
+            std::to_string(terminal.result.image_handle) + " / slot=" +
             (failed_slot == image->slots().end()
                  ? std::string("unknown")
                  : failed_slot->slot_id) + " / evaluator_calls=" +
@@ -754,6 +1050,27 @@ void verify_complete_step_transactions(
             std::to_string(bundle.session->last_step_journal()
                                .skipped_callsite_handles.size()));
     }
+    require(terminal.status == gnc::kernel::StepStatus::Terminated &&
+                terminal.run_id == first.run_id &&
+                terminal.run_sequence == 0U &&
+                terminal.transaction_handle == transaction.handle &&
+                terminal.branch ==
+                    gnc::contracts::TransactionBranch::Terminal &&
+                terminal.base_epoch == 2U &&
+                terminal.committed_epoch == 3U &&
+                terminal.tick_before == 2 && terminal.tick_after == 2 &&
+                terminal.candidates.planned_count == 2U &&
+                terminal.candidates.present_count == 0U &&
+                terminal.candidates.valid_count == 0U &&
+                terminal.histories.staged &&
+                terminal.histories.prospective_sample_count == 3U &&
+                terminal.observation_seal.staged &&
+                terminal.observation_seal.output_count + 1U ==
+                    terminal_branch->sealed_output_slot_handles.size() &&
+                terminal.result_seal.staged &&
+                terminal.result_seal.result_present &&
+                !terminal.primary_diagnostic.has_value(),
+            "Terminal StepOutcome is incomplete");
     const auto after_terminal = committed_probe(*bundle.session,
                                                 bundle.adapter);
     const auto& terminal_journal = bundle.session->last_step_journal();
@@ -796,6 +1113,37 @@ void verify_complete_step_transactions(
         terminal_branch->sealed_output_slot_handles.size(), true);
     require_mission_oracle(mission_result_probe(*bundle.session,
                                                 bundle.adapter));
+    const auto* completed_outcome = bundle.session->run_outcome();
+    require(completed_outcome != nullptr &&
+                completed_outcome->run_id == terminal.run_id &&
+                completed_outcome->run_sequence == 0U &&
+                completed_outcome->image_fingerprint ==
+                    image->fingerprint() &&
+                completed_outcome->plan_id == image->plan_id() &&
+                completed_outcome->mission_id == image->mission_id() &&
+                completed_outcome->descriptor_semantic_hash ==
+                    image->descriptor_semantic_hash() &&
+                completed_outcome->initialization_committed &&
+                completed_outcome->final_status ==
+                    gnc::kernel::RunFinalStatus::Completed &&
+                completed_outcome->validity ==
+                    gnc::contracts::EvidenceValidity::Valid &&
+                completed_outcome->initial_tick == 0 &&
+                completed_outcome->final_tick == 2 &&
+                completed_outcome->initial_committed_epoch == 0U &&
+                completed_outcome->final_committed_epoch == 3U &&
+                completed_outcome->committed_step_count == 3U &&
+                completed_outcome->terminal_branch_committed &&
+                completed_outcome->mission_result_available &&
+                !completed_outcome->primary_diagnostic.has_value() &&
+                completed_outcome->related_diagnostics.empty() &&
+                completed_outcome->finalization_status ==
+                    gnc::kernel::RunFinalizationStatus::Succeeded &&
+                bundle.session->active_run_id() == nullptr &&
+                bundle.session->run_sequence().has_value() &&
+                *bundle.session->run_sequence() == 0U &&
+                bundle.session->committed_step_count() == 3U,
+            "Completed RunOutcome lost run, commit, result, or finalization facts");
     const auto terminal_blocks = bundle.session->state_blocks();
     require(std::all_of(terminal_blocks.begin(), terminal_blocks.end(),
                         [](const auto& block) {
@@ -816,23 +1164,81 @@ void verify_complete_step_transactions(
                                held) == 3,
                 "IntegrationHeld value escaped its transaction lifetime");
     }
+    const auto frozen_outcome = *completed_outcome;
     const auto rejected = bundle.session->execute_step();
+    const auto rejected_run = bundle.session->run_to_terminal();
     require(!rejected &&
-                rejected.error == SessionError::InvalidLifecycleTransition &&
+                rejected.result.error ==
+                    SessionError::InvalidLifecycleTransition &&
+                !rejected_run &&
+                rejected_run.error ==
+                    SessionError::InvalidLifecycleTransition &&
                 bundle.session->state() == gnc::kernel::SessionState::Completed &&
                 bundle.session->committed_epoch() == 3U &&
                 bundle.session->committed_tick() == 2 &&
+                exactly_same(*bundle.session->run_outcome(),
+                             frozen_outcome) &&
                 exactly_same(committed_probe(*bundle.session,
                                              bundle.adapter),
                              before_terminal),
             "Completed Session accepted another execute_step call");
 }
 
+void verify_run_to_terminal(
+    const std::shared_ptr<const ExecutionPlanImage>& image) {
+    auto bundle = initialize_session(
+        image, {}, "run:formal-run-to-terminal");
+    const auto completed = bundle.session->run_to_terminal();
+    const auto* outcome = bundle.session->run_outcome();
+    require(completed &&
+                bundle.session->state() ==
+                    gnc::kernel::SessionState::Completed &&
+                bundle.session->last_step_outcome().status ==
+                    gnc::kernel::StepStatus::Terminated &&
+                bundle.session->last_step_journal().branch ==
+                    gnc::contracts::TransactionBranch::Terminal &&
+                bundle.session->committed_epoch() == 3U &&
+                bundle.session->committed_tick() == 2 &&
+                bundle.session->committed_step_count() == 3U &&
+                bundle.adapter.step_execution->integration_attempts == 2U &&
+                bundle.adapter.step_execution->mass_evolution_attempts == 2U &&
+                bundle.adapter.opening_boundary->terminal_evaluator_calls ==
+                    1U &&
+                outcome != nullptr &&
+                outcome->run_id.value() ==
+                    "run:formal-run-to-terminal" &&
+                outcome->final_status ==
+                    gnc::kernel::RunFinalStatus::Completed &&
+                outcome->validity ==
+                    gnc::contracts::EvidenceValidity::Valid &&
+                outcome->final_committed_epoch == 3U &&
+                outcome->final_tick == 2 &&
+                outcome->committed_step_count == 3U &&
+                outcome->terminal_branch_committed &&
+                outcome->mission_result_available &&
+                outcome->finalization_status ==
+                    gnc::kernel::RunFinalizationStatus::Succeeded,
+            "run_to_terminal did not drive the authoritative three-step path");
+    require_mission_oracle(mission_result_probe(*bundle.session,
+                                                bundle.adapter));
+    const auto frozen = *outcome;
+    const auto repeated = bundle.session->run_to_terminal();
+    require(!repeated &&
+                repeated.error ==
+                    SessionError::InvalidLifecycleTransition &&
+                exactly_same(*bundle.session->run_outcome(), frozen),
+            "repeated run_to_terminal changed the completed outcome");
+}
+
 template <typename Configure>
 void verify_precommit_rollback(
     const std::shared_ptr<const ExecutionPlanImage>& image,
     Configure configure, SessionError expected,
-    std::string_view message) {
+    std::string_view message,
+    RuntimeDiagnosticCode expected_diagnostic =
+        RuntimeDiagnosticCode::None,
+    RuntimeDiagnosticStage expected_stage =
+        RuntimeDiagnosticStage::Lifecycle) {
     AdapterOptions options;
     configure(options);
     auto bundle = initialize_session(image, options);
@@ -842,7 +1248,7 @@ void verify_precommit_rollback(
     const auto failed = bundle.session->execute_step();
     const auto after_value = committed_probe(*bundle.session,
                                              bundle.adapter);
-    require(!failed && failed.error == expected &&
+    require(!failed && failed.result.error == expected &&
                 bundle.session->state() == gnc::kernel::SessionState::Failed &&
                 exactly_same(after_value, before_value) &&
                 same_state_blocks(bundle.session->state_blocks(),
@@ -856,6 +1262,40 @@ void verify_precommit_rollback(
                 all_frame_slots_absent(*bundle.session) &&
                 bundle.session->committed_outputs().empty(),
             message);
+    const auto* failed_outcome = bundle.session->run_outcome();
+    require(failed.status == gnc::kernel::StepStatus::Failed &&
+                failed.primary_diagnostic.has_value() &&
+                failed.primary_diagnostic->code ==
+                    expected_runtime_code(expected) &&
+                failed.primary_diagnostic->cause_code == expected &&
+                failed.primary_diagnostic->cause_ref ==
+                    failed.result.image_handle &&
+                failed.primary_diagnostic->validity_effect ==
+                    gnc::contracts::EvidenceValidity::Invalid &&
+                failed.primary_diagnostic->disposition ==
+                    gnc::kernel::RuntimeFailureDisposition::FailOperation &&
+                failed_outcome != nullptr &&
+                failed_outcome->final_status ==
+                    gnc::kernel::RunFinalStatus::Failed &&
+                failed_outcome->validity ==
+                    gnc::contracts::EvidenceValidity::Invalid &&
+                failed_outcome->final_committed_epoch == 0U &&
+                failed_outcome->final_tick == 0 &&
+                failed_outcome->committed_step_count == 0U &&
+                failed_outcome->primary_diagnostic.has_value() &&
+                exactly_same(*failed_outcome->primary_diagnostic,
+                             *failed.primary_diagnostic) &&
+                failed_outcome->related_diagnostics.empty() &&
+                failed_outcome->finalization_status ==
+                    gnc::kernel::RunFinalizationStatus::Succeeded,
+            "first-step failure did not freeze its primary failure fact");
+    require(expected_diagnostic == RuntimeDiagnosticCode::None ||
+                (failed.primary_diagnostic->code == expected_diagnostic &&
+                 failed.primary_diagnostic->stage == expected_stage &&
+                 failed.primary_diagnostic->subject_handle ==
+                     failed.result.image_handle &&
+                 failed.primary_diagnostic->subject_handle != 0U),
+            "representative first-step diagnostic mapping changed");
     require_history(*bundle.session, 0U, 0, 0);
     if (bundle.adapter.captured_input->view != nullptr) {
         const auto stale =
@@ -863,12 +1303,19 @@ void verify_precommit_rollback(
         require(!stale && stale.error == SessionError::StaleFrameView,
                 "rollback left a captured CycleFrame view active");
     }
+    const auto frozen_outcome = *failed_outcome;
     const auto retry = bundle.session->execute_step();
+    const auto rerun = bundle.session->run_to_terminal();
     require(!retry &&
-                retry.error == SessionError::InvalidLifecycleTransition &&
+                retry.result.error ==
+                    SessionError::InvalidLifecycleTransition &&
+                !rerun &&
+                rerun.error == SessionError::InvalidLifecycleTransition &&
                 bundle.session->state() == gnc::kernel::SessionState::Failed &&
                 bundle.session->committed_epoch() == 0U &&
-                bundle.session->committed_tick() == 0,
+                bundle.session->committed_tick() == 0 &&
+                exactly_same(*bundle.session->run_outcome(),
+                             frozen_outcome),
             "Failed Session accepted a same-Session retry");
     auto fresh = initialize_session(image);
     require(static_cast<bool>(fresh.session->execute_step()),
@@ -890,7 +1337,9 @@ void verify_failure_matrix(
             options.failure = {FailurePhase::Boundary, 0U};
         },
         SessionError::InvocationFailed,
-        "projection failure changed committed state");
+        "projection failure changed committed state",
+        RuntimeDiagnosticCode::InvocationFailed,
+        RuntimeDiagnosticStage::BoundaryInvocation);
     verify_precommit_rollback(
         image,
         [](auto& options) {
@@ -991,7 +1440,11 @@ template <typename Configure>
 void verify_nonzero_rollback(
     const std::shared_ptr<const ExecutionPlanImage>& image,
     Configure configure, SessionError expected,
-    std::string_view message) {
+    std::string_view message,
+    RuntimeDiagnosticCode expected_diagnostic =
+        RuntimeDiagnosticCode::None,
+    RuntimeDiagnosticStage expected_stage =
+        RuntimeDiagnosticStage::Lifecycle) {
     AdapterOptions options;
     configure(options);
     auto bundle = initialize_session(image, options);
@@ -1005,7 +1458,7 @@ void verify_nonzero_rollback(
     const auto failed = bundle.session->execute_step();
     const auto after_value = committed_probe(*bundle.session,
                                              bundle.adapter);
-    require(!failed && failed.error == expected &&
+    require(!failed && failed.result.error == expected &&
                 bundle.session->state() == gnc::kernel::SessionState::Failed &&
                 bundle.session->committed_epoch() == 1U &&
                 bundle.session->committed_tick() == 1 &&
@@ -1022,6 +1475,29 @@ void verify_nonzero_rollback(
                 !bundle.session->frame_open() &&
                 all_frame_slots_absent(*bundle.session),
             message);
+    const auto* failed_outcome = bundle.session->run_outcome();
+    require(failed.primary_diagnostic.has_value() &&
+                failed.primary_diagnostic->code ==
+                    expected_runtime_code(expected) &&
+                failed_outcome != nullptr &&
+                failed_outcome->final_status ==
+                    gnc::kernel::RunFinalStatus::Failed &&
+                failed_outcome->validity ==
+                    gnc::contracts::EvidenceValidity::Invalid &&
+                failed_outcome->final_committed_epoch == 1U &&
+                failed_outcome->final_tick == 1 &&
+                failed_outcome->committed_step_count == 1U &&
+                failed_outcome->primary_diagnostic.has_value() &&
+                exactly_same(*failed_outcome->primary_diagnostic,
+                             *failed.primary_diagnostic),
+            "second-step failure lost the tick-one run outcome");
+    require(expected_diagnostic == RuntimeDiagnosticCode::None ||
+                (failed.primary_diagnostic->code == expected_diagnostic &&
+                 failed.primary_diagnostic->stage == expected_stage &&
+                 failed.primary_diagnostic->subject_handle ==
+                     failed.result.image_handle &&
+                 failed.primary_diagnostic->subject_handle != 0U),
+            "representative second-step diagnostic mapping changed");
     require_history(*bundle.session, 1U, 0, 0);
     require_sealed_boundary(*bundle.session, 0, before_outputs.size(), false);
     auto fresh = initialize_session(image);
@@ -1040,7 +1516,9 @@ void verify_nonzero_failure_matrix(
             options.failure = {FailurePhase::Boundary, 8U};
         },
         SessionError::InvocationFailed,
-        "second-boundary failure changed the tick-one commit");
+        "second-boundary failure changed the tick-one commit",
+        RuntimeDiagnosticCode::InvocationFailed,
+        RuntimeDiagnosticStage::BoundaryInvocation);
     verify_nonzero_rollback(
         image,
         [](auto& options) {
@@ -1073,7 +1551,11 @@ template <typename Configure>
 void verify_terminal_failure(
     const std::shared_ptr<const ExecutionPlanImage>& image,
     Configure configure, SessionError expected,
-    std::string_view message) {
+    std::string_view message,
+    RuntimeDiagnosticCode expected_diagnostic =
+        RuntimeDiagnosticCode::None,
+    RuntimeDiagnosticStage expected_stage =
+        RuntimeDiagnosticStage::Lifecycle) {
     AdapterOptions options;
     configure(options);
     auto bundle = initialize_session(image, options);
@@ -1092,7 +1574,7 @@ void verify_terminal_failure(
     const auto absent_read =
         gnc::tests::ref_yyz::read_mission_result_for_qualification(
             *bundle.session, bundle.adapter, absent);
-    require(!failed && failed.error == expected &&
+    require(!failed && failed.result.error == expected &&
                 bundle.session->state() == gnc::kernel::SessionState::Failed &&
                 bundle.session->committed_epoch() == 2U &&
                 bundle.session->committed_tick() == 2 &&
@@ -1116,12 +1598,44 @@ void verify_terminal_failure(
                 !bundle.session->frame_open() &&
                 all_frame_slots_absent(*bundle.session),
             message);
+    const auto* failed_outcome = bundle.session->run_outcome();
+    require(failed.primary_diagnostic.has_value() &&
+                failed.primary_diagnostic->code ==
+                    expected_runtime_code(expected) &&
+                failed_outcome != nullptr &&
+                failed_outcome->final_status ==
+                    gnc::kernel::RunFinalStatus::Failed &&
+                failed_outcome->validity ==
+                    gnc::contracts::EvidenceValidity::Invalid &&
+                failed_outcome->final_committed_epoch == 2U &&
+                failed_outcome->final_tick == 2 &&
+                failed_outcome->committed_step_count == 2U &&
+                !failed_outcome->terminal_branch_committed &&
+                !failed_outcome->mission_result_available &&
+                failed_outcome->primary_diagnostic.has_value() &&
+                exactly_same(*failed_outcome->primary_diagnostic,
+                             *failed.primary_diagnostic),
+            "terminal failure lost the tick-two run outcome");
+    require(expected_diagnostic == RuntimeDiagnosticCode::None ||
+                (failed.primary_diagnostic->code == expected_diagnostic &&
+                 failed.primary_diagnostic->stage == expected_stage &&
+                 failed.primary_diagnostic->subject_handle ==
+                     failed.result.image_handle &&
+                 failed.primary_diagnostic->subject_handle != 0U),
+            "representative terminal diagnostic mapping changed");
     require_history(*bundle.session, 2U, 0, 1);
     require_sealed_boundary(*bundle.session, 1, before_outputs.size(), false);
+    const auto frozen_outcome = *failed_outcome;
     const auto rejected = bundle.session->execute_step();
+    const auto rerun = bundle.session->run_to_terminal();
     require(!rejected &&
-                rejected.error == SessionError::InvalidLifecycleTransition &&
-                bundle.session->state() == gnc::kernel::SessionState::Failed,
+                rejected.result.error ==
+                    SessionError::InvalidLifecycleTransition &&
+                !rerun &&
+                rerun.error == SessionError::InvalidLifecycleTransition &&
+                bundle.session->state() == gnc::kernel::SessionState::Failed &&
+                exactly_same(*bundle.session->run_outcome(),
+                             frozen_outcome),
             "terminally Failed Session accepted another step");
     auto fresh = initialize_session(image);
     require(static_cast<bool>(fresh.session->execute_step()) &&
@@ -1173,7 +1687,9 @@ void verify_terminal_failure_matrix(
         image,
         [](auto& options) { options.fail_terminal_evaluator = true; },
         SessionError::InvocationFailed,
-        "terminal evaluator failure changed the tick-two commit");
+        "terminal evaluator failure changed the tick-two commit",
+        RuntimeDiagnosticCode::InvocationFailed,
+        RuntimeDiagnosticStage::BoundaryInvocation);
     verify_terminal_failure(
         image,
         [](auto& options) { options.omit_terminal_output = true; },
@@ -1214,8 +1730,12 @@ void verify_two_session_isolation(
     auto first = gnc::kernel::create_session(image, adapter.provider);
     auto second = gnc::kernel::create_session(image, adapter.provider);
     require(static_cast<bool>(first) && static_cast<bool>(second) &&
-                static_cast<bool>(first.session->initialize()) &&
-                static_cast<bool>(second.session->initialize()),
+                static_cast<bool>(first.session->initialize(
+                    initialization_request(*image,
+                                           "run:step-isolation-first"))) &&
+                static_cast<bool>(second.session->initialize(
+                    initialization_request(*image,
+                                           "run:step-isolation-second"))),
             "two Sessions could not share the immutable Image/provider");
     const auto second_before = committed_probe(*second.session, adapter);
     require(static_cast<bool>(first.session->execute_step()) &&
@@ -1228,6 +1748,13 @@ void verify_two_session_isolation(
                 second.session->committed_tick() == 0 &&
                 second.session->state() ==
                     gnc::kernel::SessionState::Initialized &&
+                first.session->run_outcome() != nullptr &&
+                first.session->run_outcome()->run_id.value() ==
+                    "run:step-isolation-first" &&
+                second.session->run_outcome() == nullptr &&
+                second.session->active_run_id() != nullptr &&
+                second.session->active_run_id()->value() ==
+                    "run:step-isolation-second" &&
                 !second.session->frame_open() &&
                 second.session->committed_outputs().empty(),
             "first Session history or seal crossed the second Session boundary");
@@ -1244,7 +1771,23 @@ void verify_two_session_isolation(
                 first.session->state() ==
                     gnc::kernel::SessionState::Completed &&
                 second.session->state() ==
-                    gnc::kernel::SessionState::Completed,
+                    gnc::kernel::SessionState::Completed &&
+                first.session->run_outcome() != nullptr &&
+                second.session->run_outcome() != nullptr &&
+                first.session->run_outcome()->run_id !=
+                    second.session->run_outcome()->run_id &&
+                first.session->run_outcome()->final_status ==
+                    gnc::kernel::RunFinalStatus::Completed &&
+                second.session->run_outcome()->final_status ==
+                    gnc::kernel::RunFinalStatus::Completed &&
+                !first.session->run_outcome()
+                     ->primary_diagnostic.has_value() &&
+                !second.session->run_outcome()
+                     ->primary_diagnostic.has_value() &&
+                first.session->run_outcome()
+                    ->related_diagnostics.empty() &&
+                second.session->run_outcome()
+                    ->related_diagnostics.empty(),
             "isolated Sessions produced different complete runs");
     require_history(*first.session, 3U, 0, 2);
     require_history(*second.session, 3U, 0, 2);
@@ -1255,10 +1798,12 @@ void verify_two_session_isolation(
 
 void verify_query_count_invariance(
     const std::shared_ptr<const ExecutionPlanImage>& image) {
-    auto baseline = initialize_session(image);
+    auto baseline = initialize_session(
+        image, {}, "run:query-baseline");
     AdapterOptions options;
     options.extra_discarded_boundary_evaluations = 2U;
-    auto repeated = initialize_session(image, options);
+    auto repeated = initialize_session(
+        image, options, "run:query-repeated");
     for (std::size_t step = 0U; step < 3U; ++step) {
         require(static_cast<bool>(baseline.session->execute_step()) &&
                     static_cast<bool>(repeated.session->execute_step()),
@@ -1319,6 +1864,20 @@ void verify_query_count_invariance(
                     gnc::contracts::TransactionBranch::Terminal &&
                 repeated.session->last_step_journal().branch ==
                     gnc::contracts::TransactionBranch::Terminal &&
+                baseline.session->run_outcome() != nullptr &&
+                repeated.session->run_outcome() != nullptr &&
+                baseline.session->run_outcome()->final_status ==
+                    repeated.session->run_outcome()->final_status &&
+                baseline.session->run_outcome()->validity ==
+                    repeated.session->run_outcome()->validity &&
+                baseline.session->run_outcome()
+                        ->terminal_branch_committed ==
+                    repeated.session->run_outcome()
+                        ->terminal_branch_committed &&
+                baseline.session->run_outcome()
+                        ->mission_result_available ==
+                    repeated.session->run_outcome()
+                        ->mission_result_available &&
                 baseline.session->committed_epoch() == 3U &&
                 repeated.session->committed_epoch() == 3U &&
                 baseline.session->committed_tick() == 2 &&
@@ -1341,7 +1900,9 @@ void verify_query_count_invariance(
 
 void run() {
     const auto image = build_image();
+    verify_initialization_identity_and_commit(image);
     verify_complete_step_transactions(image);
+    verify_run_to_terminal(image);
     verify_failure_matrix(image);
     verify_nonzero_failure_matrix(image);
     verify_terminal_failure_matrix(image);
@@ -1358,12 +1919,12 @@ int main(int argc, char** argv) {
     }
     try {
         run();
-        std::cout << "R3 REF-YYZ complete StepTransactions: PASS"
+        std::cout << "R3 REF-YYZ formal run lifecycle: PASS"
                   << " (max_abs_difference=" << std::setprecision(17)
                   << maximum_observed_absolute_difference << ")\n";
         return 0;
     } catch (const std::exception& error) {
-        std::cerr << "R3 REF-YYZ complete StepTransactions: FAIL: "
+        std::cerr << "R3 REF-YYZ formal run lifecycle: FAIL: "
                   << error.what() << '\n';
         return 1;
     }

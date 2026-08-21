@@ -1,12 +1,16 @@
 #pragma once
 
 #include "gnc/contracts/execution_plan_image.hpp"
+#include "gnc/contracts/outcome.hpp"
 #include "gnc/contracts/sample_context.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace gnc::kernel {
@@ -20,13 +24,14 @@ enum class SessionState : std::uint8_t {
     Initialized,
     Completed,
     Failed,
-    InitializationFailed,
 };
 
 enum class SessionError : std::uint8_t {
     None,
     NullImage,
     NullMaterializationProvider,
+    EmptyRunId,
+    RunBindingMismatch,
     UnsupportedImageRevision,
     InvalidImageHandle,
     InvalidImageStructure,
@@ -78,6 +83,236 @@ struct SessionResult {
     [[nodiscard]] explicit operator bool() const noexcept {
         return error == SessionError::None;
     }
+};
+
+// The caller owns the opaque spelling. Copies share an immutable owned value,
+// so failure outcomes can retain the id without allocating while unwinding.
+class RunId final {
+  public:
+    RunId() noexcept = default;
+    explicit RunId(std::string value)
+        : value_(std::make_shared<const std::string>(std::move(value))) {}
+
+    [[nodiscard]] std::string_view value() const noexcept {
+        return value_ == nullptr ? std::string_view{}
+                                 : std::string_view(*value_);
+    }
+    [[nodiscard]] bool empty() const noexcept { return value().empty(); }
+
+    friend bool operator==(const RunId& lhs, const RunId& rhs) noexcept {
+        return lhs.value() == rhs.value();
+    }
+    friend bool operator!=(const RunId& lhs, const RunId& rhs) noexcept {
+        return !(lhs == rhs);
+    }
+
+  private:
+    std::shared_ptr<const std::string> value_;
+};
+
+// R3 currently freezes initial values into the Image. The exact in-process
+// binding therefore names every existing Image/plan identity involved in the
+// run without introducing a new hash or serialized schema.
+struct RunBinding {
+    std::string image_fingerprint;
+    std::string plan_id;
+    std::string mission_id;
+    std::string source_semantic_hash;
+    std::string descriptor_semantic_hash;
+
+    friend bool operator==(const RunBinding& lhs,
+                           const RunBinding& rhs) noexcept {
+        return lhs.image_fingerprint == rhs.image_fingerprint &&
+               lhs.plan_id == rhs.plan_id &&
+               lhs.mission_id == rhs.mission_id &&
+               lhs.source_semantic_hash == rhs.source_semantic_hash &&
+               lhs.descriptor_semantic_hash ==
+                   rhs.descriptor_semantic_hash;
+    }
+    friend bool operator!=(const RunBinding& lhs,
+                           const RunBinding& rhs) noexcept {
+        return !(lhs == rhs);
+    }
+};
+
+[[nodiscard]] RunBinding exact_run_binding(
+    const contracts::ExecutionPlanImage& image);
+
+struct InitializationRequest {
+    RunId run_id;
+    RunBinding binding;
+};
+
+enum class RuntimeDiagnosticCode : std::uint8_t {
+    None,
+    InitializationRequestInvalid,
+    ImageBindingMismatch,
+    ImageValidationFailed,
+    MaterializationFailed,
+    ScheduleFailed,
+    FrameFailed,
+    AuthorizationFailed,
+    HistoryFailed,
+    CandidateFailed,
+    ObservationSealFailed,
+    TransactionPrecommitFailed,
+    InvocationFailed,
+    ObjectValidationFailed,
+    AllocationFailed,
+    InternalFailure,
+    LifecycleTransitionRejected,
+};
+
+enum class RuntimeDiagnosticStage : std::uint8_t {
+    InitializationRequest,
+    InitializationValidation,
+    Materialization,
+    InitialState,
+    Schedule,
+    History,
+    BoundaryInvocation,
+    CandidateProduction,
+    ObservationSeal,
+    Precommit,
+    Finalization,
+    Lifecycle,
+};
+
+enum class RuntimeFailureDisposition : std::uint8_t {
+    FailOperation,
+};
+
+[[nodiscard]] std::string_view to_string(
+    RuntimeDiagnosticCode code) noexcept;
+[[nodiscard]] std::string_view to_string(
+    RuntimeDiagnosticStage stage) noexcept;
+
+struct RuntimeDiagnostic {
+    RuntimeDiagnosticCode code = RuntimeDiagnosticCode::None;
+    RuntimeDiagnosticStage stage =
+        RuntimeDiagnosticStage::InitializationRequest;
+    std::uint32_t subject_handle = 0U;
+    RunId run_id;
+    std::int64_t tick = 0;
+    std::uint64_t base_epoch = 0U;
+    SessionError cause_code = SessionError::None;
+    std::uint32_t cause_ref = 0U;
+    contracts::EvidenceValidity validity_effect =
+        contracts::EvidenceValidity::Unknown;
+    RuntimeFailureDisposition disposition =
+        RuntimeFailureDisposition::FailOperation;
+    std::string_view message_key;
+    std::string_view detail;
+};
+
+enum class InitializationStatus : std::uint8_t {
+    Committed,
+    Failed,
+};
+
+struct InitializationOutcome {
+    InitializationStatus status = InitializationStatus::Failed;
+    SessionResult result;
+    RunId run_id;
+    std::uint64_t proposed_run_sequence = 0U;
+    bool binding_matched = false;
+    bool initialization_commit = false;
+    std::uint64_t committed_epoch = 0U;
+    std::int64_t committed_tick = 0;
+    std::optional<RuntimeDiagnostic> primary_diagnostic;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return status == InitializationStatus::Committed &&
+               initialization_commit && result;
+    }
+};
+
+enum class StepStatus : std::uint8_t {
+    Committed,
+    Terminated,
+    Failed,
+};
+
+struct StepCandidateSummary {
+    std::size_t planned_count = 0U;
+    std::size_t present_count = 0U;
+    std::size_t valid_count = 0U;
+};
+
+struct StepHistorySummary {
+    bool staged = false;
+    std::size_t history_count = 0U;
+    std::size_t prospective_sample_count = 0U;
+};
+
+struct StepObservationSealSummary {
+    bool staged = false;
+    std::size_t output_count = 0U;
+};
+
+struct StepResultSealSummary {
+    bool staged = false;
+    bool result_present = false;
+};
+
+struct StepOutcome {
+    StepStatus status = StepStatus::Failed;
+    SessionResult result;
+    RunId run_id;
+    std::uint64_t run_sequence = 0U;
+    std::uint32_t transaction_handle = 0U;
+    contracts::TransactionBranch branch =
+        contracts::TransactionBranch::Continue;
+    std::uint64_t base_epoch = 0U;
+    std::uint64_t committed_epoch = 0U;
+    std::int64_t tick_before = 0;
+    std::int64_t tick_after = 0;
+    std::uint32_t last_region_handle = 0U;
+    std::uint32_t last_callsite_handle = 0U;
+    std::uint32_t last_image_handle = 0U;
+    StepCandidateSummary candidates;
+    StepHistorySummary histories;
+    StepObservationSealSummary observation_seal;
+    StepResultSealSummary result_seal;
+    std::optional<RuntimeDiagnostic> primary_diagnostic;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return status != StepStatus::Failed && result;
+    }
+};
+
+enum class RunFinalStatus : std::uint8_t {
+    Completed,
+    Failed,
+};
+
+enum class RunFinalizationStatus : std::uint8_t {
+    NotStarted,
+    Succeeded,
+};
+
+struct RunOutcome {
+    RunId run_id;
+    std::uint64_t run_sequence = 0U;
+    std::string image_fingerprint;
+    std::string plan_id;
+    std::string mission_id;
+    std::string descriptor_semantic_hash;
+    bool initialization_committed = false;
+    RunFinalStatus final_status = RunFinalStatus::Failed;
+    contracts::EvidenceValidity validity =
+        contracts::EvidenceValidity::Unknown;
+    std::int64_t initial_tick = 0;
+    std::int64_t final_tick = 0;
+    std::uint64_t initial_committed_epoch = 0U;
+    std::uint64_t final_committed_epoch = 0U;
+    std::uint64_t committed_step_count = 0U;
+    bool terminal_branch_committed = false;
+    bool mission_result_available = false;
+    std::optional<RuntimeDiagnostic> primary_diagnostic;
+    std::vector<RuntimeDiagnostic> related_diagnostics;
+    RunFinalizationStatus finalization_status =
+        RunFinalizationStatus::NotStarted;
 };
 
 struct InProcessObjectLayout {
@@ -676,9 +911,18 @@ class Session final {
 
     [[nodiscard]] SessionState state() const noexcept;
     [[nodiscard]] const contracts::ExecutionPlanImage& image() const noexcept;
-    [[nodiscard]] SessionResult initialize() noexcept;
-    [[nodiscard]] SessionResult execute_step() noexcept;
+    [[nodiscard]] InitializationOutcome initialize(
+        InitializationRequest request) noexcept;
+    [[nodiscard]] StepOutcome execute_step() noexcept;
+    [[nodiscard]] SessionResult run_to_terminal() noexcept;
     [[nodiscard]] const SessionResult& last_result() const noexcept;
+    [[nodiscard]] const InitializationOutcome&
+    last_initialization_outcome() const noexcept;
+    [[nodiscard]] const StepOutcome& last_step_outcome() const noexcept;
+    [[nodiscard]] const RunId* active_run_id() const noexcept;
+    [[nodiscard]] const RunBinding* active_run_binding() const noexcept;
+    [[nodiscard]] std::optional<std::uint64_t> run_sequence() const noexcept;
+    [[nodiscard]] const RunOutcome* run_outcome() const noexcept;
     [[nodiscard]] const SessionBoundarySummary& last_boundary_summary()
         const noexcept;
     [[nodiscard]] const SessionStepSummary& last_step_summary()
@@ -702,6 +946,7 @@ class Session final {
     committed_histories() const;
     [[nodiscard]] std::uint64_t committed_epoch() const noexcept;
     [[nodiscard]] std::int64_t committed_tick() const noexcept;
+    [[nodiscard]] std::uint64_t committed_step_count() const noexcept;
     [[nodiscard]] bool frame_open() const noexcept;
 
   private:

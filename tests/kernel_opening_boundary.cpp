@@ -33,6 +33,12 @@ void require(bool condition, std::string_view message) {
     }
 }
 
+[[nodiscard]] gnc::kernel::InitializationRequest initialization_request(
+    const ExecutionPlanImage& image, std::string run_id) {
+    return {gnc::kernel::RunId{std::move(run_id)},
+            gnc::kernel::exact_run_binding(image)};
+}
+
 [[nodiscard]] bool near(double actual, double expected,
                         double tolerance = 2.0e-12) noexcept {
     const auto difference = std::abs(actual - expected);
@@ -222,13 +228,14 @@ void verify_success(const std::shared_ptr<const ExecutionPlanImage>& image,
     auto creation = gnc::kernel::create_session(image, adapter.provider);
     require(static_cast<bool>(creation),
             "opening-boundary Session creation failed");
-    const auto initialized = creation.session->initialize();
+    const auto initialized = creation.session->initialize(
+        initialization_request(*image, "run:opening-success"));
     if (!initialized) {
         throw std::runtime_error(
             std::string("opening-boundary Session initialization failed: ") +
-            std::string(gnc::kernel::to_string(initialized.error)) + " / " +
-            std::string(initialized.detail) + " / handle=" +
-            std::to_string(initialized.image_handle));
+            std::string(gnc::kernel::to_string(initialized.result.error)) +
+            " / " + std::string(initialized.result.detail) + " / handle=" +
+            std::to_string(initialized.result.image_handle));
     }
     const auto before_blocks = creation.session->state_blocks();
     const auto before_outputs = creation.session->committed_outputs();
@@ -305,7 +312,9 @@ void verify_failure(const std::shared_ptr<const ExecutionPlanImage>& image,
     require(static_cast<bool>(adapter), adapter.error);
     auto creation = gnc::kernel::create_session(image, adapter.provider);
     require(static_cast<bool>(creation) &&
-                static_cast<bool>(creation.session->initialize()),
+                static_cast<bool>(creation.session->initialize(
+                    initialization_request(*image,
+                                           "run:opening-failure"))),
             "failure-case Session initialization failed");
     const auto before = creation.session->state_blocks();
     const auto before_outputs = creation.session->committed_outputs();
@@ -361,8 +370,10 @@ void verify_shared_image_provider_isolation(
     auto first = gnc::kernel::create_session(image, adapter.provider);
     auto second = gnc::kernel::create_session(image, adapter.provider);
     require(static_cast<bool>(first) && static_cast<bool>(second) &&
-                static_cast<bool>(first.session->initialize()) &&
-                static_cast<bool>(second.session->initialize()),
+                static_cast<bool>(first.session->initialize(
+                    initialization_request(*image, "run:opening-first"))) &&
+                static_cast<bool>(second.session->initialize(
+                    initialization_request(*image, "run:opening-second"))),
             "two Sessions could not share immutable Image/provider");
     const auto live_after_initialization =
         adapter.trace->live_object_count();

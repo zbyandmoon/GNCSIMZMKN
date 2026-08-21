@@ -176,6 +176,13 @@ void require(bool condition, std::string_view message) {
     }
 }
 
+[[nodiscard]] gnc::kernel::InitializationRequest initialization_request(
+    const ExecutionPlanImage& image,
+    std::string run_id = "run:materialization") {
+    return {gnc::kernel::RunId{std::move(run_id)},
+            gnc::kernel::exact_run_binding(image)};
+}
+
 [[nodiscard]] std::shared_ptr<const ExecutionPlanImage> image_from(
     gnc::contracts::ExecutionPlanImageData data) {
     return std::make_shared<const ExecutionPlanImage>(
@@ -221,7 +228,8 @@ void verify_created_and_initialized(
                 creation.session->storage_extents().empty(),
             "Created Session exposed initialized objects");
 
-    const auto initialized = creation.session->initialize();
+    const auto initialized = creation.session->initialize(
+        initialization_request(*image));
     require(static_cast<bool>(initialized) &&
                 creation.session->state() == SessionState::Initialized,
             "Image-only Session initialization failed");
@@ -297,10 +305,34 @@ void verify_failure_unwind(
     require(static_cast<bool>(adapter), adapter.error);
     auto creation = gnc::kernel::create_session(image, adapter.provider);
     require(static_cast<bool>(creation), "failure Session creation failed");
-    const auto result = creation.session->initialize();
-    require(!static_cast<bool>(result) && result.error == expected &&
-                creation.session->state() ==
-                    SessionState::InitializationFailed &&
+    const auto result = creation.session->initialize(
+        initialization_request(*image, "run:materialization-failure"));
+    const auto expected_stage =
+        phase == FailurePhase::InitialState
+            ? gnc::kernel::RuntimeDiagnosticStage::InitialState
+            : gnc::kernel::RuntimeDiagnosticStage::Materialization;
+    require(!static_cast<bool>(result) && result.result.error == expected &&
+                creation.session->state() == SessionState::Failed &&
+                !result.initialization_commit &&
+                result.primary_diagnostic.has_value() &&
+                result.primary_diagnostic->code ==
+                    gnc::kernel::RuntimeDiagnosticCode::
+                        MaterializationFailed &&
+                result.primary_diagnostic->stage == expected_stage &&
+                result.primary_diagnostic->validity_effect ==
+                    gnc::contracts::EvidenceValidity::Unknown &&
+                creation.session->active_run_id() == nullptr &&
+                !creation.session->run_sequence().has_value() &&
+                creation.session->run_outcome() != nullptr &&
+                creation.session->run_outcome()->final_status ==
+                    gnc::kernel::RunFinalStatus::Failed &&
+                creation.session->run_outcome()->validity ==
+                    gnc::contracts::EvidenceValidity::Unknown &&
+                !creation.session->run_outcome()
+                     ->initialization_committed &&
+                creation.session->run_outcome()
+                    ->final_committed_epoch == 0U &&
+                creation.session->run_outcome()->final_tick == 0 &&
                 creation.session->preparation_count() == 0U &&
                 creation.session->runtime_cell_count() == 0U &&
                 creation.session->committed_state_count() == 0U &&
@@ -320,7 +352,9 @@ void verify_failure_unwind(
     require(static_cast<bool>(clean_adapter), clean_adapter.error);
     auto next = gnc::kernel::create_session(image, clean_adapter.provider);
     require(static_cast<bool>(next) &&
-                static_cast<bool>(next.session->initialize()) &&
+                static_cast<bool>(next.session->initialize(
+                    initialization_request(*image,
+                                           "run:materialization-recovery"))) &&
                 next.session->state() == SessionState::Initialized,
             "Session after injected initialization failure did not succeed");
     next.session.reset();
@@ -342,10 +376,11 @@ void require_metadata_failure(
     auto creation = gnc::kernel::create_session(malformed, provider);
     require(static_cast<bool>(creation),
             "malformed Image could not reach initialization validation");
-    const auto result = creation.session->initialize();
-    require(!static_cast<bool>(result) && result.error == expected &&
-                creation.session->state() ==
-                    SessionState::InitializationFailed &&
+    const auto result = creation.session->initialize(
+        initialization_request(*malformed,
+                               "run:materialization-metadata-failure"));
+    require(!static_cast<bool>(result) && result.result.error == expected &&
+                creation.session->state() == SessionState::Failed &&
                 trace->events.empty() && trace->live_object_count() == 0U,
             message);
 }
@@ -446,10 +481,13 @@ void verify_metadata_failures(
     require(static_cast<bool>(missing), missing.error);
     auto creation = gnc::kernel::create_session(image, missing.provider);
     require(static_cast<bool>(creation), "missing-provider Session create failed");
-    const auto result = creation.session->initialize();
+    const auto result = creation.session->initialize(
+        initialization_request(*image,
+                               "run:materialization-missing-provider"));
     require(!static_cast<bool>(result) &&
-                result.error == SessionError::MissingMaterializer &&
-                result.image_handle == missing.first_non_state_slot_handle &&
+                result.result.error == SessionError::MissingMaterializer &&
+                result.result.image_handle ==
+                    missing.first_non_state_slot_handle &&
                 missing.trace->events.empty() &&
                 missing.trace->live_object_count() == 0U,
             "missing slot materializer did not fail deterministically");
@@ -466,10 +504,11 @@ void verify_materializer_identity_failures(
         auto creation = gnc::kernel::create_session(image, adapter.provider);
         require(static_cast<bool>(creation),
                 "identity-failure Session creation failed");
-        const auto result = creation.session->initialize();
-        require(!result && result.error == expected &&
-                    creation.session->state() ==
-                        SessionState::InitializationFailed &&
+        const auto result = creation.session->initialize(
+            initialization_request(*image,
+                                   "run:materialization-identity-failure"));
+        require(!result && result.result.error == expected &&
+                    creation.session->state() == SessionState::Failed &&
                     adapter.trace->constructed_handles(
                         TraceObjectKind::RuntimeCell).empty() &&
                     adapter.trace->live_object_count() == 0U &&
@@ -503,9 +542,12 @@ void verify_materializer_identity_failures(
     require(static_cast<bool>(undeclared_creation),
             "undeclared-dependency Session creation failed");
     const auto undeclared_result =
-        undeclared_creation.session->initialize();
+        undeclared_creation.session->initialize(
+            initialization_request(*image,
+                                   "run:materialization-dependency-failure"));
     require(!undeclared_result &&
-                undeclared_result.error == SessionError::RuntimeCellFailed &&
+                undeclared_result.result.error ==
+                    SessionError::RuntimeCellFailed &&
                 undeclared_adapter.undeclared_preparation_visible != nullptr &&
                 !*undeclared_adapter.undeclared_preparation_visible &&
                 undeclared_adapter.trace->live_object_count() == 0U,
@@ -532,8 +574,11 @@ void verify_materializer_identity_failures(
         malformed, malformed_adapter.provider);
     require(static_cast<bool>(creation),
             "mutated-dependency Session creation failed");
-    const auto result = creation.session->initialize();
-    require(!result && result.error == SessionError::ObjectTypeMismatch &&
+    const auto result = creation.session->initialize(
+        initialization_request(*malformed,
+                               "run:materialization-mutated-dependency"));
+    require(!result &&
+                result.result.error == SessionError::ObjectTypeMismatch &&
                 malformed_adapter.trace
                     ->constructed_handles(TraceObjectKind::RuntimeCell)
                     .empty() &&
@@ -555,17 +600,18 @@ void verify_allocation_failure_unwind(
         auto creation = gnc::kernel::create_session(image, adapter.provider);
         require(static_cast<bool>(creation),
                 "allocation-fault Session creation failed before injection");
+        auto request = initialization_request(
+            *image, "run:materialization-allocation-failure");
         allocation_fault::arm(fail_after);
-        const auto result = creation.session->initialize();
+        const auto result = creation.session->initialize(std::move(request));
         allocation_fault::disarm();
         if (result) {
             observed_success = true;
             require(creation.session->state() == SessionState::Initialized,
                     "successful allocation-fault pass has wrong state");
         } else {
-            require(creation.session->state() ==
-                            SessionState::InitializationFailed &&
-                        !result.detail.empty(),
+            require(creation.session->state() == SessionState::Failed &&
+                        !result.result.detail.empty(),
                     "allocation failure escaped or lost stable diagnostics");
             observed_preplacement_failure =
                 observed_preplacement_failure ||

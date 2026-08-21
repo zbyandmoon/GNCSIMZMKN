@@ -245,7 +245,7 @@ if(GNC_BUILD_TESTS)
     endif()
     gnc_enable_warnings(gnc_kernel_opening_boundary_probe)
 
-    # R3 first complete Continue StepTransaction over the frozen REF-YYZ Image.
+    # R3 formal REF-YYZ run lifecycle over the authoritative StepTransaction.
     add_executable(
         gnc_kernel_step_transaction_probe
         tests/kernel_step_transaction.cpp
