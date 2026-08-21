@@ -1699,6 +1699,74 @@ RigidFrozenFormKernel::evaluate_with_invocation_results(
     return evaluate_rigid_frozen_form(definition, invocations, input);
 }
 
+NumericalOutcome<RigidStateCandidate> integrate_rigid_held_interval(
+    const RigidStepAlgorithmDefinition& algorithm,
+    RigidDerivativeCall derivative_call,
+    const RigidHeldIntervalIntegrationInput& input) {
+    if (derivative_call == nullptr) {
+        return product_failure<RigidStateCandidate>(
+            NumericalStatus::InternalFailure, "derivative-entry", 0U);
+    }
+    const StateVector committed = pack_state(input.committed_state);
+    const auto derivative = [&](double, const StateVector& stage_state) {
+        const RigidState typed_state = unpack_state(stage_state);
+        const auto stage_derivative = derivative_call(
+            algorithm,
+            RigidDerivativeInput{
+                typed_state, input.mass_properties.mass_kilograms,
+                input.mass_properties.inertia_about_center_of_mass,
+                input.frozen_form_input, input.frozen_gravity});
+        if (!stage_derivative.has_value()) {
+            return NumericalOutcome<StateVector>::failure(
+                stage_derivative.status(), stage_derivative.evidence());
+        }
+        return NumericalOutcome<StateVector>::with_value(
+            stage_derivative.status(),
+            pack_derivative(typed_state, stage_derivative.value()),
+            stage_derivative.evidence());
+    };
+    const auto integrated = gnc::foundation::fixed_rk4_step(
+        committed, input.context.interval_start.seconds,
+        algorithm.fixed_step_seconds, derivative,
+        algorithm.numerical_policy);
+    if (!integrated.has_value()) {
+        return product_failure<RigidStateCandidate>(
+            integrated.status(), "rk4", integrated.evidence().flags);
+    }
+
+    RigidState candidate_state = unpack_state(integrated.value());
+    const auto candidate_attitude =
+        gnc::foundation::prepare_passive_quaternion(
+            candidate_state.attitude.value,
+            algorithm.candidate_attitude_policy);
+    if (!candidate_attitude.has_value()) {
+        return product_failure<RigidStateCandidate>(
+            candidate_attitude.status(), "candidate-attitude",
+            integrated.evidence().flags |
+                candidate_attitude.evidence().flags);
+    }
+    candidate_state.attitude.value = candidate_attitude.value();
+    if (!finite(candidate_state)) {
+        return product_failure<RigidStateCandidate>(
+            NumericalStatus::NonFiniteOutput, "candidate",
+            integrated.evidence().flags |
+                candidate_attitude.evidence().flags);
+    }
+
+    NumericalEvidence evidence = integrated.evidence();
+    evidence.flags |= candidate_attitude.evidence().flags;
+    evidence.detail = "held-interval-candidate";
+    const bool approximate = approximate_status(integrated.status()) ||
+                             approximate_status(
+                                 candidate_attitude.status());
+    return NumericalOutcome<RigidStateCandidate>::with_value(
+        approximate ? NumericalStatus::Approximate
+                    : NumericalStatus::Success,
+        RigidStateCandidate{input.context.interval_end,
+                            std::move(candidate_state)},
+        evidence);
+}
+
 NumericalOutcome<RigidStepEvaluation> RigidStepKernel::evaluate(
     const PreparedRigidStepModel& model,
     const RigidStepInput& input) {
@@ -1741,54 +1809,17 @@ RigidStepKernel::evaluate_held_form(
     approximate = approximate || approximate_status(
         initial_derivative.status());
 
-    const StateVector committed = pack_state(input.committed_state);
-    const auto derivative = [&](double, const StateVector& stage_state) {
-        const RigidState typed_state = unpack_state(stage_state);
-        const auto stage_derivative = RigidDerivativeKernel::evaluate(
-            definition.algorithm,
-            RigidDerivativeInput{
-                typed_state,
-                input.mass_properties.mass_kilograms,
-                input.mass_properties.inertia_about_center_of_mass,
-                form_input,
-                input.environment.gravity});
-        if (!stage_derivative.has_value()) {
-            return NumericalOutcome<StateVector>::failure(
-                stage_derivative.status(), stage_derivative.evidence());
-        }
-        return NumericalOutcome<StateVector>::with_value(
-            stage_derivative.status(),
-            pack_derivative(typed_state, stage_derivative.value()),
-            stage_derivative.evidence());
-    };
-    const auto integrated = gnc::foundation::fixed_rk4_step(
-        committed, input.context.interval_start.seconds,
-        definition.algorithm.fixed_step_seconds, derivative,
-        definition.algorithm.numerical_policy);
+    const auto integrated = integrate_rigid_held_interval(
+        definition.algorithm, &RigidDerivativeKernel::evaluate,
+        RigidHeldIntervalIntegrationInput{
+            input.context, input.committed_state, input.mass_properties,
+            form_input, input.environment.gravity});
     if (!integrated.has_value()) {
         return product_failure<RigidStepEvaluation>(
             integrated.status(), "rk4", flags | integrated.evidence().flags);
     }
     flags |= integrated.evidence().flags;
     approximate = approximate || approximate_status(integrated.status());
-
-    RigidState candidate_state = unpack_state(integrated.value());
-    const auto candidate_attitude =
-        gnc::foundation::prepare_passive_quaternion(
-            candidate_state.attitude.value,
-            definition.algorithm.candidate_attitude_policy);
-    if (!candidate_attitude.has_value()) {
-        return product_failure<RigidStepEvaluation>(
-            candidate_attitude.status(), "candidate-attitude",
-            flags | candidate_attitude.evidence().flags);
-    }
-    flags |= candidate_attitude.evidence().flags;
-    approximate = approximate || approximate_status(candidate_attitude.status());
-    candidate_state.attitude.value = candidate_attitude.value();
-    if (!finite(candidate_state)) {
-        return product_failure<RigidStepEvaluation>(
-            NumericalStatus::NonFiniteOutput, "candidate", flags);
-    }
 
     RigidStepTelemetry telemetry;
     telemetry.air_data = frozen_form.telemetry.air_data;
@@ -1798,8 +1829,7 @@ RigidStepKernel::evaluate_held_form(
         frozen_form.telemetry.force_moment_closure;
     telemetry.derivative_at_interval_start = initial_derivative.value();
     RigidStepOutput output;
-    output.candidate.effective_at = input.context.interval_end;
-    output.candidate.state = std::move(candidate_state);
+    output.candidate = integrated.value();
     NumericalEvidence evidence = product_evidence(
         kRigidStepKernelIdentity, "one-step-candidate", flags);
     evidence.evaluations = integrated.evidence().evaluations +

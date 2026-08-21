@@ -8,6 +8,18 @@ namespace gnc::kernel::qualification {
 // no Session API that can obtain or replace candidate-state object storage.
 class SessionAccess final {
   public:
+    [[nodiscard]] static SessionResult execute_opening_boundary(
+        Session& session) noexcept {
+        return session.qualification_execute_opening_boundary();
+    }
+
+    [[nodiscard]] static SessionResult read_committed(
+        const Session& session, std::uint32_t state_block_handle,
+        SessionObjectIdentityView& result) noexcept {
+        return session.qualification_read_committed(state_block_handle,
+                                                    result);
+    }
+
     [[nodiscard]] static SessionResult read_candidate(
         const Session& session, std::uint32_t state_block_handle,
         SessionObjectIdentityView& result) noexcept {

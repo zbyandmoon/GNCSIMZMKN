@@ -1200,10 +1200,31 @@ class RigidDerivativeKernel {
              const RigidDerivativeInput& input);
 };
 
+using RigidDerivativeCall =
+    gnc::foundation::NumericalOutcome<RigidDerivativeOutput> (*)(
+        const RigidStepAlgorithmDefinition&, const RigidDerivativeInput&);
+
 struct RigidStateCandidate {
     gnc::contracts::SimulationInstant effective_at;
     RigidState state;
 };
+
+struct RigidHeldIntervalIntegrationInput {
+    RigidStepContext context;
+    RigidState committed_state;
+    MassPropertiesInput mass_properties;
+    RigidFormInput frozen_form_input;
+    InertialAccelerationMetersPerSecondSquared frozen_gravity;
+};
+
+// Package-owned continuous-state integration primitive used by the Session
+// IntegrationScope executor. The caller supplies the exact linked derivative
+// entry and the Image-backed fixed-step algorithm policy.
+[[nodiscard]] gnc::foundation::NumericalOutcome<RigidStateCandidate>
+integrate_rigid_held_interval(
+    const RigidStepAlgorithmDefinition& algorithm,
+    RigidDerivativeCall derivative,
+    const RigidHeldIntervalIntegrationInput& input);
 
 struct RigidStepOutput {
     RigidStateCandidate candidate;
@@ -1269,10 +1290,6 @@ using RigidInitialStateCall =
         const RigidStepAlgorithmDefinition&, const RigidInitialStateInput&);
 using RigidPublishProjectionCall = CommittedRigidObservation (*)(
     const gnc::contracts::SampleContext&, const RigidState&);
-using RigidDerivativeCall =
-    gnc::foundation::NumericalOutcome<RigidDerivativeOutput> (*)(
-        const RigidStepAlgorithmDefinition&, const RigidDerivativeInput&);
-
 using RigidStateCloneCall = RigidState (*)(const RigidState&);
 using RigidStateValidateCall = bool (*)(const RigidState&) noexcept;
 using RigidStateSwapCall = void (*)(RigidState&, RigidState&) noexcept;

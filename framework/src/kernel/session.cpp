@@ -127,6 +127,18 @@ template <typename Value>
     return true;
 }
 
+[[nodiscard]] bool same_handle_set(
+    const std::vector<std::uint32_t>& lhs,
+    const std::vector<std::uint32_t>& rhs) noexcept {
+    if (lhs.size() != rhs.size() || !unique_nonzero_handles(lhs) ||
+        !unique_nonzero_handles(rhs)) {
+        return false;
+    }
+    return std::all_of(lhs.begin(), lhs.end(), [&rhs](std::uint32_t handle) {
+        return std::find(rhs.begin(), rhs.end(), handle) != rhs.end();
+    });
+}
+
 template <typename Value>
 [[nodiscard]] bool exact_handle_membership(
     const std::vector<std::uint32_t>& handles,
@@ -257,10 +269,19 @@ std::string_view to_string(SessionError error) noexcept {
     case SessionError::FrameNotOpen: return "FrameNotOpen";
     case SessionError::FrameSlotAbsent: return "FrameSlotAbsent";
     case SessionError::StaleFrameView: return "StaleFrameView";
+    case SessionError::StateAuthorizationFailure:
+        return "StateAuthorizationFailure";
     case SessionError::ReaderAuthorizationFailure:
         return "ReaderAuthorizationFailure";
     case SessionError::WriterAuthorizationFailure:
         return "WriterAuthorizationFailure";
+    case SessionError::CandidateAuthorizationFailure:
+        return "CandidateAuthorizationFailure";
+    case SessionError::CandidateRearmFailed: return "CandidateRearmFailed";
+    case SessionError::CandidateValidationFailed:
+        return "CandidateValidationFailed";
+    case SessionError::TransactionPrecommitFailed:
+        return "TransactionPrecommitFailed";
     case SessionError::InvocationFailed: return "InvocationFailed";
     case SessionError::InternalFailure: return "InternalFailure";
     }
@@ -268,8 +289,11 @@ std::string_view to_string(SessionError error) noexcept {
 }
 
 SessionCommittedStateView::SessionCommittedStateView(
-    const SessionCommittedStateAccess* access) noexcept
-    : access_(access) {}
+    const SessionCommittedStateAccess* access,
+    SessionStateAuthorityKind authority_kind,
+    std::uint32_t authority_handle) noexcept
+    : access_(access), authority_kind_(authority_kind),
+      authority_handle_(authority_handle) {}
 
 SessionResult SessionCommittedStateView::read(
     std::uint32_t state_block_handle,
@@ -279,13 +303,17 @@ SessionResult SessionCommittedStateView::read(
         return {SessionError::InvalidLifecycleTransition, state_block_handle,
                 "committed state view is unavailable"};
     }
-    return access_->read_committed(state_block_handle, result);
+    return access_->read_committed(
+        static_cast<std::uint8_t>(authority_kind_), authority_handle_,
+        state_block_handle, result);
 }
 
 SessionInputView::SessionInputView(const SessionFrameAccess* access,
-                                   std::uint32_t callsite_handle,
+                                   SessionFrameAuthorityKind authority_kind,
+                                   std::uint32_t authority_handle,
                                    std::uint64_t generation) noexcept
-    : access_(access), callsite_handle_(callsite_handle),
+    : access_(access), authority_kind_(authority_kind),
+      authority_handle_(authority_handle),
       generation_(generation) {}
 
 SessionResult SessionInputView::read(
@@ -296,12 +324,39 @@ SessionResult SessionInputView::read(
         return {SessionError::StaleFrameView, slot_handle,
                 "input view is unavailable"};
     }
-    return access_->read_input(callsite_handle_, generation_, slot_handle,
-                               result);
+    return access_->read_input(
+        static_cast<std::uint8_t>(authority_kind_), authority_handle_,
+        generation_, slot_handle, result);
 }
 
 bool SessionInputView::active() const noexcept {
     return access_ != nullptr && access_->frame_active(generation_);
+}
+
+SessionCandidateWriterSet::SessionCandidateWriterSet(
+    SessionCandidateAccess* access,
+    SessionCandidateProducerKind producer_kind,
+    std::uint32_t producer_handle, std::uint64_t generation,
+    std::uint32_t transaction_handle) noexcept
+    : access_(access), producer_kind_(producer_kind),
+      producer_handle_(producer_handle), generation_(generation),
+      transaction_handle_(transaction_handle) {}
+
+SessionResult SessionCandidateWriterSet::write(
+    std::uint32_t candidate_slot_handle,
+    std::uint32_t writer_token_handle,
+    InProcessValueView value) const noexcept {
+    if (access_ == nullptr) {
+        return {SessionError::StaleFrameView, candidate_slot_handle,
+                "candidate writer set is unavailable"};
+    }
+    return access_->write_candidate(
+        producer_kind_, producer_handle_, generation_, transaction_handle_,
+        candidate_slot_handle, writer_token_handle, value);
+}
+
+bool SessionCandidateWriterSet::active() const noexcept {
+    return access_ != nullptr && access_->transaction_active(generation_);
 }
 
 SessionOutputWriterSet::SessionOutputWriterSet(
@@ -331,17 +386,35 @@ SessionInvocationContext::SessionInvocationContext(
     double interval_start_seconds, double interval_end_seconds,
     contracts::DataQuality quality, SessionObjectIdentityView runtime_cell,
     SessionCommittedStateView committed, SessionInputView inputs,
-    SessionOutputWriterSet outputs) noexcept
+    SessionOutputWriterSet outputs,
+    SessionCandidateWriterSet candidates) noexcept
     : callsite_handle_(callsite_handle), component_handle_(component_handle),
       tick_(tick), boundary_time_seconds_(boundary_time_seconds),
       interval_start_seconds_(interval_start_seconds),
       interval_end_seconds_(interval_end_seconds), quality_(quality),
       runtime_cell_(runtime_cell), committed_(committed), inputs_(inputs),
-      outputs_(outputs) {}
+      outputs_(outputs), candidates_(candidates) {}
+
+SessionIntegrationContext::SessionIntegrationContext(
+    std::uint32_t integration_scope_handle,
+    std::uint32_t component_handle,
+    std::uint32_t transaction_handle, std::int64_t tick,
+    double interval_start_seconds, double interval_end_seconds,
+    SessionObjectIdentityView runtime_cell,
+    SessionCommittedStateView committed, SessionInputView inputs,
+    SessionCandidateWriterSet candidates) noexcept
+    : integration_scope_handle_(integration_scope_handle),
+      component_handle_(component_handle),
+      transaction_handle_(transaction_handle), tick_(tick),
+      interval_start_seconds_(interval_start_seconds),
+      interval_end_seconds_(interval_end_seconds),
+      runtime_cell_(runtime_cell), committed_(committed), inputs_(inputs),
+      candidates_(candidates) {}
 
 struct Session::Impl final : SessionObjectAccess,
                              SessionCommittedStateAccess,
-                             SessionFrameAccess {
+                             SessionFrameAccess,
+                             SessionCandidateAccess {
     struct OwnedObject {
         std::uint32_t handle = 0U;
         void* address = nullptr;
@@ -363,6 +436,11 @@ struct Session::Impl final : SessionObjectAccess,
         const SessionObjectMaterializer* materializer = nullptr;
         std::uint32_t owner_runtime_component_handle = 0U;
         std::uint64_t committed_epoch = 0U;
+        bool candidate_present = false;
+        std::uint64_t candidate_generation = 0U;
+        std::uint64_t candidate_base_epoch = 0U;
+        std::uint32_t candidate_producer_handle = 0U;
+        std::uint32_t candidate_writer_token_handle = 0U;
     };
 
     struct FrameSlot {
@@ -370,20 +448,6 @@ struct Session::Impl final : SessionObjectAccess,
         void* address = nullptr;
         const SessionObjectMaterializer* materializer = nullptr;
         bool owns_address = false;
-        bool present = false;
-        std::uint64_t generation = 0U;
-        std::uint64_t sequence = 0U;
-        std::int64_t sample_tick = 0;
-        double sample_time_seconds = 0.0;
-        double interval_start_seconds = 0.0;
-        double interval_end_seconds = 0.0;
-        contracts::DataQuality quality = contracts::DataQuality::Invalid;
-    };
-
-    struct CommittedOutput {
-        const contracts::PlanImageSlot* slot = nullptr;
-        void* address = nullptr;
-        const SessionObjectMaterializer* materializer = nullptr;
         bool present = false;
         std::uint64_t generation = 0U;
         std::uint64_t sequence = 0U;
@@ -413,11 +477,6 @@ struct Session::Impl final : SessionObjectAccess,
         std::vector<StateObject> blocks;
     };
 
-    struct CommittedOutputStore {
-        std::vector<CommittedOutput> values;
-        std::vector<std::size_t> construction_order;
-    };
-
     struct CycleFrame {
         std::vector<FrameSlot> slots;
         std::vector<std::size_t> construction_order;
@@ -432,17 +491,17 @@ struct Session::Impl final : SessionObjectAccess,
     SessionState state = SessionState::Created;
     SessionResult last_result;
     SessionBoundarySummary boundary_summary;
+    SessionStepSummary step_summary;
     std::vector<Arena> arenas;
     std::vector<OwnedObject> preparations;
     SessionRuntimeBindings runtime_bindings;
     CommittedStateStore committed_state_store;
     TransactionCandidateStore candidate_state_store;
-    CommittedOutputStore committed_output_store;
     CycleFrame cycle_frame;
     std::vector<ScheduledCall> opening_schedule;
     std::uint64_t committed_epoch = 0U;
     std::int64_t committed_tick = 0;
-    bool opening_boundary_complete = false;
+    std::uint32_t active_transaction_handle = 0U;
 
     [[nodiscard]] SessionResult failure(SessionError error,
                                         std::uint32_t handle,
@@ -559,6 +618,28 @@ struct Session::Impl final : SessionObjectAccess,
                                  : object_view(*object);
     }
 
+    class ScopedObjectAccess final : public SessionObjectAccess {
+      public:
+        ScopedObjectAccess(
+            const Impl& owner,
+            const std::vector<std::uint32_t>* allowed_handles) noexcept
+            : owner_(&owner), allowed_handles_(allowed_handles) {}
+
+        [[nodiscard]] SessionObjectIdentityView prepared_object(
+            std::uint32_t handle) const noexcept override {
+            if (owner_ == nullptr || allowed_handles_ == nullptr ||
+                std::find(allowed_handles_->begin(), allowed_handles_->end(),
+                          handle) == allowed_handles_->end()) {
+                return {};
+            }
+            return owner_->prepared_object(handle);
+        }
+
+      private:
+        const Impl* owner_ = nullptr;
+        const std::vector<std::uint32_t>* allowed_handles_ = nullptr;
+    };
+
     [[nodiscard]] bool valid_materializer_identity(
         const SessionObjectMaterializer& materializer,
         std::uint32_t handle, SessionObjectRole role,
@@ -571,7 +652,7 @@ struct Session::Impl final : SessionObjectAccess,
                identity.codec_entry_handle == codec_handle;
     }
 
-    [[nodiscard]] SessionResult validate_materializers() noexcept {
+    [[nodiscard]] SessionResult validate_materializers() {
         for (const auto& preparation : image->preparations()) {
             const auto* materializer = provider->preparation(preparation.handle);
             if (materializer == nullptr) {
@@ -594,6 +675,11 @@ struct Session::Impl final : SessionObjectAccess,
                 return failure(SessionError::InvalidStorageLayout,
                                preparation.handle,
                                "preparation object layout is invalid");
+            }
+            if (materializer->dependency_count() != 0U) {
+                return failure(SessionError::InvalidMaterializerIdentity,
+                               preparation.handle,
+                               "preparation materializer declared a dependency");
             }
         }
 
@@ -628,9 +714,12 @@ struct Session::Impl final : SessionObjectAccess,
                                component.handle,
                                "Runtime Cell dependency closure is incomplete");
             }
+            std::vector<std::uint32_t> dependency_handles;
+            dependency_handles.reserve(materializer->dependency_count());
             for (std::size_t index = 0U;
                  index < materializer->dependency_count(); ++index) {
                 const auto expected = materializer->dependency(index);
+                dependency_handles.push_back(expected.image_object_handle);
                 const auto* preparation = find_handle(
                     image->preparations(), expected.image_object_handle);
                 const auto* dependency_materializer = provider->preparation(
@@ -664,6 +753,21 @@ struct Session::Impl final : SessionObjectAccess,
                                    component.handle,
                                    "Runtime Cell dependency type is invalid");
                 }
+            }
+            if (!unique_nonzero_handles(dependency_handles) ||
+                dependency_handles.size() !=
+                    component.preparation_handles.size() ||
+                !std::all_of(
+                    component.preparation_handles.begin(),
+                    component.preparation_handles.end(),
+                    [&dependency_handles](std::uint32_t handle) {
+                        return std::find(dependency_handles.begin(),
+                                         dependency_handles.end(), handle) !=
+                               dependency_handles.end();
+                    })) {
+                return failure(SessionError::InvalidMaterializerIdentity,
+                               component.handle,
+                               "Runtime Cell dependency set is not exact");
             }
         }
 
@@ -702,6 +806,11 @@ struct Session::Impl final : SessionObjectAccess,
                 return failure(mismatch, block->handle,
                                "state metadata and typed adapter disagree");
             }
+            if (!materializer->operations().supports_nofail_swap()) {
+                return failure(SessionError::InvalidMaterializerIdentity,
+                               block->handle,
+                               "state codec lacks a no-fail commit swap");
+            }
         }
 
         for (const auto& slot : image->slots()) {
@@ -735,7 +844,9 @@ struct Session::Impl final : SessionObjectAccess,
                 (linked_entry->kind !=
                      contracts::PlanImageEntryKind::PublishProjection &&
                  linked_entry->kind !=
-                     contracts::PlanImageEntryKind::BoundaryEvaluation)) {
+                     contracts::PlanImageEntryKind::BoundaryEvaluation &&
+                 linked_entry->kind !=
+                     contracts::PlanImageEntryKind::IntervalEvolution)) {
                 continue;
             }
             const auto* component = component_for_callsite(callsite.handle);
@@ -757,6 +868,28 @@ struct Session::Impl final : SessionObjectAccess,
                 return failure(SessionError::InvalidMaterializerIdentity,
                                callsite.handle,
                                "callsite invocation identity mismatch");
+            }
+        }
+        for (const auto& scope : image->integration_scopes()) {
+            const auto component_handle = owner_component_for_occurrence(
+                scope.owner_occurrence_handle);
+            const auto* integration = provider->integration(scope.handle);
+            if (component_handle == 0U) {
+                return failure(SessionError::InvalidImageStructure,
+                               scope.handle,
+                               "IntegrationScope owner is invalid");
+            }
+            if (integration == nullptr) {
+                return failure(SessionError::MissingMaterializer,
+                               scope.handle,
+                               "IntegrationScope entry is missing");
+            }
+            const auto identity = integration->identity();
+            if (identity.integration_scope_handle != scope.handle ||
+                identity.runtime_component_handle != component_handle) {
+                return failure(SessionError::InvalidMaterializerIdentity,
+                               scope.handle,
+                               "IntegrationScope entry identity mismatch");
             }
         }
         return {};
@@ -954,6 +1087,118 @@ struct Session::Impl final : SessionObjectAccess,
         return {};
     }
 
+    [[nodiscard]] SessionResult validate_transactions() {
+        if (image->transactions().size() != 1U) {
+            return failure(SessionError::InvalidImageStructure, 0U,
+                           "Session slice requires one transaction");
+        }
+        const auto& transaction = image->transactions().front();
+        if (transaction.candidates.empty() ||
+            !unique_nonzero_handles(transaction.held_slot_handles)) {
+            return failure(SessionError::InvalidImageStructure,
+                           transaction.handle,
+                           "transaction candidates or held slots are invalid");
+        }
+        std::vector<std::uint32_t> candidate_slots;
+        std::vector<std::uint32_t> candidate_tokens;
+        candidate_slots.reserve(transaction.candidates.size());
+        candidate_tokens.reserve(transaction.candidates.size());
+        for (const auto& candidate : transaction.candidates) {
+            candidate_slots.push_back(candidate.candidate_state_slot_handle);
+            candidate_tokens.push_back(candidate.writer_token_handle);
+            const auto* block = state_for_slot(
+                candidate.candidate_state_slot_handle);
+            const auto* token = find_handle(image->writer_tokens(),
+                                            candidate.writer_token_handle);
+            bool producer_valid = false;
+            if (candidate.producer_kind == "IntegrationScope") {
+                const auto* scope = find_handle(image->integration_scopes(),
+                                                candidate.producer_handle);
+                producer_valid =
+                    scope != nullptr && block != nullptr &&
+                    scope->candidate_state_slot_handle ==
+                        candidate.candidate_state_slot_handle &&
+                    scope->owner_occurrence_handle ==
+                        candidate.owner_occurrence_handle &&
+                    token != nullptr &&
+                    token->owner_kind ==
+                        contracts::PlanImageWriterOwnerKind::
+                            IntegrationCoordinator;
+            } else if (candidate.producer_kind == "RuntimeCallsite") {
+                const auto* callsite = find_handle(image->callsites(),
+                                                   candidate.producer_handle);
+                const auto* component = component_for_callsite(
+                    candidate.producer_handle);
+                const auto* entry = callsite == nullptr
+                                        ? nullptr
+                                        : entry_for_callsite(*callsite);
+                producer_valid =
+                    callsite != nullptr && component != nullptr &&
+                    entry != nullptr &&
+                    entry->kind ==
+                        contracts::PlanImageEntryKind::IntervalEvolution &&
+                    component->occurrence_handle ==
+                        candidate.owner_occurrence_handle &&
+                    token != nullptr &&
+                    token->owner_kind ==
+                        contracts::PlanImageWriterOwnerKind::RuntimeCallsite;
+            }
+            if (block == nullptr ||
+                block->candidate_slot_handle !=
+                    candidate.candidate_state_slot_handle ||
+                block->owner_occurrence_handle !=
+                    candidate.owner_occurrence_handle ||
+                token == nullptr ||
+                token->slot_handle !=
+                    candidate.candidate_state_slot_handle ||
+                token->owner_handle != candidate.producer_handle ||
+                !producer_valid) {
+                return failure(SessionError::InvalidImageStructure,
+                               candidate.candidate_state_slot_handle,
+                               "transaction candidate authority is invalid");
+            }
+        }
+        if (!unique_nonzero_handles(candidate_slots) ||
+            !unique_nonzero_handles(candidate_tokens)) {
+            return failure(SessionError::InvalidImageStructure,
+                           transaction.handle,
+                           "transaction candidate membership is duplicated");
+        }
+        for (const auto held_handle : transaction.held_slot_handles) {
+            const auto* held = find_handle(image->slots(), held_handle);
+            if (held == nullptr ||
+                held->storage_class !=
+                    contracts::SlotStorageClass::IntegrationHeld ||
+                held->hold_policy !=
+                    contracts::SlotHoldPolicy::HoldInterval) {
+                return failure(SessionError::InvalidImageStructure,
+                               held_handle,
+                               "transaction held slot is not interval-local");
+            }
+        }
+        const auto* branch = contracts::find_transaction_branch(
+            transaction, contracts::TransactionBranch::Continue);
+        if (branch == nullptr || !branch->model_commit ||
+            branch->epoch_delta != 1 || branch->tick_delta != 1 ||
+            branch->output_visibility !=
+                contracts::TransactionOutputVisibility::
+                    AfterObservationSeal ||
+            branch->held_interval_end_policy !=
+                contracts::HeldIntervalEndPolicy::ReleaseAfterModelCommit ||
+            !branch->observation_seal ||
+            !same_handle_set(branch->committed_candidate_slot_handles,
+                             candidate_slots) ||
+            !same_handle_set(branch->retained_held_slot_handles,
+                             transaction.held_slot_handles) ||
+            !branch->discarded_candidate_slot_handles.empty() ||
+            !branch->discarded_held_slot_handles.empty()) {
+            return failure(SessionError::InvalidImageStructure,
+                           transaction.handle,
+                           "Continue transaction branch is not atomic");
+        }
+        return {};
+    }
+
     [[nodiscard]] std::uint32_t region_ordinal(
         std::uint32_t callsite_handle) const noexcept {
         std::uint32_t result =
@@ -1138,6 +1383,8 @@ struct Session::Impl final : SessionObjectAccess,
             !unique_nonzero_handles(image->invocations()) ||
             !unique_nonzero_handles(image->regions()) ||
             !unique_nonzero_handles(image->dag_nodes()) ||
+            !unique_nonzero_handles(image->integration_scopes()) ||
+            !unique_nonzero_handles(image->transactions()) ||
             !unique_nonzero_handles(image->evaluator_histories())) {
             return failure(SessionError::InvalidImageHandle, 0U,
                            "Image contains a duplicate or zero handle");
@@ -1145,6 +1392,7 @@ struct Session::Impl final : SessionObjectAccess,
         auto result = validate_lifecycle();
         if (result) result = validate_storage();
         if (result) result = validate_states();
+        if (result) result = validate_transactions();
         if (result) result = validate_materializers();
         if (result) result = build_opening_schedule();
         return result;
@@ -1156,9 +1404,6 @@ struct Session::Impl final : SessionObjectAccess,
         runtime_bindings.cells.reserve(image->runtime_components().size());
         committed_state_store.blocks.reserve(image->state_blocks().size());
         candidate_state_store.blocks.reserve(image->state_blocks().size());
-        committed_output_store.values.reserve(image->slots().size());
-        committed_output_store.construction_order.reserve(
-            image->slots().size());
         cycle_frame.slots.reserve(image->slots().size());
         cycle_frame.construction_order.reserve(image->slots().size());
         opening_schedule.reserve(image->callsites().size());
@@ -1166,6 +1411,14 @@ struct Session::Impl final : SessionObjectAccess,
             image->callsites().size());
         boundary_summary.skipped_callsite_handles.reserve(
             image->callsites().size());
+        step_summary.executed_callsite_handles.reserve(
+            image->callsites().size());
+        step_summary.skipped_callsite_handles.reserve(
+            image->callsites().size());
+        step_summary.integration_scope_handles.reserve(
+            image->integration_scopes().size());
+        step_summary.candidate_slot_handles.reserve(
+            image->state_blocks().size());
     }
 
     [[nodiscard]] SessionResult allocate_arenas() noexcept {
@@ -1183,6 +1436,7 @@ struct Session::Impl final : SessionObjectAccess,
     [[nodiscard]] SessionResult construct_owned(
         std::uint32_t handle,
         const SessionObjectMaterializer& materializer,
+        const SessionObjectAccess& object_access,
         std::vector<OwnedObject>& destination, SessionObjectRole role,
         std::uint32_t linked_entry_handle,
         SessionError construction_error) noexcept {
@@ -1192,7 +1446,7 @@ struct Session::Impl final : SessionObjectAccess,
             return failure(SessionError::AllocationFailure, handle,
                            "object allocation failed");
         }
-        if (!materializer.construct(*this, allocation.get())) {
+        if (!materializer.construct(object_access, allocation.get())) {
             return failure(construction_error, handle,
                            "typed object construction failed");
         }
@@ -1237,22 +1491,6 @@ struct Session::Impl final : SessionObjectAccess,
                 return failure(SessionError::MissingMaterializer, slot.handle,
                                "frame slot storage is unavailable");
             }
-            if (slot.storage_class ==
-                contracts::SlotStorageClass::IntegrationHeld) {
-                const auto layout = materializer->operations().layout();
-                RawBlock staging(layout.size_bytes, layout.alignment_bytes);
-                if (staging.get() == nullptr) {
-                    return failure(SessionError::AllocationFailure,
-                                   slot.handle,
-                                   "held-output staging allocation failed");
-                }
-                committed_output_store.values.push_back(
-                    {&slot, persistent_address, materializer});
-                cycle_frame.slots.push_back(
-                    {&slot, staging.get(), materializer, true});
-                static_cast<void>(staging.release());
-                continue;
-            }
             cycle_frame.slots.push_back(
                 {&slot, persistent_address, materializer, false});
         }
@@ -1293,7 +1531,8 @@ struct Session::Impl final : SessionObjectAccess,
                 return failure(SessionError::AllocationFailure, handle,
                                "initial-state temporary allocation failed");
             }
-            if (!materializer->construct(*this, temporary.get())) {
+            const ScopedObjectAccess no_dependencies(*this, nullptr);
+            if (!materializer->construct(no_dependencies, temporary.get())) {
                 return failure(SessionError::InitialStateFailed, handle,
                                "typed initial-state builder failed");
             }
@@ -1342,6 +1581,128 @@ struct Session::Impl final : SessionObjectAccess,
         return {};
     }
 
+    [[nodiscard]] StateObject* candidate_for_slot(
+        std::uint32_t slot_handle) noexcept {
+        const auto found = std::find_if(
+            candidate_state_store.blocks.begin(),
+            candidate_state_store.blocks.end(),
+            [slot_handle](const auto& candidate) {
+                return candidate.block != nullptr &&
+                       candidate.block->candidate_slot_handle == slot_handle;
+            });
+        return found == candidate_state_store.blocks.end() ? nullptr
+                                                            : &*found;
+    }
+
+    [[nodiscard]] StateObject* committed_for_block(
+        std::uint32_t block_handle) noexcept {
+        const auto found = std::find_if(
+            committed_state_store.blocks.begin(),
+            committed_state_store.blocks.end(),
+            [block_handle](const auto& committed) {
+                return committed.block != nullptr &&
+                       committed.block->handle == block_handle;
+            });
+        return found == committed_state_store.blocks.end() ? nullptr
+                                                            : &*found;
+    }
+
+    [[nodiscard]] SessionResult rearm_candidates(
+        const contracts::PlanImageTransaction& transaction) noexcept {
+        for (auto& candidate : candidate_state_store.blocks) {
+            candidate.candidate_present = false;
+            candidate.candidate_generation = 0U;
+            candidate.candidate_base_epoch = 0U;
+            candidate.candidate_producer_handle = 0U;
+            candidate.candidate_writer_token_handle = 0U;
+        }
+        for (const auto& member : transaction.candidates) {
+            auto* candidate = candidate_for_slot(
+                member.candidate_state_slot_handle);
+            auto* committed =
+                candidate == nullptr || candidate->block == nullptr
+                    ? nullptr
+                    : committed_for_block(candidate->block->handle);
+            if (candidate == nullptr || committed == nullptr ||
+                candidate->materializer != committed->materializer ||
+                !candidate->materializer->operations().validate(
+                    committed->address) ||
+                !candidate->materializer->operations().replace(
+                    candidate->address, committed->address) ||
+                !candidate->materializer->operations().validate(
+                    candidate->address)) {
+                return failure(SessionError::CandidateRearmFailed,
+                               member.candidate_state_slot_handle,
+                               "candidate rearm from committed state failed");
+            }
+        }
+        return {};
+    }
+
+    [[nodiscard]] SessionResult validate_precommit(
+        const contracts::PlanImageTransaction& transaction,
+        const contracts::PlanImageTransactionBranch& branch) noexcept {
+        if (!same_handle_set(branch.committed_candidate_slot_handles,
+                             step_summary.candidate_slot_handles)) {
+            return failure(SessionError::TransactionPrecommitFailed,
+                           transaction.handle,
+                           "candidate set is incomplete at precommit");
+        }
+        for (const auto& member : transaction.candidates) {
+            auto* candidate = candidate_for_slot(
+                member.candidate_state_slot_handle);
+            if (candidate == nullptr || !candidate->candidate_present ||
+                candidate->candidate_generation != cycle_frame.generation ||
+                candidate->candidate_base_epoch != committed_epoch ||
+                candidate->candidate_producer_handle !=
+                    member.producer_handle ||
+                candidate->candidate_writer_token_handle !=
+                    member.writer_token_handle ||
+                !candidate->materializer->operations()
+                     .supports_nofail_swap()) {
+                return failure(SessionError::TransactionPrecommitFailed,
+                               member.candidate_state_slot_handle,
+                               "candidate metadata is incomplete at precommit");
+            }
+            if (!candidate->materializer->operations().validate(
+                    candidate->address)) {
+                return failure(SessionError::CandidateValidationFailed,
+                               member.candidate_state_slot_handle,
+                               "candidate codec validation failed");
+            }
+        }
+        for (const auto held_handle : transaction.held_slot_handles) {
+            const auto* held = frame_slot(held_handle);
+            if (held == nullptr || !held->present ||
+                held->generation != cycle_frame.generation) {
+                return failure(SessionError::TransactionPrecommitFailed,
+                               held_handle,
+                               "held interval value is absent at precommit");
+            }
+        }
+        return {};
+    }
+
+    void commit_candidates_noexcept(
+        const contracts::PlanImageTransaction& transaction,
+        const contracts::PlanImageTransactionBranch& branch) noexcept {
+        for (const auto slot_handle :
+             branch.committed_candidate_slot_handles) {
+            auto* candidate = candidate_for_slot(slot_handle);
+            auto* committed = committed_for_block(candidate->block->handle);
+            candidate->materializer->operations().nofail_swap(
+                committed->address, candidate->address);
+        }
+        committed_epoch += static_cast<std::uint64_t>(branch.epoch_delta);
+        committed_tick += branch.tick_delta;
+        for (const auto& member : transaction.candidates) {
+            auto* candidate = candidate_for_slot(
+                member.candidate_state_slot_handle);
+            auto* committed = committed_for_block(candidate->block->handle);
+            committed->committed_epoch = committed_epoch;
+        }
+    }
+
     void close_frame() noexcept {
         for (auto found = cycle_frame.construction_order.rbegin();
              found != cycle_frame.construction_order.rend(); ++found) {
@@ -1353,12 +1714,18 @@ struct Session::Impl final : SessionObjectAccess,
         }
         cycle_frame.construction_order.clear();
         cycle_frame.open = false;
+        active_transaction_handle = 0U;
+        for (auto& candidate : candidate_state_store.blocks) {
+            candidate.candidate_present = false;
+            candidate.candidate_generation = 0U;
+            candidate.candidate_base_epoch = 0U;
+            candidate.candidate_producer_handle = 0U;
+            candidate.candidate_writer_token_handle = 0U;
+        }
     }
 
     void unwind() noexcept {
         close_frame();
-        discard_new_committed_outputs();
-        committed_output_store.values.clear();
         for (auto found = candidate_state_store.blocks.rbegin();
              found != candidate_state_store.blocks.rend(); ++found) {
             found->materializer->operations().destroy(found->address);
@@ -1400,6 +1767,7 @@ struct Session::Impl final : SessionObjectAccess,
     }
 
     [[nodiscard]] SessionResult read_committed(
+        std::uint8_t authority_kind, std::uint32_t authority_handle,
         std::uint32_t state_block_handle,
         SessionObjectIdentityView& result) const noexcept override {
         result = {};
@@ -1418,6 +1786,31 @@ struct Session::Impl final : SessionObjectAccess,
         if (found == committed_state_store.blocks.end()) {
             return {SessionError::InvalidImageHandle, state_block_handle,
                     "committed state handle is unknown"};
+        }
+        bool authorized = false;
+        if (authority_kind == static_cast<std::uint8_t>(
+                                  SessionStateAuthorityKind::
+                                      RuntimeComponent)) {
+            const auto* component = find_handle(image->runtime_components(),
+                                                authority_handle);
+            authorized = component != nullptr &&
+                         std::find(component->state_block_handles.begin(),
+                                   component->state_block_handles.end(),
+                                   state_block_handle) !=
+                             component->state_block_handles.end();
+        } else if (authority_kind == static_cast<std::uint8_t>(
+                                         SessionStateAuthorityKind::
+                                             IntegrationScope)) {
+            const auto* scope = find_handle(image->integration_scopes(),
+                                            authority_handle);
+            authorized = scope != nullptr && found->block != nullptr &&
+                         found->block->committed_slot_handle ==
+                             scope->committed_state_slot_handle;
+        }
+        if (!authorized) {
+            return {SessionError::StateAuthorizationFailure,
+                    state_block_handle,
+                    "committed state is outside the current authority"};
         }
         const auto layout = found->materializer->operations().layout();
         result = {found->address,
@@ -1451,19 +1844,6 @@ struct Session::Impl final : SessionObjectAccess,
                        candidate.slot->handle == slot_handle;
             });
         return found == cycle_frame.slots.end() ? nullptr : &*found;
-    }
-
-    [[nodiscard]] CommittedOutput* committed_output(
-        std::uint32_t slot_handle) noexcept {
-        const auto found = std::find_if(
-            committed_output_store.values.begin(),
-            committed_output_store.values.end(),
-            [slot_handle](const auto& candidate) {
-                return candidate.slot != nullptr &&
-                       candidate.slot->handle == slot_handle;
-            });
-        return found == committed_output_store.values.end() ? nullptr
-                                                             : &*found;
     }
 
     [[nodiscard]] SessionResult validate_callsite_outputs(
@@ -1503,78 +1883,6 @@ struct Session::Impl final : SessionObjectAccess,
         return {};
     }
 
-    void discard_new_committed_outputs() noexcept {
-        for (auto found =
-                 committed_output_store.construction_order.rbegin();
-             found != committed_output_store.construction_order.rend();
-             ++found) {
-            auto& output = committed_output_store.values[*found];
-            if (output.present) {
-                output.materializer->operations().destroy(output.address);
-                output.present = false;
-            }
-        }
-        committed_output_store.construction_order.clear();
-    }
-
-    [[nodiscard]] SessionResult publish_retained_outputs() noexcept {
-        if (!committed_output_store.construction_order.empty()) {
-            return failure(SessionError::InvalidLifecycleTransition, 0U,
-                           "opening-boundary outputs are already committed");
-        }
-        for (const auto& staged : cycle_frame.slots) {
-            if (staged.slot == nullptr ||
-                staged.slot->storage_class !=
-                    contracts::SlotStorageClass::IntegrationHeld) {
-                continue;
-            }
-            if (!staged.present ||
-                staged.generation != cycle_frame.generation) {
-                discard_new_committed_outputs();
-                return failure(SessionError::FrameSlotAbsent,
-                               staged.slot->handle,
-                               "required held interval output is absent");
-            }
-            auto* output = committed_output(staged.slot->handle);
-            if (output == nullptr || output->present) {
-                discard_new_committed_outputs();
-                return failure(SessionError::InvalidLifecycleTransition,
-                               staged.slot->handle,
-                               "held interval output ownership is invalid");
-            }
-            if (!output->materializer->operations().copy_construct(
-                    staged.address, output->address)) {
-                discard_new_committed_outputs();
-                return failure(SessionError::SlotConstructionFailed,
-                               staged.slot->handle,
-                               "held interval output copy failed");
-            }
-            ConstructedObject guard(output->address,
-                                    output->materializer->operations());
-            if (!output->materializer->operations().validate(
-                    output->address)) {
-                discard_new_committed_outputs();
-                return failure(SessionError::ObjectValidationFailed,
-                               staged.slot->handle,
-                               "committed held output validation failed");
-            }
-            const auto index = static_cast<std::size_t>(
-                output - committed_output_store.values.data());
-            committed_output_store.construction_order.push_back(index);
-            output->present = true;
-            output->generation = staged.generation;
-            output->sequence = staged.sequence;
-            output->sample_tick = staged.sample_tick;
-            output->sample_time_seconds = staged.sample_time_seconds;
-            output->interval_start_seconds =
-                staged.interval_start_seconds;
-            output->interval_end_seconds = staged.interval_end_seconds;
-            output->quality = staged.quality;
-            guard.release();
-        }
-        return {};
-    }
-
     [[nodiscard]] bool frame_active(
         std::uint64_t generation) const noexcept override {
         return cycle_frame.open && generation != 0U &&
@@ -1582,7 +1890,8 @@ struct Session::Impl final : SessionObjectAccess,
     }
 
     [[nodiscard]] SessionResult read_input(
-        std::uint32_t callsite_handle, std::uint64_t generation,
+        std::uint8_t authority_kind, std::uint32_t authority_handle,
+        std::uint64_t generation,
         std::uint32_t slot_handle,
         SessionObjectIdentityView& result) const noexcept override {
         result = {};
@@ -1590,13 +1899,39 @@ struct Session::Impl final : SessionObjectAccess,
             return {SessionError::StaleFrameView, slot_handle,
                     "input view generation is stale"};
         }
-        const auto* callsite = find_handle(image->callsites(), callsite_handle);
-        if (callsite == nullptr ||
-            std::find(callsite->input_slot_handles.begin(),
-                      callsite->input_slot_handles.end(), slot_handle) ==
-                callsite->input_slot_handles.end()) {
+        const auto* slot = find_handle(image->slots(), slot_handle);
+        bool authorized = false;
+        if (authority_kind == static_cast<std::uint8_t>(
+                                  SessionFrameAuthorityKind::
+                                      RuntimeCallsite)) {
+            const auto* callsite = find_handle(image->callsites(),
+                                               authority_handle);
+            authorized = callsite != nullptr && slot != nullptr &&
+                         std::find(callsite->input_slot_handles.begin(),
+                                   callsite->input_slot_handles.end(),
+                                   slot_handle) !=
+                             callsite->input_slot_handles.end();
+        } else if (authority_kind == static_cast<std::uint8_t>(
+                                         SessionFrameAuthorityKind::
+                                             IntegrationScope)) {
+            const auto* scope = find_handle(image->integration_scopes(),
+                                            authority_handle);
+            authorized = scope != nullptr && slot != nullptr &&
+                         (slot_handle == scope->held_form_slot_handle ||
+                          slot_handle ==
+                              scope->form_preparation_slot_handle ||
+                          std::find(slot->reader_handles.begin(),
+                                    slot->reader_handles.end(),
+                                    scope->handle) !=
+                              slot->reader_handles.end() ||
+                          std::find(slot->reader_handles.begin(),
+                                    slot->reader_handles.end(),
+                                    scope->derivative_callsite_handle) !=
+                              slot->reader_handles.end());
+        }
+        if (!authorized) {
             return {SessionError::ReaderAuthorizationFailure, slot_handle,
-                    "callsite is not authorized to read slot"};
+                    "current execution authority cannot read slot"};
         }
         const auto* stored = frame_slot(slot_handle);
         if (stored == nullptr || !stored->present ||
@@ -1733,6 +2068,112 @@ struct Session::Impl final : SessionObjectAccess,
         return {};
     }
 
+    [[nodiscard]] bool transaction_active(
+        std::uint64_t generation) const noexcept override {
+        return frame_active(generation) && active_transaction_handle != 0U;
+    }
+
+    [[nodiscard]] SessionResult write_candidate(
+        SessionCandidateProducerKind producer_kind,
+        std::uint32_t producer_handle, std::uint64_t generation,
+        std::uint32_t transaction_handle,
+        std::uint32_t candidate_slot_handle,
+        std::uint32_t writer_token_handle,
+        InProcessValueView value) noexcept override {
+        if (!transaction_active(generation) ||
+            transaction_handle != active_transaction_handle) {
+            return {SessionError::StaleFrameView, candidate_slot_handle,
+                    "candidate writer generation is stale"};
+        }
+        const auto* transaction = find_handle(image->transactions(),
+                                              transaction_handle);
+        const auto* token = find_handle(image->writer_tokens(),
+                                        writer_token_handle);
+        const contracts::PlanImageTransactionCandidateMember* member = nullptr;
+        if (transaction != nullptr) {
+            const auto found_member = std::find_if(
+                transaction->candidates.begin(),
+                transaction->candidates.end(),
+                [&](const auto& candidate) {
+                    const bool kind_matches =
+                        (producer_kind ==
+                             SessionCandidateProducerKind::IntegrationScope &&
+                         candidate.producer_kind == "IntegrationScope") ||
+                        (producer_kind ==
+                             SessionCandidateProducerKind::RuntimeCallsite &&
+                         candidate.producer_kind == "RuntimeCallsite");
+                    return kind_matches &&
+                           candidate.producer_handle == producer_handle &&
+                           candidate.candidate_state_slot_handle ==
+                               candidate_slot_handle &&
+                           candidate.writer_token_handle ==
+                               writer_token_handle;
+                });
+            if (found_member != transaction->candidates.end()) {
+                member = &*found_member;
+            }
+        }
+        if (transaction == nullptr || token == nullptr ||
+            member == nullptr ||
+            token->slot_handle != candidate_slot_handle ||
+            token->owner_handle != producer_handle ||
+            (producer_kind ==
+                     SessionCandidateProducerKind::IntegrationScope
+                 ? token->owner_kind !=
+                       contracts::PlanImageWriterOwnerKind::
+                           IntegrationCoordinator
+                 : token->owner_kind !=
+                       contracts::PlanImageWriterOwnerKind::
+                           RuntimeCallsite)) {
+            return {SessionError::CandidateAuthorizationFailure,
+                    candidate_slot_handle,
+                    "candidate writer token or producer is unauthorized"};
+        }
+        const auto found = std::find_if(
+            candidate_state_store.blocks.begin(),
+            candidate_state_store.blocks.end(),
+            [candidate_slot_handle](const auto& candidate) {
+                return candidate.block != nullptr &&
+                       candidate.block->candidate_slot_handle ==
+                           candidate_slot_handle;
+            });
+        if (found == candidate_state_store.blocks.end()) {
+            return {SessionError::InvalidImageHandle,
+                    candidate_slot_handle,
+                    "candidate slot has no state block"};
+        }
+        const auto layout = found->materializer->operations().layout();
+        if (value.object == nullptr ||
+            value.type_identity != layout.type_identity) {
+            return {SessionError::ObjectTypeMismatch,
+                    candidate_slot_handle,
+                    "candidate value type mismatch"};
+        }
+        if (value.size_bytes != layout.size_bytes) {
+            return {SessionError::ObjectSizeMismatch,
+                    candidate_slot_handle,
+                    "candidate value size mismatch"};
+        }
+        if (value.alignment_bytes != layout.alignment_bytes) {
+            return {SessionError::ObjectAlignmentMismatch,
+                    candidate_slot_handle,
+                    "candidate value alignment mismatch"};
+        }
+        if (found->candidate_present ||
+            !found->materializer->operations().replace(found->address,
+                                                       value.object)) {
+            return {SessionError::CandidateValidationFailed,
+                    candidate_slot_handle,
+                    "candidate value staging failed"};
+        }
+        found->candidate_present = true;
+        found->candidate_generation = generation;
+        found->candidate_base_epoch = committed_epoch;
+        found->candidate_producer_handle = producer_handle;
+        found->candidate_writer_token_handle = writer_token_handle;
+        return {};
+    }
+
     [[nodiscard]] bool history_ready(
         std::uint32_t callsite_handle) const noexcept {
         const auto found = std::find_if(
@@ -1769,6 +2210,107 @@ struct Session::Impl final : SessionObjectAccess,
         return object == nullptr ? SessionObjectIdentityView{}
                                  : object_view(*object);
     }
+
+    [[nodiscard]] SessionResult begin_frame(
+        std::uint32_t transaction_handle) noexcept {
+        if (cycle_frame.open) {
+            return failure(SessionError::FrameAlreadyOpen, 0U,
+                           "CycleFrame is already open");
+        }
+        ++cycle_frame.generation;
+        if (cycle_frame.generation == 0U) {
+            ++cycle_frame.generation;
+        }
+        cycle_frame.sequence = 0U;
+        cycle_frame.write_count = 0U;
+        cycle_frame.open = true;
+        active_transaction_handle = transaction_handle;
+        boundary_summary.generation = cycle_frame.generation;
+        boundary_summary.output_write_count = 0U;
+        boundary_summary.executed_callsite_handles.clear();
+        boundary_summary.skipped_callsite_handles.clear();
+        return {};
+    }
+
+    [[nodiscard]] SessionResult execute_boundary_calls() noexcept {
+        const auto boundary_time =
+            static_cast<double>(committed_tick) *
+            image->clock().base_step_seconds;
+        const auto interval_end = boundary_time +
+                                  image->clock().base_step_seconds;
+        for (const auto& scheduled : opening_schedule) {
+            const auto* component = find_handle(
+                image->runtime_components(), scheduled.component_handle);
+            const auto* callsite = find_handle(
+                image->callsites(), scheduled.callsite_handle);
+            if (component == nullptr || callsite == nullptr) {
+                return failure(SessionError::InvalidSchedule,
+                               scheduled.callsite_handle,
+                               "scheduled callsite disappeared");
+            }
+            if (!scheduled_now(*component) ||
+                !history_ready(callsite->handle)) {
+                boundary_summary.skipped_callsite_handles.push_back(
+                    callsite->handle);
+                continue;
+            }
+            const auto* entry = provider->invocation(callsite->handle);
+            if (entry == nullptr) {
+                return failure(SessionError::MissingMaterializer,
+                               callsite->handle,
+                               "callsite invocation entry is missing");
+            }
+            const auto identity = entry->identity();
+            if (identity.callsite_handle != callsite->handle ||
+                identity.runtime_component_handle != component->handle ||
+                identity.linked_entry_handle != callsite->entry_handle) {
+                return failure(SessionError::InvalidMaterializerIdentity,
+                               callsite->handle,
+                               "callsite invocation identity mismatch");
+            }
+            const auto runtime = runtime_view(component->handle);
+            if (!runtime) {
+                return failure(SessionError::RuntimeCellFailed,
+                               component->handle,
+                               "scheduled Runtime Cell is unavailable");
+            }
+            SessionInvocationContext context(
+                callsite->handle, component->handle, committed_tick,
+                boundary_time, boundary_time, interval_end,
+                contracts::DataQuality::Valid, runtime,
+                SessionCommittedStateView(
+                    this, SessionStateAuthorityKind::RuntimeComponent,
+                    component->handle),
+                SessionInputView(
+                    this, SessionFrameAuthorityKind::RuntimeCallsite,
+                    callsite->handle, cycle_frame.generation),
+                SessionOutputWriterSet(this, callsite->handle,
+                                       cycle_frame.generation),
+                SessionCandidateWriterSet(
+                    nullptr,
+                    SessionCandidateProducerKind::RuntimeCallsite,
+                    callsite->handle, cycle_frame.generation, 0U));
+            const auto result = entry->invoke(context);
+            if (!result) {
+                return failure(
+                    result.error == SessionError::None
+                        ? SessionError::InvocationFailed
+                        : result.error,
+                    result.image_handle == 0U ? callsite->handle
+                                              : result.image_handle,
+                    result.detail.empty() ? "callsite invocation failed"
+                                          : result.detail);
+            }
+            const auto outputs = validate_callsite_outputs(*callsite);
+            if (!outputs) {
+                return last_result;
+            }
+            boundary_summary.executed_callsite_handles.push_back(
+                callsite->handle);
+        }
+        boundary_summary.output_write_count = cycle_frame.write_count;
+        return {};
+    }
 };
 
 Session::Session(std::unique_ptr<Impl> implementation) noexcept
@@ -1794,6 +2336,10 @@ const SessionBoundarySummary& Session::last_boundary_summary() const noexcept {
     return implementation_->boundary_summary;
 }
 
+const SessionStepSummary& Session::last_step_summary() const noexcept {
+    return implementation_->step_summary;
+}
+
 SessionResult Session::initialize() noexcept {
     auto& impl = *implementation_;
     if (impl.state != SessionState::Created) {
@@ -1812,8 +2358,11 @@ SessionResult Session::initialize() noexcept {
                 const auto* preparation = find_handle(
                     impl.image->preparations(), handle);
                 const auto* materializer = impl.provider->preparation(handle);
+                const Impl::ScopedObjectAccess no_dependencies(impl,
+                                                               nullptr);
                 result = impl.construct_owned(
-                    handle, *materializer, impl.preparations,
+                    handle, *materializer, no_dependencies,
+                    impl.preparations,
                     SessionObjectRole::PreparedModel,
                     preparation->prepare_entry_handle,
                     SessionError::PreparationFailed);
@@ -1830,8 +2379,11 @@ SessionResult Session::initialize() noexcept {
                 result = impl.validate_runtime_dependencies(*materializer,
                                                             handle);
                 if (result) {
+                    const Impl::ScopedObjectAccess dependencies(
+                        impl, &component->preparation_handles);
                     result = impl.construct_owned(
-                        handle, *materializer, impl.runtime_bindings.cells,
+                        handle, *materializer, dependencies,
+                        impl.runtime_bindings.cells,
                         SessionObjectRole::RuntimeCell,
                         component->runtime_cell_factory_entry_handle,
                         SessionError::RuntimeCellFailed);
@@ -1863,116 +2415,20 @@ SessionResult Session::initialize() noexcept {
     }
 }
 
-SessionResult Session::execute_opening_boundary() noexcept {
+SessionResult Session::qualification_execute_opening_boundary() noexcept {
     auto& impl = *implementation_;
     if (impl.state != SessionState::Initialized) {
         return impl.failure(SessionError::InvalidLifecycleTransition, 0U,
                             "opening boundary requires Initialized Session");
     }
-    if (impl.cycle_frame.open) {
-        return impl.failure(SessionError::FrameAlreadyOpen, 0U,
-                            "CycleFrame is already open");
-    }
-    if (impl.opening_boundary_complete) {
-        return impl.failure(SessionError::InvalidLifecycleTransition, 0U,
-                            "opening boundary has already completed");
-    }
     try {
-        ++impl.cycle_frame.generation;
-        if (impl.cycle_frame.generation == 0U) {
-            ++impl.cycle_frame.generation;
-        }
-        impl.cycle_frame.sequence = 0U;
-        impl.cycle_frame.write_count = 0U;
-        impl.cycle_frame.open = true;
-        impl.boundary_summary.generation = impl.cycle_frame.generation;
-        impl.boundary_summary.output_write_count = 0U;
-        impl.boundary_summary.executed_callsite_handles.clear();
-        impl.boundary_summary.skipped_callsite_handles.clear();
-
-        const auto boundary_time =
-            static_cast<double>(impl.committed_tick) *
-            impl.image->clock().base_step_seconds;
-        const auto interval_end = boundary_time +
-                                  impl.image->clock().base_step_seconds;
-        for (const auto& scheduled : impl.opening_schedule) {
-            const auto* component = find_handle(
-                impl.image->runtime_components(), scheduled.component_handle);
-            const auto* callsite = find_handle(
-                impl.image->callsites(), scheduled.callsite_handle);
-            if (component == nullptr || callsite == nullptr) {
-                impl.close_frame();
-                return impl.failure(SessionError::InvalidSchedule,
-                                    scheduled.callsite_handle,
-                                    "scheduled callsite disappeared");
-            }
-            if (!impl.scheduled_now(*component) ||
-                !impl.history_ready(callsite->handle)) {
-                impl.boundary_summary.skipped_callsite_handles.push_back(
-                    callsite->handle);
-                continue;
-            }
-            const auto* entry = impl.provider->invocation(callsite->handle);
-            if (entry == nullptr) {
-                impl.close_frame();
-                return impl.failure(SessionError::MissingMaterializer,
-                                    callsite->handle,
-                                    "callsite invocation entry is missing");
-            }
-            const auto identity = entry->identity();
-            if (identity.callsite_handle != callsite->handle ||
-                identity.runtime_component_handle != component->handle ||
-                identity.linked_entry_handle != callsite->entry_handle) {
-                impl.close_frame();
-                return impl.failure(SessionError::InvalidMaterializerIdentity,
-                                    callsite->handle,
-                                    "callsite invocation identity mismatch");
-            }
-            const auto runtime = impl.runtime_view(component->handle);
-            if (!runtime) {
-                impl.close_frame();
-                return impl.failure(SessionError::RuntimeCellFailed,
-                                    component->handle,
-                                    "scheduled Runtime Cell is unavailable");
-            }
-            SessionInvocationContext context(
-                callsite->handle, component->handle, impl.committed_tick,
-                boundary_time, boundary_time, interval_end,
-                contracts::DataQuality::Valid, runtime,
-                SessionCommittedStateView(&impl),
-                SessionInputView(&impl, callsite->handle,
-                                 impl.cycle_frame.generation),
-                SessionOutputWriterSet(&impl, callsite->handle,
-                                       impl.cycle_frame.generation));
-            const auto result = entry->invoke(context);
-            if (!result) {
-                impl.close_frame();
-                return impl.failure(
-                    result.error == SessionError::None
-                        ? SessionError::InvocationFailed
-                        : result.error,
-                    result.image_handle == 0U ? callsite->handle
-                                              : result.image_handle,
-                    result.detail.empty() ? "callsite invocation failed"
-                                          : result.detail);
-            }
-            const auto outputs = impl.validate_callsite_outputs(*callsite);
-            if (!outputs) {
-                impl.close_frame();
-                return impl.last_result;
-            }
-            impl.boundary_summary.executed_callsite_handles.push_back(
-                callsite->handle);
-        }
-        const auto retained = impl.publish_retained_outputs();
-        if (!retained) {
+        auto result = impl.begin_frame(0U);
+        if (result) result = impl.execute_boundary_calls();
+        if (!result) {
             impl.close_frame();
             return impl.last_result;
         }
-        impl.boundary_summary.output_write_count =
-            impl.cycle_frame.write_count;
         impl.close_frame();
-        impl.opening_boundary_complete = true;
         impl.last_result = {};
         return {};
     } catch (const std::bad_alloc&) {
@@ -1983,6 +2439,189 @@ SessionResult Session::execute_opening_boundary() noexcept {
         impl.close_frame();
         return impl.failure(SessionError::InternalFailure, 0U,
                             "opening boundary failed unexpectedly");
+    }
+}
+
+SessionResult Session::execute_continue_step() noexcept {
+    auto& impl = *implementation_;
+    if (impl.state != SessionState::Initialized) {
+        return impl.failure(SessionError::InvalidLifecycleTransition, 0U,
+                            "Continue step requires Initialized Session");
+    }
+    if (impl.cycle_frame.open) {
+        return impl.failure(SessionError::FrameAlreadyOpen, 0U,
+                            "CycleFrame is already open");
+    }
+    if (impl.committed_tick >= impl.image->clock().terminal_tick) {
+        return impl.failure(SessionError::InvalidLifecycleTransition,
+                            impl.image->clock().handle,
+                            "Continue step exceeds the Image terminal tick");
+    }
+    const auto& transaction = impl.image->transactions().front();
+    const auto* branch = contracts::find_transaction_branch(
+        transaction, contracts::TransactionBranch::Continue);
+    impl.step_summary.generation = 0U;
+    impl.step_summary.base_epoch = impl.committed_epoch;
+    impl.step_summary.committed_epoch = impl.committed_epoch;
+    impl.step_summary.base_tick = impl.committed_tick;
+    impl.step_summary.committed_tick = impl.committed_tick;
+    impl.step_summary.output_write_count = 0U;
+    impl.step_summary.committed = false;
+    impl.step_summary.executed_callsite_handles.clear();
+    impl.step_summary.skipped_callsite_handles.clear();
+    impl.step_summary.integration_scope_handles.clear();
+    impl.step_summary.candidate_slot_handles.clear();
+    try {
+        auto result = impl.rearm_candidates(transaction);
+        if (!result) return impl.last_result;
+        result = impl.begin_frame(transaction.handle);
+        if (!result) return impl.last_result;
+        impl.step_summary.generation = impl.cycle_frame.generation;
+        result = impl.execute_boundary_calls();
+        impl.step_summary.executed_callsite_handles =
+            impl.boundary_summary.executed_callsite_handles;
+        impl.step_summary.skipped_callsite_handles =
+            impl.boundary_summary.skipped_callsite_handles;
+        impl.step_summary.output_write_count = impl.cycle_frame.write_count;
+        if (!result) {
+            impl.close_frame();
+            return impl.last_result;
+        }
+
+        const auto interval_start =
+            static_cast<double>(impl.committed_tick) *
+            impl.image->clock().base_step_seconds;
+        const auto interval_end = interval_start +
+                                  impl.image->clock().base_step_seconds;
+        for (const auto& member : transaction.candidates) {
+            if (member.producer_kind == "IntegrationScope") {
+                const auto* scope = find_handle(
+                    impl.image->integration_scopes(), member.producer_handle);
+                const auto component_handle =
+                    scope == nullptr
+                        ? 0U
+                        : impl.owner_component_for_occurrence(
+                              scope->owner_occurrence_handle);
+                const auto* entry = impl.provider->integration(
+                    member.producer_handle);
+                const auto runtime = impl.runtime_view(component_handle);
+                if (scope == nullptr || component_handle == 0U ||
+                    entry == nullptr || !runtime) {
+                    impl.close_frame();
+                    return impl.failure(SessionError::MissingMaterializer,
+                                        member.producer_handle,
+                                        "IntegrationScope execution dependency is missing");
+                }
+                const auto identity = entry->identity();
+                if (identity.integration_scope_handle != scope->handle ||
+                    identity.runtime_component_handle != component_handle) {
+                    impl.close_frame();
+                    return impl.failure(
+                        SessionError::InvalidMaterializerIdentity,
+                        scope->handle,
+                        "IntegrationScope execution identity mismatch");
+                }
+                SessionIntegrationContext context(
+                    scope->handle, component_handle, transaction.handle,
+                    impl.committed_tick, interval_start, interval_end,
+                    runtime,
+                    SessionCommittedStateView(
+                        &impl, SessionStateAuthorityKind::IntegrationScope,
+                        scope->handle),
+                    SessionInputView(
+                        &impl, SessionFrameAuthorityKind::IntegrationScope,
+                        scope->handle, impl.cycle_frame.generation),
+                    SessionCandidateWriterSet(
+                        &impl,
+                        SessionCandidateProducerKind::IntegrationScope,
+                        scope->handle, impl.cycle_frame.generation,
+                        transaction.handle));
+                result = entry->integrate(context);
+                if (result) {
+                    impl.step_summary.integration_scope_handles.push_back(
+                        scope->handle);
+                }
+            } else {
+                const auto* callsite = find_handle(
+                    impl.image->callsites(), member.producer_handle);
+                const auto* component =
+                    impl.component_for_callsite(member.producer_handle);
+                const auto* entry = impl.provider->invocation(
+                    member.producer_handle);
+                const auto runtime = component == nullptr
+                                         ? SessionObjectIdentityView{}
+                                         : impl.runtime_view(
+                                               component->handle);
+                if (callsite == nullptr || component == nullptr ||
+                    entry == nullptr || !runtime) {
+                    impl.close_frame();
+                    return impl.failure(SessionError::MissingMaterializer,
+                                        member.producer_handle,
+                                        "interval evolution dependency is missing");
+                }
+                SessionInvocationContext context(
+                    callsite->handle, component->handle,
+                    impl.committed_tick, interval_start, interval_start,
+                    interval_end, contracts::DataQuality::Valid, runtime,
+                    SessionCommittedStateView(
+                        &impl,
+                        SessionStateAuthorityKind::RuntimeComponent,
+                        component->handle),
+                    SessionInputView(
+                        &impl,
+                        SessionFrameAuthorityKind::RuntimeCallsite,
+                        callsite->handle, impl.cycle_frame.generation),
+                    SessionOutputWriterSet(
+                        nullptr, callsite->handle,
+                        impl.cycle_frame.generation),
+                    SessionCandidateWriterSet(
+                        &impl,
+                        SessionCandidateProducerKind::RuntimeCallsite,
+                        callsite->handle, impl.cycle_frame.generation,
+                        transaction.handle));
+                result = entry->invoke(context);
+                if (result) {
+                    impl.step_summary.executed_callsite_handles.push_back(
+                        callsite->handle);
+                }
+            }
+            if (!result) {
+                impl.close_frame();
+                return impl.failure(
+                    result.error == SessionError::None
+                        ? SessionError::InvocationFailed
+                        : result.error,
+                    result.image_handle == 0U ? member.producer_handle
+                                              : result.image_handle,
+                    result.detail.empty() ? "candidate producer failed"
+                                          : result.detail);
+            }
+            impl.step_summary.candidate_slot_handles.push_back(
+                member.candidate_state_slot_handle);
+        }
+
+        result = impl.validate_precommit(transaction, *branch);
+        if (!result) {
+            impl.close_frame();
+            return impl.last_result;
+        }
+        impl.commit_candidates_noexcept(transaction, *branch);
+        impl.step_summary.committed = true;
+        impl.step_summary.committed_epoch = impl.committed_epoch;
+        impl.step_summary.committed_tick = impl.committed_tick;
+        impl.close_frame();
+        impl.last_result = {};
+        return {};
+    } catch (const std::bad_alloc&) {
+        impl.close_frame();
+        return impl.failure(SessionError::AllocationFailure,
+                            transaction.handle,
+                            "Continue step allocation failed");
+    } catch (...) {
+        impl.close_frame();
+        return impl.failure(SessionError::InternalFailure,
+                            transaction.handle,
+                            "Continue step failed unexpectedly");
     }
 }
 
@@ -2080,23 +2719,39 @@ std::vector<SessionFrameSlotInfo> Session::frame_slots() const {
 }
 
 std::vector<SessionCommittedOutputInfo> Session::committed_outputs() const {
-    std::vector<SessionCommittedOutputInfo> result;
-    if (state() != SessionState::Initialized) return result;
-    result.reserve(implementation_->committed_output_store.values.size());
-    for (const auto& output :
-         implementation_->committed_output_store.values) {
-        result.push_back({output.slot->handle,
-                          output.slot->codec_entry_handle,
-                          output.present,
-                          output.generation,
-                          output.sequence,
-                          output.sample_tick,
-                          output.sample_time_seconds,
-                          output.interval_start_seconds,
-                          output.interval_end_seconds,
-                          output.quality});
+    return {};
+}
+
+SessionResult Session::qualification_read_committed(
+    std::uint32_t state_block_handle,
+    SessionObjectIdentityView& result) const noexcept {
+    result = {};
+    if (state() != SessionState::Initialized) {
+        return {SessionError::InvalidLifecycleTransition,
+                state_block_handle,
+                "committed inspection requires Initialized Session"};
     }
-    return result;
+    const auto found = std::find_if(
+        implementation_->committed_state_store.blocks.begin(),
+        implementation_->committed_state_store.blocks.end(),
+        [state_block_handle](const auto& committed) {
+            return committed.block != nullptr &&
+                   committed.block->handle == state_block_handle;
+        });
+    if (found == implementation_->committed_state_store.blocks.end()) {
+        return {SessionError::InvalidImageHandle, state_block_handle,
+                "committed state handle is unknown"};
+    }
+    const auto layout = found->materializer->operations().layout();
+    result = {found->address,
+              layout.size_bytes,
+              layout.alignment_bytes,
+              layout.type_identity,
+              SessionObjectRole::CommittedState,
+              found->block->handle,
+              found->initial->builder_entry_handle,
+              found->block->codec_entry_handle};
+    return {};
 }
 
 SessionResult Session::qualification_read_candidate(

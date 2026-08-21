@@ -142,6 +142,16 @@ struct has_address_member<
     std::void_t<decltype(std::declval<const Value&>().address)>>
     : std::true_type {};
 
+template <typename Value, typename = void>
+struct has_execute_opening_boundary : std::false_type {};
+
+template <typename Value>
+struct has_execute_opening_boundary<
+    Value,
+    std::void_t<decltype(
+        std::declval<Value&>().execute_opening_boundary())>>
+    : std::true_type {};
+
 static_assert(!has_replace_slot<gnc::kernel::Session>::value,
               "Session must not expose a generic slot writer");
 static_assert(!has_committed_state_object<gnc::kernel::Session>::value,
@@ -157,6 +167,8 @@ static_assert(
     "Session must not expose committed-to-candidate mutation");
 static_assert(!has_address_member<gnc::kernel::SessionStorageExtent>::value,
               "Session storage metadata must not expose arena addresses");
+static_assert(!has_execute_opening_boundary<gnc::kernel::Session>::value,
+              "opening boundary must remain a qualification-only phase");
 
 void require(bool condition, std::string_view message) {
     if (!condition) {
@@ -479,6 +491,25 @@ void verify_materializer_identity_failures(
     wrong_factory.wrong_first_runtime_factory_identity = true;
     run(wrong_factory, SessionError::InvalidMaterializerIdentity, false,
         "wrong Runtime Cell factory identity reached placement");
+
+    AdapterOptions undeclared;
+    undeclared.request_undeclared_preparation = true;
+    auto undeclared_adapter =
+        gnc::tests::ref_yyz::make_session_adapter(*image, undeclared);
+    require(static_cast<bool>(undeclared_adapter),
+            undeclared_adapter.error);
+    auto undeclared_creation = gnc::kernel::create_session(
+        image, undeclared_adapter.provider);
+    require(static_cast<bool>(undeclared_creation),
+            "undeclared-dependency Session creation failed");
+    const auto undeclared_result =
+        undeclared_creation.session->initialize();
+    require(!undeclared_result &&
+                undeclared_result.error == SessionError::RuntimeCellFailed &&
+                undeclared_adapter.undeclared_preparation_visible != nullptr &&
+                !*undeclared_adapter.undeclared_preparation_visible &&
+                undeclared_adapter.trace->live_object_count() == 0U,
+            "undeclared valid preparation was visible to a Runtime Cell factory");
 
     auto data = image->data();
     require(data.invocations.size() >= 2U,

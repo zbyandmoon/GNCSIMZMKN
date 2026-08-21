@@ -17,6 +17,8 @@ enum class FailurePhase : std::uint8_t {
     RuntimeCell,
     InitialState,
     Boundary,
+    Integration,
+    MassEvolution,
 };
 
 enum class TraceObjectKind : std::uint8_t {
@@ -52,6 +54,26 @@ struct AdapterOptions {
         static_cast<std::size_t>(-1);
     std::size_t fail_after_output_boundary_ordinal =
         static_cast<std::size_t>(-1);
+    std::size_t fail_held_closure_boundary_ordinal =
+        static_cast<std::size_t>(-1);
+    std::size_t cross_owner_state_read_boundary_ordinal =
+        static_cast<std::size_t>(-1);
+    std::size_t cross_owner_state_read_integration_ordinal =
+        static_cast<std::size_t>(-1);
+    std::size_t wrong_candidate_token_integration_ordinal =
+        static_cast<std::size_t>(-1);
+    std::size_t omit_candidate_integration_ordinal =
+        static_cast<std::size_t>(-1);
+    std::size_t invalid_rigid_candidate_integration_ordinal =
+        static_cast<std::size_t>(-1);
+    std::size_t wrong_candidate_token_mass_ordinal =
+        static_cast<std::size_t>(-1);
+    std::size_t omit_candidate_mass_ordinal =
+        static_cast<std::size_t>(-1);
+    std::size_t invalid_mass_candidate_ordinal =
+        static_cast<std::size_t>(-1);
+    bool fail_first_candidate_rearm = false;
+    bool request_undeclared_preparation = false;
     bool reverse_invocation_registration = false;
 };
 
@@ -107,6 +129,34 @@ struct OpeningBoundaryProbe {
     bool terminal_evaluator_called = false;
 };
 
+struct StepIntervalProbe {
+    std::int64_t opening_tick = -1;
+    std::size_t rk4_derivative_evaluations = 0U;
+    double integration_mass_kilograms = 0.0;
+    double mass_candidate_kilograms = 0.0;
+    std::array<double, 3U> rigid_candidate_position{};
+    std::array<double, 3U> rigid_candidate_velocity{};
+    std::array<double, 4U> rigid_candidate_attitude_wxyz{};
+    std::array<double, 3U> rigid_candidate_angular_rate{};
+};
+
+struct StepExecutionProbe {
+    std::size_t integration_attempts = 0U;
+    std::size_t mass_evolution_attempts = 0U;
+    std::vector<StepIntervalProbe> completed_intervals;
+};
+
+struct CommittedRigidMassProbe {
+    std::array<double, 3U> position{};
+    std::array<double, 3U> velocity{};
+    std::array<double, 4U> attitude_wxyz{};
+    std::array<double, 3U> angular_rate{};
+    double mass_kilograms = 0.0;
+    std::array<double, 3U> center_of_mass{};
+    std::array<double, 9U> inertia{};
+    std::int64_t mass_sample_tick = -1;
+};
+
 struct CapturedFrameView {
     std::shared_ptr<kernel::SessionInputView> view;
     std::uint32_t slot_handle = 0U;
@@ -132,8 +182,11 @@ struct RefYyzSessionAdapter {
     std::shared_ptr<const kernel::SessionMaterializationProvider> provider;
     std::shared_ptr<MaterializationTrace> trace;
     std::shared_ptr<OpeningBoundaryProbe> opening_boundary;
+    std::shared_ptr<StepExecutionProbe> step_execution;
     std::shared_ptr<CapturedFrameView> captured_input;
+    std::shared_ptr<bool> undeclared_preparation_visible;
     std::uint32_t mass_state_block_handle = 0U;
+    std::uint32_t rigid_state_block_handle = 0U;
     std::uint32_t mission_result_slot_handle = 0U;
     std::uint32_t first_non_state_slot_handle = 0U;
     std::string error;
@@ -169,5 +222,9 @@ struct NonTrivialObjectProbe {
 [[nodiscard]] kernel::SessionResult replace_mass_candidate_for_qualification(
     kernel::Session& session, const RefYyzSessionAdapter& adapter,
     double mass_kilograms) noexcept;
+
+[[nodiscard]] kernel::SessionResult read_committed_rigid_mass_for_qualification(
+    const kernel::Session& session, const RefYyzSessionAdapter& adapter,
+    CommittedRigidMassProbe& result) noexcept;
 
 } // namespace gnc::tests::ref_yyz

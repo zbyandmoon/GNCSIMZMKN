@@ -9,6 +9,8 @@
 #include <any>
 #include <array>
 #include <functional>
+#include <iterator>
+#include <limits>
 #include <new>
 #include <stdexcept>
 #include <string_view>
@@ -37,6 +39,9 @@ using gnc::kernel::SessionMaterializerIdentity;
 using gnc::kernel::SessionInvocationContext;
 using gnc::kernel::SessionInvocationEntry;
 using gnc::kernel::SessionInvocationIdentity;
+using gnc::kernel::SessionIntegrationContext;
+using gnc::kernel::SessionIntegrationEntry;
+using gnc::kernel::SessionIntegrationIdentity;
 using gnc::kernel::SessionObjectAccess;
 using gnc::kernel::SessionObjectMaterializer;
 using gnc::kernel::SessionObjectRequirement;
@@ -88,6 +93,9 @@ class CompiledProvider final : public SessionMaterializationProvider {
     std::unordered_map<std::uint32_t,
                        std::shared_ptr<const SessionInvocationEntry>>
         invocations;
+    std::unordered_map<std::uint32_t,
+                       std::shared_ptr<const SessionIntegrationEntry>>
+        integrations;
 
     [[nodiscard]] const SessionObjectMaterializer* preparation(
         std::uint32_t handle) const noexcept override {
@@ -108,6 +116,11 @@ class CompiledProvider final : public SessionMaterializationProvider {
     [[nodiscard]] const SessionInvocationEntry* invocation(
         std::uint32_t handle) const noexcept override {
         return find(invocations, handle);
+    }
+    [[nodiscard]] const SessionIntegrationEntry* integration(
+        std::uint32_t handle) const noexcept override {
+        const auto found = integrations.find(handle);
+        return found == integrations.end() ? nullptr : found->second.get();
     }
 
   private:
@@ -142,7 +155,8 @@ make_state_materializer(
     std::string layout_identity, std::uint32_t codec_entry_handle,
     const Codec& codec, std::uint32_t initial_binding_handle,
     std::uint32_t builder_entry_handle,
-    std::shared_ptr<MaterializationTrace> trace, Construct construct);
+    std::shared_ptr<MaterializationTrace> trace,
+    std::shared_ptr<bool> fail_next_replace, Construct construct);
 
 template <typename Value>
 [[nodiscard]] std::shared_ptr<const SessionObjectMaterializer>
@@ -510,6 +524,8 @@ void build_initial_states(
     const ExecutionPlanImage& image, const AdapterOptions& options,
     const std::shared_ptr<MaterializationTrace>& trace,
     CompiledProvider& provider, RefYyzSessionAdapter& adapter) {
+    auto fail_next_state_replace =
+        std::make_shared<bool>(options.fail_first_candidate_rearm);
     for (std::size_t ordinal = 0U;
          ordinal < image.lifecycle().initial_binding_handles.size();
          ++ordinal) {
@@ -560,12 +576,14 @@ void build_initial_states(
                 image, binding->builder_entry_handle);
             const auto codec_getter = exact_call<yyz::RigidStateCodecGetter>(
                 image, block.codec_entry_handle);
+            adapter.rigid_state_block_handle = block.handle;
             provider.initial_states.emplace(
                 handle,
                 make_state_materializer<yyz::RigidState>(
                     std::string(yyz::kRigidStateLayoutIdentity),
                     block.codec_entry_handle, codec_getter(), handle,
                     binding->builder_entry_handle, trace,
+                    fail_next_state_replace,
                     [algorithm = definition.rigid.algorithm,
                      input = std::move(input), initial, fail, trace,
                      handle](const SessionObjectAccess&,
@@ -610,6 +628,7 @@ void build_initial_states(
                     std::string(yyz::kMassStateLayoutIdentity),
                     block.codec_entry_handle, codec_getter(), handle,
                     binding->builder_entry_handle, trace,
+                    fail_next_state_replace,
                     [definition = std::move(definition),
                      input = std::move(input), initial, fail, trace,
                      handle](const SessionObjectAccess&,
@@ -947,10 +966,12 @@ class StateOperations final : public InProcessObjectOperations {
     StateOperations(std::string layout_identity,
                     std::uint32_t codec_entry_handle, const Codec& codec,
                     std::uint32_t handle,
-                    std::shared_ptr<MaterializationTrace> trace)
+                    std::shared_ptr<MaterializationTrace> trace,
+                    std::shared_ptr<bool> fail_next_replace)
         : layout_identity_(std::move(layout_identity)),
           codec_entry_handle_(codec_entry_handle), codec_(codec),
-          handle_(handle), trace_(std::move(trace)) {}
+          handle_(handle), trace_(std::move(trace)),
+          fail_next_replace_(std::move(fail_next_replace)) {}
 
     [[nodiscard]] InProcessObjectLayout layout() const noexcept override {
         return {sizeof(Value), alignof(Value), layout_identity_,
@@ -977,6 +998,12 @@ class StateOperations final : public InProcessObjectOperations {
     [[nodiscard]] bool replace(
         void* destination, const void* source) const noexcept override {
         try {
+            if (fail_next_replace_ != nullptr && *fail_next_replace_) {
+                *fail_next_replace_ = false;
+                record(trace_, TraceAction::InjectedFailure,
+                       TraceObjectKind::State, handle_);
+                return false;
+            }
             Value replacement =
                 codec_.clone(*static_cast<const Value*>(source));
             codec_.noexcept_swap(*static_cast<Value*>(destination),
@@ -997,6 +1024,15 @@ class StateOperations final : public InProcessObjectOperations {
                codec_.validate_invariants(value);
     }
 
+    [[nodiscard]] bool supports_nofail_swap() const noexcept override {
+        return codec_.noexcept_swap != nullptr;
+    }
+
+    void nofail_swap(void* lhs, void* rhs) const noexcept override {
+        codec_.noexcept_swap(*static_cast<Value*>(lhs),
+                             *static_cast<Value*>(rhs));
+    }
+
     void destroy(void* object) const noexcept override {
         static_cast<Value*>(object)->~Value();
         record(trace_, TraceAction::Destroy, TraceObjectKind::State, handle_);
@@ -1012,6 +1048,7 @@ class StateOperations final : public InProcessObjectOperations {
     Codec codec_;
     std::uint32_t handle_;
     std::shared_ptr<MaterializationTrace> trace_;
+    std::shared_ptr<bool> fail_next_replace_;
 };
 
 class FixedMaterializer final : public SessionObjectMaterializer {
@@ -1096,6 +1133,55 @@ class IdentityOverrideMaterializer final
     SessionMaterializerIdentity identity_;
 };
 
+class UndeclaredPreparationMaterializer final
+    : public SessionObjectMaterializer {
+  public:
+    UndeclaredPreparationMaterializer(
+        std::shared_ptr<const SessionObjectMaterializer> source,
+        std::uint32_t undeclared_preparation_handle,
+        std::shared_ptr<bool> preparation_visible,
+        std::shared_ptr<MaterializationTrace> trace,
+        std::uint32_t runtime_handle)
+        : source_(std::move(source)),
+          undeclared_preparation_handle_(undeclared_preparation_handle),
+          preparation_visible_(std::move(preparation_visible)),
+          trace_(std::move(trace)), runtime_handle_(runtime_handle) {}
+
+    [[nodiscard]] SessionMaterializerIdentity identity()
+        const noexcept override {
+        return source_->identity();
+    }
+    [[nodiscard]] const InProcessObjectOperations& operations()
+        const noexcept override {
+        return source_->operations();
+    }
+    [[nodiscard]] std::size_t dependency_count() const noexcept override {
+        return source_->dependency_count();
+    }
+    [[nodiscard]] SessionObjectRequirement dependency(
+        std::size_t index) const noexcept override {
+        return source_->dependency(index);
+    }
+    [[nodiscard]] bool construct(const SessionObjectAccess& objects,
+                                 void*) const noexcept override {
+        const auto value = objects.prepared_object(
+            undeclared_preparation_handle_);
+        if (preparation_visible_ != nullptr) {
+            *preparation_visible_ = static_cast<bool>(value);
+        }
+        record(trace_, TraceAction::InjectedFailure,
+               TraceObjectKind::RuntimeCell, runtime_handle_);
+        return false;
+    }
+
+  private:
+    std::shared_ptr<const SessionObjectMaterializer> source_;
+    std::uint32_t undeclared_preparation_handle_ = 0U;
+    std::shared_ptr<bool> preparation_visible_;
+    std::shared_ptr<MaterializationTrace> trace_;
+    std::uint32_t runtime_handle_ = 0U;
+};
+
 class FixedInvocation final : public SessionInvocationEntry {
   public:
     using Invoke = std::function<SessionResult(
@@ -1125,9 +1211,55 @@ class FixedInvocation final : public SessionInvocationEntry {
     Invoke invoke_;
 };
 
+class FixedIntegration final : public SessionIntegrationEntry {
+  public:
+    using Integrate = std::function<SessionResult(
+        const SessionIntegrationContext&)>;
+
+    FixedIntegration(SessionIntegrationIdentity identity,
+                     Integrate integrate)
+        : identity_(identity), integrate_(std::move(integrate)) {}
+
+    [[nodiscard]] SessionIntegrationIdentity identity()
+        const noexcept override {
+        return identity_;
+    }
+
+    [[nodiscard]] SessionResult integrate(
+        const SessionIntegrationContext& context) const noexcept override {
+        try {
+            return integrate_(context);
+        } catch (...) {
+            return {gnc::kernel::SessionError::InvocationFailed,
+                    identity_.integration_scope_handle,
+                    "typed IntegrationScope threw unexpectedly"};
+        }
+    }
+
+  private:
+    SessionIntegrationIdentity identity_;
+    Integrate integrate_;
+};
+
 template <typename Value>
 [[nodiscard]] const Value* checked_runtime(
     const SessionInvocationContext& context,
+    std::uint32_t factory_entry_handle) noexcept {
+    const auto& view = context.runtime_cell();
+    if (!view || view.role != SessionObjectRole::RuntimeCell ||
+        view.image_object_handle != context.component_handle() ||
+        view.linked_entry_handle != factory_entry_handle ||
+        view.codec_entry_handle != 0U || view.size_bytes != sizeof(Value) ||
+        view.alignment_bytes != alignof(Value) ||
+        view.type_identity != &typeid(Value)) {
+        return nullptr;
+    }
+    return static_cast<const Value*>(view.address);
+}
+
+template <typename Value>
+[[nodiscard]] const Value* checked_runtime(
+    const SessionIntegrationContext& context,
     std::uint32_t factory_entry_handle) noexcept {
     const auto& view = context.runtime_cell();
     if (!view || view.role != SessionObjectRole::RuntimeCell ||
@@ -1164,6 +1296,26 @@ template <typename Value>
 }
 
 template <typename Value>
+[[nodiscard]] const Value* checked_committed(
+    const SessionIntegrationContext& context,
+    std::uint32_t state_block_handle, SessionResult& result) noexcept {
+    gnc::kernel::SessionObjectIdentityView view;
+    result = context.committed().read(state_block_handle, view);
+    if (!result) return nullptr;
+    if (!view || view.role != SessionObjectRole::CommittedState ||
+        view.image_object_handle != state_block_handle ||
+        view.size_bytes != sizeof(Value) ||
+        view.alignment_bytes != alignof(Value) ||
+        view.type_identity != &typeid(Value)) {
+        result = {gnc::kernel::SessionError::ObjectTypeMismatch,
+                  state_block_handle,
+                  "committed integration state type mismatch"};
+        return nullptr;
+    }
+    return static_cast<const Value*>(view.address);
+}
+
+template <typename Value>
 [[nodiscard]] const Value* checked_input(
     const SessionInvocationContext& context, std::uint32_t slot_handle,
     SessionResult& result) noexcept {
@@ -1184,10 +1336,37 @@ template <typename Value>
 }
 
 template <typename Value>
+[[nodiscard]] const Value* checked_input(
+    const SessionIntegrationContext& context, std::uint32_t slot_handle,
+    SessionResult& result) noexcept {
+    gnc::kernel::SessionObjectIdentityView view;
+    result = context.inputs().read(slot_handle, view);
+    if (!result) return nullptr;
+    if (!view || view.image_object_handle != slot_handle ||
+        view.size_bytes != sizeof(Value) ||
+        view.alignment_bytes != alignof(Value) ||
+        view.type_identity != &typeid(Value)) {
+        result = {gnc::kernel::SessionError::ObjectTypeMismatch, slot_handle,
+                  "integration frame input type mismatch"};
+        return nullptr;
+    }
+    return static_cast<const Value*>(view.address);
+}
+
+template <typename Value>
 [[nodiscard]] SessionResult write_value(
     const SessionInvocationContext& context, std::uint32_t slot_handle,
     std::uint32_t writer_token_handle, const Value& value) noexcept {
     return context.outputs().write(
+        slot_handle, writer_token_handle,
+        {&value, sizeof(Value), alignof(Value), &typeid(Value)});
+}
+
+template <typename Context, typename Value>
+[[nodiscard]] SessionResult write_candidate_value(
+    const Context& context, std::uint32_t slot_handle,
+    std::uint32_t writer_token_handle, const Value& value) noexcept {
+    return context.candidates().write(
         slot_handle, writer_token_handle,
         {&value, sizeof(Value), alignof(Value), &typeid(Value)});
 }
@@ -1306,10 +1485,11 @@ make_state_materializer(
     std::string layout_identity, std::uint32_t codec_entry_handle,
     const Codec& codec, std::uint32_t initial_binding_handle,
     std::uint32_t builder_entry_handle,
-    std::shared_ptr<MaterializationTrace> trace, Construct construct) {
+    std::shared_ptr<MaterializationTrace> trace,
+    std::shared_ptr<bool> fail_next_replace, Construct construct) {
     auto operations = std::make_shared<StateOperations<Value, Codec>>(
         std::move(layout_identity), codec_entry_handle, codec,
-        initial_binding_handle, trace);
+        initial_binding_handle, trace, std::move(fail_next_replace));
     return std::make_shared<FixedMaterializer>(
         operations,
         SessionMaterializerIdentity{
@@ -1979,6 +2159,8 @@ void build_runtime_components(
 
 void apply_materializer_mutations(
     const ExecutionPlanImage& image, const AdapterOptions& options,
+    const std::shared_ptr<MaterializationTrace>& trace,
+    const std::shared_ptr<bool>& undeclared_preparation_visible,
     CompiledProvider& provider) {
     if (options.swap_first_two_preparation_materializers ||
         options.disguise_second_preparation_as_first) {
@@ -2055,6 +2237,23 @@ void apply_materializer_mutations(
                     handle, SessionObjectRole::RuntimeCell,
                     component->runtime_cell_factory_entry_handle + 1U, 0U});
     }
+    if (options.request_undeclared_preparation) {
+        const auto component = std::find_if(
+            image.runtime_components().begin(),
+            image.runtime_components().end(), [](const auto& candidate) {
+                return candidate.preparation_handles.empty();
+            });
+        if (component == image.runtime_components().end() ||
+            image.preparations().empty()) {
+            throw std::runtime_error(
+                "undeclared preparation mutation lacks a target");
+        }
+        auto source = provider.runtime_components.at(component->handle);
+        provider.runtime_components[component->handle] =
+            std::make_shared<UndeclaredPreparationMaterializer>(
+                std::move(source), image.preparations().front().handle,
+                undeclared_preparation_visible, trace, component->handle);
+    }
 }
 
 [[nodiscard]] SessionResult begin_boundary_invocation(
@@ -2094,14 +2293,26 @@ void build_rigid_invocations(
     const AdapterOptions& options,
     const std::shared_ptr<MaterializationTrace>& trace,
     const std::shared_ptr<OpeningBoundaryProbe>& probe,
+    const std::shared_ptr<StepExecutionProbe>& step,
     CompiledProvider& provider) {
     const auto& projection = component_callsite<yyz::RigidPublishProjectionCall>(
         image, component);
     const auto projection_factory =
         component.runtime_cell_factory_entry_handle;
+    const auto cross_owner = std::find_if(
+        image.state_blocks().begin(), image.state_blocks().end(),
+        [&component](const auto& block) {
+            return block.owner_occurrence_handle !=
+                   component.occurrence_handle;
+        });
+    if (cross_owner == image.state_blocks().end()) {
+        throw std::runtime_error("rigid projection lacks cross-owner state");
+    }
+    const auto cross_owner_state_handle = cross_owner->handle;
     install_invocation<yyz::ControlledRigidRuntimeCell>(
         provider, component, projection,
-        [options, trace, probe, projection_factory](
+        [options, trace, probe, projection_factory,
+         cross_owner_state_handle](
             const SessionInvocationContext& context) -> SessionResult {
             std::size_t ordinal = 0U;
             auto result = begin_boundary_invocation(
@@ -2114,6 +2325,11 @@ void build_rigid_invocations(
                 return {gnc::kernel::SessionError::ObjectTypeMismatch,
                         context.component_handle(),
                         "rigid projection Runtime Cell type mismatch"};
+            }
+            if (options.cross_owner_state_read_boundary_ordinal == ordinal) {
+                gnc::kernel::SessionObjectIdentityView unauthorized;
+                return context.committed().read(cross_owner_state_handle,
+                                                unauthorized);
             }
             const auto* state = checked_committed<yyz::RigidState>(
                 context, cell->bindings.state_block_handle, result);
@@ -2247,8 +2463,16 @@ void build_rigid_invocations(
                 output);
             if (!result) return result;
             probe->controlled_preparation_written = true;
+            auto closure_request = output.closure_request;
+            if (options.fail_held_closure_boundary_ordinal == ordinal) {
+                closure_request.body_origin_to_center_of_mass.value(0) =
+                    (std::numeric_limits<double>::quiet_NaN)();
+                record(trace, TraceAction::InjectedFailure,
+                       TraceObjectKind::RuntimeCell,
+                       context.component_handle());
+            }
             const auto held = closure.callable(*closure.prepared_model,
-                                               output.closure_request);
+                                               closure_request);
             if (!held.succeeded() || !held.has_value()) {
                 return {gnc::kernel::SessionError::InvocationFailed,
                         context.callsite_handle(),
@@ -2270,6 +2494,191 @@ void build_rigid_invocations(
             }
             return {};
         });
+
+    if (component.integration_scope_handles.size() != 1U ||
+        component.transaction_handles.size() != 1U ||
+        component.state_block_handles.size() != 1U) {
+        throw std::runtime_error("rigid integration authority shape changed");
+    }
+    const auto* scope = find_handle(
+        image.integration_scopes(), component.integration_scope_handles[0U]);
+    const auto* transaction = find_handle(
+        image.transactions(), component.transaction_handles[0U]);
+    const auto* derivative_callsite =
+        scope == nullptr
+            ? nullptr
+            : find_handle(image.callsites(),
+                          scope->derivative_callsite_handle);
+    const gnc::contracts::PlanImageTransactionCandidateMember* candidate =
+        nullptr;
+    if (transaction != nullptr && scope != nullptr) {
+        const auto found = std::find_if(
+            transaction->candidates.begin(),
+            transaction->candidates.end(),
+            [scope](const auto& member) {
+                return member.producer_kind == "IntegrationScope" &&
+                       member.producer_handle == scope->handle;
+            });
+        if (found != transaction->candidates.end()) candidate = &*found;
+    }
+    if (scope == nullptr || derivative_callsite == nullptr ||
+        candidate == nullptr) {
+        throw std::runtime_error("rigid integration candidate shape changed");
+    }
+    const auto mass_properties_slot =
+        typed_input_slot<yyz::MassPropertiesInput>(image,
+                                                   *derivative_callsite);
+    const auto scope_handle = scope->handle;
+    const auto state_block_handle = component.state_block_handles[0U];
+    const auto form_preparation_slot =
+        scope->form_preparation_slot_handle;
+    const auto held_form_slot = scope->held_form_slot_handle;
+    const auto candidate_slot = candidate->candidate_state_slot_handle;
+    const auto candidate_token = candidate->writer_token_handle;
+    const auto absolute_tolerance = scope->absolute_tolerance;
+    const auto relative_tolerance = scope->relative_tolerance;
+    const auto zero_threshold = scope->zero_threshold;
+    const auto condition_limit = scope->condition_limit;
+    const auto fixed_step_seconds = scope->fixed_step_seconds;
+    const auto finite_check = scope->check_finiteness;
+    const auto integration_factory =
+        component.runtime_cell_factory_entry_handle;
+    provider.integrations.emplace(
+        scope_handle,
+        std::make_shared<FixedIntegration>(
+            SessionIntegrationIdentity{scope_handle, component.handle},
+            [options, trace, step, integration_factory,
+             state_block_handle, cross_owner_state_handle,
+             mass_properties_slot, form_preparation_slot, held_form_slot,
+             candidate_slot, candidate_token, absolute_tolerance,
+             relative_tolerance, zero_threshold, condition_limit,
+             fixed_step_seconds, finite_check](
+                const SessionIntegrationContext& context) -> SessionResult {
+                const auto ordinal = step->integration_attempts++;
+                const auto* cell = checked_runtime<
+                    yyz::ControlledRigidRuntimeCell>(context,
+                                                      integration_factory);
+                if (cell == nullptr) {
+                    return {gnc::kernel::SessionError::ObjectTypeMismatch,
+                            context.component_handle(),
+                            "rigid IntegrationScope Runtime Cell type mismatch"};
+                }
+                if (options.cross_owner_state_read_integration_ordinal ==
+                    ordinal) {
+                    gnc::kernel::SessionObjectIdentityView unauthorized;
+                    return context.committed().read(
+                        cross_owner_state_handle, unauthorized);
+                }
+                SessionResult result;
+                const auto* state = checked_committed<yyz::RigidState>(
+                    context, state_block_handle, result);
+                if (state == nullptr) return result;
+                const auto* mass = checked_input<yyz::MassPropertiesInput>(
+                    context, mass_properties_slot, result);
+                if (mass == nullptr) return result;
+                const auto* preparation = checked_input<
+                    yyz::ControlledRigidBoundaryPreparationOutput>(
+                    context, form_preparation_slot, result);
+                if (preparation == nullptr) return result;
+                const auto* held = checked_input<yyz::RigidFormInput>(
+                    context, held_form_slot, result);
+                if (held == nullptr) return result;
+
+                auto algorithm = cell->definition.rigid.algorithm;
+                algorithm.fixed_step_seconds = fixed_step_seconds;
+                algorithm.numerical_policy.absolute_tolerance =
+                    absolute_tolerance;
+                algorithm.numerical_policy.relative_tolerance =
+                    relative_tolerance;
+                algorithm.numerical_policy.zero_tolerance = zero_threshold;
+                algorithm.numerical_policy.condition_limit = condition_limit;
+                if (finite_check == "every-stage") {
+                    algorithm.numerical_policy.finite_check =
+                        gnc::foundation::FiniteCheck::EveryStage;
+                } else if (finite_check == "input-and-output") {
+                    algorithm.numerical_policy.finite_check =
+                        gnc::foundation::FiniteCheck::InputAndOutput;
+                } else if (finite_check == "disabled") {
+                    algorithm.numerical_policy.finite_check =
+                        gnc::foundation::FiniteCheck::Disabled;
+                } else {
+                    return {gnc::kernel::SessionError::InvalidImageStructure,
+                            context.integration_scope_handle(),
+                            "IntegrationScope finite-check token is invalid"};
+                }
+                auto integration_mass = *mass;
+                if (injects_failure(options, FailurePhase::Integration,
+                                    ordinal)) {
+                    integration_mass.mass_kilograms = 0.0;
+                    record(trace, TraceAction::InjectedFailure,
+                           TraceObjectKind::RuntimeCell,
+                           context.component_handle());
+                }
+                const auto& closure_definition =
+                    cell->bindings.bound_invocations.frozen_form.closure
+                        .prepared_model->definition();
+                yyz::RigidStepContext step_context;
+                step_context.inertial_frame =
+                    cell->definition.rigid.inertial_frame;
+                step_context.body_frame = closure_definition.body_frame;
+                step_context.clock_domain =
+                    closure_definition.clock_domain;
+                step_context.interval_start =
+                    {context.tick(), context.interval_start_seconds()};
+                step_context.interval_end =
+                    {context.tick() + 1, context.interval_end_seconds()};
+                step_context.configuration_revision =
+                    closure_definition.configuration_revision;
+                step_context.quality =
+                    gnc::contracts::DataQuality::Valid;
+                const auto integrated = yyz::integrate_rigid_held_interval(
+                    algorithm, cell->bindings.derivative_evaluation,
+                    {step_context, *state, integration_mass, *held,
+                     preparation->environment_response.gravity});
+                if (!integrated.has_value()) {
+                    return {gnc::kernel::SessionError::InvocationFailed,
+                            context.integration_scope_handle(),
+                            "rigid RK4 integration failed"};
+                }
+                auto candidate_state = integrated.value().state;
+                if (options.invalid_rigid_candidate_integration_ordinal ==
+                    ordinal) {
+                    candidate_state.position.value(0) =
+                        (std::numeric_limits<double>::quiet_NaN)();
+                }
+                auto found = std::find_if(
+                    step->completed_intervals.begin(),
+                    step->completed_intervals.end(),
+                    [&context](const auto& interval) {
+                        return interval.opening_tick == context.tick();
+                    });
+                if (found == step->completed_intervals.end()) {
+                    step->completed_intervals.push_back({});
+                    found = std::prev(step->completed_intervals.end());
+                    found->opening_tick = context.tick();
+                }
+                found->rk4_derivative_evaluations =
+                    integrated.evidence().evaluations;
+                found->rigid_candidate_position =
+                    vector3(candidate_state.position.value);
+                found->rigid_candidate_velocity =
+                    vector3(candidate_state.velocity.value);
+                found->rigid_candidate_attitude_wxyz =
+                    gnc::foundation::quaternion_to_wxyz(
+                        candidate_state.attitude.value);
+                found->rigid_candidate_angular_rate =
+                    vector3(candidate_state.angular_rate.value);
+                if (options.omit_candidate_integration_ordinal == ordinal) {
+                    return {};
+                }
+                const auto token =
+                    options.wrong_candidate_token_integration_ordinal ==
+                            ordinal
+                        ? candidate_token + 1U
+                        : candidate_token;
+                return write_candidate_value(
+                    context, candidate_slot, token, candidate_state);
+            }));
 }
 
 void build_mass_invocations(
@@ -2278,6 +2687,7 @@ void build_mass_invocations(
     const AdapterOptions& options,
     const std::shared_ptr<MaterializationTrace>& trace,
     const std::shared_ptr<OpeningBoundaryProbe>& probe,
+    const std::shared_ptr<StepExecutionProbe>& step,
     CompiledProvider& provider) {
     const auto& projection = component_callsite<yyz::MassPublishProjectionCall>(
         image, component);
@@ -2321,6 +2731,95 @@ void build_mass_invocations(
                     options, ordinal,
                     cell->bindings.mass_properties_output.writer_token.value),
                 output);
+        });
+
+    const auto& evolve = component_callsite<yyz::MassIntervalEvolutionCall>(
+        image, component);
+    if (component.transaction_handles.size() != 1U) {
+        throw std::runtime_error("mass evolution transaction shape changed");
+    }
+    const auto* transaction = find_handle(
+        image.transactions(), component.transaction_handles[0U]);
+    const gnc::contracts::PlanImageTransactionCandidateMember* candidate =
+        nullptr;
+    if (transaction != nullptr) {
+        const auto found = std::find_if(
+            transaction->candidates.begin(),
+            transaction->candidates.end(),
+            [&component, &evolve](const auto& member) {
+                return member.owner_occurrence_handle ==
+                           component.occurrence_handle &&
+                       member.producer_kind == "RuntimeCallsite" &&
+                       member.producer_handle == evolve.handle;
+            });
+        if (found != transaction->candidates.end()) candidate = &*found;
+    }
+    if (candidate == nullptr) {
+        throw std::runtime_error("mass evolution candidate shape changed");
+    }
+    const auto candidate_slot = candidate->candidate_state_slot_handle;
+    const auto candidate_token = candidate->writer_token_handle;
+    install_invocation<yyz::ScalarBurnMassRuntimeCell>(
+        provider, component, evolve,
+        [options, trace, step, factory, candidate_slot, candidate_token](
+            const SessionInvocationContext& context) -> SessionResult {
+            const auto ordinal = step->mass_evolution_attempts++;
+            const auto* cell = checked_runtime<
+                yyz::ScalarBurnMassRuntimeCell>(context, factory);
+            if (cell == nullptr) {
+                return {gnc::kernel::SessionError::ObjectTypeMismatch,
+                        context.component_handle(),
+                        "mass evolution Runtime Cell type mismatch"};
+            }
+            SessionResult result;
+            const auto* state = checked_committed<yyz::MassState>(
+                context, cell->bindings.state_block_handle, result);
+            if (state == nullptr) return result;
+            const auto* flow = checked_input<yyz::MassFlowIntervalInput>(
+                context, cell->bindings.mass_flow_input_slot_handle, result);
+            if (flow == nullptr) return result;
+            auto interval_flow = *flow;
+            if (injects_failure(options, FailurePhase::MassEvolution,
+                                ordinal)) {
+                interval_flow.fuel_consumption_rate_kilograms_per_second =
+                    -1.0;
+                record(trace, TraceAction::InjectedFailure,
+                       TraceObjectKind::RuntimeCell,
+                       context.component_handle());
+            }
+            const auto evolved = cell->bindings.interval_evolution(
+                cell->definition, *state, interval_flow);
+            if (!evolved.succeeded() || !evolved.has_value()) {
+                return {gnc::kernel::SessionError::InvocationFailed,
+                        context.callsite_handle(),
+                        "mass interval evolution failed"};
+            }
+            auto candidate_state = evolved.value().candidate.state;
+            if (options.invalid_mass_candidate_ordinal == ordinal) {
+                candidate_state.mass_kilograms = -1.0;
+            }
+            auto found = std::find_if(
+                step->completed_intervals.begin(),
+                step->completed_intervals.end(),
+                [&context](const auto& interval) {
+                    return interval.opening_tick == context.tick();
+                });
+            if (found == step->completed_intervals.end()) {
+                step->completed_intervals.push_back({});
+                found = std::prev(step->completed_intervals.end());
+                found->opening_tick = context.tick();
+            }
+            found->integration_mass_kilograms =
+                evolved.value().integration_mass_kilograms;
+            found->mass_candidate_kilograms =
+                candidate_state.mass_kilograms;
+            if (options.omit_candidate_mass_ordinal == ordinal) return {};
+            const auto token =
+                options.wrong_candidate_token_mass_ordinal == ordinal
+                    ? candidate_token + 1U
+                    : candidate_token;
+            return write_candidate_value(
+                context, candidate_slot, token, candidate_state);
         });
 }
 
@@ -2608,6 +3107,7 @@ void build_invocations(
     const std::shared_ptr<MaterializationTrace>& trace,
     const std::shared_ptr<OpeningBoundaryProbe>& probe,
     const std::shared_ptr<CapturedFrameView>& captured,
+    const std::shared_ptr<StepExecutionProbe>& step,
     CompiledProvider& provider) {
     std::vector<const PlanImageRuntimeComponent*> components;
     components.reserve(image.runtime_components().size());
@@ -2624,11 +3124,11 @@ void build_invocations(
         if (entry_is<yyz::ControlledRigidRuntimeCellFactoryCall>(
                 image, factory)) {
             build_rigid_invocations(image, *component, options, trace, probe,
-                                    provider);
+                                    step, provider);
         } else if (entry_is<yyz::ScalarBurnMassRuntimeCellFactoryCall>(
                        image, factory)) {
             build_mass_invocations(image, *component, options, trace, probe,
-                                   provider);
+                                   step, provider);
         } else if (entry_is<
                        yyz::AltitudePitchGuidanceRuntimeCellFactoryCall>(
                        image, factory)) {
@@ -2665,17 +3165,21 @@ RefYyzSessionAdapter make_session_adapter(
     RefYyzSessionAdapter result;
     result.trace = std::make_shared<MaterializationTrace>();
     result.opening_boundary = std::make_shared<OpeningBoundaryProbe>();
+    result.step_execution = std::make_shared<StepExecutionProbe>();
     result.captured_input = std::make_shared<CapturedFrameView>();
+    result.undeclared_preparation_visible = std::make_shared<bool>(false);
     try {
         auto provider = std::make_shared<CompiledProvider>();
         build_preparations(image, options, result.trace, *provider);
         build_runtime_components(image, options, result.trace, *provider);
         build_slots(image, options, result.trace, *provider, result);
         build_initial_states(image, options, result.trace, *provider, result);
-        apply_materializer_mutations(image, options, *provider);
+        apply_materializer_mutations(
+            image, options, result.trace,
+            result.undeclared_preparation_visible, *provider);
         build_invocations(image, options, result.trace,
                           result.opening_boundary, result.captured_input,
-                          *provider);
+                          result.step_execution, *provider);
         result.provider = std::move(provider);
     } catch (const std::exception& error) {
         result.error = error.what();
@@ -2777,6 +3281,47 @@ kernel::SessionResult replace_mass_candidate_for_qualification(
                 adapter.mass_state_block_handle,
                 "mass candidate qualification copy failed"};
     }
+}
+
+kernel::SessionResult read_committed_rigid_mass_for_qualification(
+    const kernel::Session& session, const RefYyzSessionAdapter& adapter,
+    CommittedRigidMassProbe& result) noexcept {
+    result = {};
+    kernel::SessionObjectIdentityView rigid_view;
+    auto status = kernel::qualification::SessionAccess::read_committed(
+        session, adapter.rigid_state_block_handle, rigid_view);
+    if (!status) return status;
+    kernel::SessionObjectIdentityView mass_view;
+    status = kernel::qualification::SessionAccess::read_committed(
+        session, adapter.mass_state_block_handle, mass_view);
+    if (!status) return status;
+    if (!rigid_view || !mass_view ||
+        rigid_view.role != kernel::SessionObjectRole::CommittedState ||
+        mass_view.role != kernel::SessionObjectRole::CommittedState ||
+        rigid_view.type_identity != &typeid(yyz::RigidState) ||
+        rigid_view.size_bytes != sizeof(yyz::RigidState) ||
+        rigid_view.alignment_bytes != alignof(yyz::RigidState) ||
+        mass_view.type_identity != &typeid(yyz::MassState) ||
+        mass_view.size_bytes != sizeof(yyz::MassState) ||
+        mass_view.alignment_bytes != alignof(yyz::MassState)) {
+        return {kernel::SessionError::ObjectTypeMismatch, 0U,
+                "committed rigid/mass qualification type mismatch"};
+    }
+    const auto& rigid =
+        *static_cast<const yyz::RigidState*>(rigid_view.address);
+    const auto& mass =
+        *static_cast<const yyz::MassState*>(mass_view.address);
+    result.position = vector3(rigid.position.value);
+    result.velocity = vector3(rigid.velocity.value);
+    result.attitude_wxyz =
+        gnc::foundation::quaternion_to_wxyz(rigid.attitude.value);
+    result.angular_rate = vector3(rigid.angular_rate.value);
+    result.mass_kilograms = mass.mass_kilograms;
+    result.center_of_mass =
+        vector3(mass.body_origin_to_center_of_mass.value);
+    result.inertia = matrix3(mass.inertia_about_center_of_mass.value);
+    result.mass_sample_tick = mass.context.sample_time.tick;
+    return {};
 }
 
 } // namespace gnc::tests::ref_yyz

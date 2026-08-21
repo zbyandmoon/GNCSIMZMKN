@@ -2,6 +2,7 @@
 
 #include "support/ref_yyz_complete_composition.hpp"
 #include "support/ref_yyz_session_adapter.hpp"
+#include "support/session_qualification_access.hpp"
 
 #include <algorithm>
 #include <array>
@@ -219,14 +220,23 @@ void verify_success(const std::shared_ptr<const ExecutionPlanImage>& image,
     auto adapter = gnc::tests::ref_yyz::make_session_adapter(*image, options);
     require(static_cast<bool>(adapter), adapter.error);
     auto creation = gnc::kernel::create_session(image, adapter.provider);
-    require(static_cast<bool>(creation) &&
-                static_cast<bool>(creation.session->initialize()),
-            "opening-boundary Session initialization failed");
+    require(static_cast<bool>(creation),
+            "opening-boundary Session creation failed");
+    const auto initialized = creation.session->initialize();
+    if (!initialized) {
+        throw std::runtime_error(
+            std::string("opening-boundary Session initialization failed: ") +
+            std::string(gnc::kernel::to_string(initialized.error)) + " / " +
+            std::string(initialized.detail) + " / handle=" +
+            std::to_string(initialized.image_handle));
+    }
     const auto before_blocks = creation.session->state_blocks();
     const auto before_outputs = creation.session->committed_outputs();
     const auto before_epoch = creation.session->committed_epoch();
     const auto before_tick = creation.session->committed_tick();
-    const auto executed = creation.session->execute_opening_boundary();
+    const auto executed =
+        gnc::kernel::qualification::SessionAccess::execute_opening_boundary(
+            *creation.session);
     if (!executed) {
         const auto slot = std::find_if(
             image->slots().begin(), image->slots().end(),
@@ -267,67 +277,8 @@ void verify_success(const std::shared_ptr<const ExecutionPlanImage>& image,
                     }),
             "opening projections and boundary calls are misordered");
     const auto outputs = creation.session->committed_outputs();
-    const auto expected_held_count = static_cast<std::size_t>(std::count_if(
-        image->slots().begin(), image->slots().end(), [](const auto& slot) {
-            return slot.storage_class ==
-                       gnc::contracts::SlotStorageClass::IntegrationHeld &&
-                   slot.hold_policy ==
-                       gnc::contracts::SlotHoldPolicy::HoldInterval;
-        }));
-    const bool held_committed =
-        expected_held_count > 0U &&
-        before_outputs.size() == expected_held_count &&
-        std::all_of(before_outputs.begin(), before_outputs.end(),
-                    [](const auto& output) { return !output.present; }) &&
-        outputs.size() == expected_held_count &&
-        std::all_of(
-            outputs.begin(), outputs.end(), [&](const auto& output) {
-                const auto expected = std::find_if(
-                    image->slots().begin(), image->slots().end(),
-                    [&output](const auto& slot) {
-                        return slot.handle == output.slot_handle &&
-                               slot.storage_class ==
-                                   gnc::contracts::SlotStorageClass::
-                                       IntegrationHeld &&
-                               slot.hold_policy ==
-                                   gnc::contracts::SlotHoldPolicy::
-                                       HoldInterval;
-                    });
-                return expected != image->slots().end() &&
-                       output.codec_entry_handle ==
-                           expected->codec_entry_handle &&
-                       output.present &&
-                       output.generation == summary.generation &&
-                       output.sample_tick == before_tick &&
-                       near(output.sample_time_seconds, 0.0) &&
-                       near(output.interval_start_seconds, 0.0) &&
-                       near(output.interval_end_seconds, 0.1) &&
-                       output.quality ==
-                           gnc::contracts::DataQuality::Valid;
-            });
-    if (!held_committed) {
-        throw std::runtime_error(
-            "held interval output metadata mismatch: before=" +
-            std::to_string(before_outputs.size()) + ", after=" +
-            std::to_string(outputs.size()) + ", expected=" +
-            std::to_string(expected_held_count) +
-            ", actual=" +
-            std::to_string(outputs.empty() ? 0U
-                                           : outputs.front().slot_handle) +
-            ", present=" +
-            std::to_string(outputs.empty() || !outputs.front().present ? 0
-                                                                       : 1) +
-            ", generation=" +
-            std::to_string(outputs.empty() ? 0U
-                                           : outputs.front().generation) +
-            ", tick=" +
-            std::to_string(outputs.empty() ? -1
-                                           : outputs.front().sample_tick) +
-            ", interval_end=" +
-            std::to_string(outputs.empty()
-                               ? -1.0
-                               : outputs.front().interval_end_seconds));
-    }
+    require(before_outputs.empty() && outputs.empty(),
+            "transaction-local held value escaped into committed outputs");
     require(!adapter.opening_boundary->terminal_evaluator_called &&
                 creation.session->committed_epoch() == before_epoch &&
                 creation.session->committed_tick() == before_tick &&
@@ -360,7 +311,9 @@ void verify_failure(const std::shared_ptr<const ExecutionPlanImage>& image,
     const auto before_outputs = creation.session->committed_outputs();
     const auto epoch = creation.session->committed_epoch();
     const auto tick = creation.session->committed_tick();
-    const auto result = creation.session->execute_opening_boundary();
+    const auto result =
+        gnc::kernel::qualification::SessionAccess::execute_opening_boundary(
+            *creation.session);
     require(!result && result.error == expected &&
                 !creation.session->frame_open() &&
                 same_state_blocks(creation.session->state_blocks(), before) &&
@@ -439,7 +392,9 @@ void verify_shared_image_provider_isolation(
                 near(first_candidate_mass, 91.25) &&
                 near(second_candidate_mass, 100.0),
             "qualification candidate mutation crossed Session ownership");
-    const auto first_boundary = first.session->execute_opening_boundary();
+    const auto first_boundary =
+        gnc::kernel::qualification::SessionAccess::execute_opening_boundary(
+            *first.session);
     const auto second_outputs_after_first =
         second.session->committed_outputs();
     require(static_cast<bool>(first_boundary) &&
@@ -453,13 +408,10 @@ void verify_shared_image_provider_isolation(
                                   second_state) &&
                 same_committed_outputs(second_outputs_after_first,
                                        second_outputs) &&
-                !second_outputs.empty() &&
-                std::all_of(
-                    second_outputs_after_first.begin(),
-                    second_outputs_after_first.end(),
-                    [](const auto& output) { return !output.present; }) &&
+                second_outputs.empty() &&
+                second_outputs_after_first.empty() &&
                 adapter.trace->live_object_count() ==
-                    live_after_initialization + second_outputs.size(),
+                    live_after_initialization,
             "one Session boundary leaked mutable state into another Session");
     first.session.reset();
     require(adapter.trace->live_object_count() * 2U ==
@@ -470,14 +422,13 @@ void verify_shared_image_provider_isolation(
                     *second.session, adapter, second_candidate_mass)) &&
                 near(second_candidate_mass, 100.0),
             "destroying one Session changed the other's candidate value");
-    const auto second_boundary = second.session->execute_opening_boundary();
+    const auto second_boundary =
+        gnc::kernel::qualification::SessionAccess::execute_opening_boundary(
+            *second.session);
     const auto second_outputs_after_boundary =
         second.session->committed_outputs();
     require(static_cast<bool>(second_boundary) &&
-                std::all_of(
-                    second_outputs_after_boundary.begin(),
-                    second_outputs_after_boundary.end(),
-                    [](const auto& output) { return output.present; }) &&
+                second_outputs_after_boundary.empty() &&
                 same_state_blocks(second.session->state_blocks(),
                                   second_state),
             "destroying one Session damaged the remaining Session");
