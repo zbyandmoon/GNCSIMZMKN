@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -55,14 +56,33 @@ template <std::size_t Size>
     return true;
 }
 
+[[nodiscard]] bool exact_double(double lhs, double rhs) noexcept {
+    static_assert(sizeof(double) == sizeof(std::uint64_t));
+    std::uint64_t lhs_bits = 0U;
+    std::uint64_t rhs_bits = 0U;
+    std::memcpy(&lhs_bits, &lhs, sizeof(lhs_bits));
+    std::memcpy(&rhs_bits, &rhs, sizeof(rhs_bits));
+    return lhs_bits == rhs_bits;
+}
+
+template <std::size_t Size>
+[[nodiscard]] bool exact_array(const std::array<double, Size>& lhs,
+                               const std::array<double, Size>& rhs) noexcept {
+    for (std::size_t index = 0U; index < Size; ++index) {
+        if (!exact_double(lhs[index], rhs[index])) return false;
+    }
+    return true;
+}
+
 [[nodiscard]] bool exactly_same(const CommittedRigidMassProbe& lhs,
                                 const CommittedRigidMassProbe& rhs) noexcept {
-    return lhs.position == rhs.position && lhs.velocity == rhs.velocity &&
-           lhs.attitude_wxyz == rhs.attitude_wxyz &&
-           lhs.angular_rate == rhs.angular_rate &&
-           lhs.mass_kilograms == rhs.mass_kilograms &&
-           lhs.center_of_mass == rhs.center_of_mass &&
-           lhs.inertia == rhs.inertia &&
+    return exact_array(lhs.position, rhs.position) &&
+           exact_array(lhs.velocity, rhs.velocity) &&
+           exact_array(lhs.attitude_wxyz, rhs.attitude_wxyz) &&
+           exact_array(lhs.angular_rate, rhs.angular_rate) &&
+           exact_double(lhs.mass_kilograms, rhs.mass_kilograms) &&
+           exact_array(lhs.center_of_mass, rhs.center_of_mass) &&
+           exact_array(lhs.inertia, rhs.inertia) &&
            lhs.mass_sample_tick == rhs.mass_sample_tick;
 }
 
@@ -110,264 +130,273 @@ template <std::size_t Size>
     return true;
 }
 
-[[nodiscard]] bool near_vector(
+[[nodiscard]] bool exact_vector(
     const gnc::foundation::Vec3& lhs,
     const gnc::foundation::Vec3& rhs) noexcept {
     for (Eigen::Index index = 0; index < 3; ++index) {
-        if (!near(lhs(index), rhs(index))) return false;
+        if (!exact_double(lhs(index), rhs(index))) return false;
     }
     return true;
 }
 
-[[nodiscard]] bool near_matrix(
+[[nodiscard]] bool exact_matrix(
     const gnc::foundation::Mat3& lhs,
     const gnc::foundation::Mat3& rhs) noexcept {
     for (Eigen::Index row = 0; row < 3; ++row) {
         for (Eigen::Index column = 0; column < 3; ++column) {
-            if (!near(lhs(row, column), rhs(row, column))) return false;
+            if (!exact_double(lhs(row, column), rhs(row, column))) {
+                return false;
+            }
         }
     }
     return true;
 }
 
-[[nodiscard]] bool same_sample_context(
+[[nodiscard]] bool exact_sample_context(
     const gnc::contracts::SampleContext& lhs,
     const gnc::contracts::SampleContext& rhs) noexcept {
     return lhs.frame == rhs.frame &&
            lhs.clock_domain == rhs.clock_domain &&
            lhs.sample_time.tick == rhs.sample_time.tick &&
-           near(lhs.sample_time.seconds, rhs.sample_time.seconds) &&
+           exact_double(lhs.sample_time.seconds, rhs.sample_time.seconds) &&
            lhs.configuration_revision == rhs.configuration_revision &&
            lhs.quality == rhs.quality;
 }
 
-[[nodiscard]] bool same_interval_context(
+[[nodiscard]] bool exact_interval_context(
     const gnc::contracts::IntervalSampleContext& lhs,
     const gnc::contracts::IntervalSampleContext& rhs) noexcept {
-    return same_sample_context(lhs.sample, rhs.sample) &&
+    return exact_sample_context(lhs.sample, rhs.sample) &&
            lhs.validity.effective_from.tick ==
                rhs.validity.effective_from.tick &&
-           near(lhs.validity.effective_from.seconds,
-                rhs.validity.effective_from.seconds) &&
+           exact_double(lhs.validity.effective_from.seconds,
+                        rhs.validity.effective_from.seconds) &&
            lhs.validity.effective_until.tick ==
                rhs.validity.effective_until.tick &&
-           near(lhs.validity.effective_until.seconds,
-                rhs.validity.effective_until.seconds);
+           exact_double(lhs.validity.effective_until.seconds,
+                        rhs.validity.effective_until.seconds);
 }
 
-[[nodiscard]] bool same_rigid_state(
+[[nodiscard]] bool exact_rigid_state(
     const yyz::RigidState& lhs, const yyz::RigidState& rhs) noexcept {
-    return near_vector(lhs.position.value, rhs.position.value) &&
-           near_vector(lhs.velocity.value, rhs.velocity.value) &&
-           near_array(gnc::foundation::quaternion_to_wxyz(lhs.attitude.value),
-                      gnc::foundation::quaternion_to_wxyz(rhs.attitude.value)) &&
-           near_vector(lhs.angular_rate.value, rhs.angular_rate.value);
+    return exact_vector(lhs.position.value, rhs.position.value) &&
+           exact_vector(lhs.velocity.value, rhs.velocity.value) &&
+           exact_array(
+               gnc::foundation::quaternion_to_wxyz(lhs.attitude.value),
+               gnc::foundation::quaternion_to_wxyz(rhs.attitude.value)) &&
+           exact_vector(lhs.angular_rate.value, rhs.angular_rate.value);
 }
 
-[[nodiscard]] bool same_rigid_observation(
+[[nodiscard]] bool exact_rigid_observation(
     const yyz::CommittedRigidObservation& lhs,
     const yyz::CommittedRigidObservation& rhs) noexcept {
-    return same_sample_context(lhs.context, rhs.context) &&
-           same_rigid_state(lhs.state, rhs.state);
+    return exact_sample_context(lhs.context, rhs.context) &&
+           exact_rigid_state(lhs.state, rhs.state);
 }
 
-[[nodiscard]] bool same_mass_properties(
+[[nodiscard]] bool exact_mass_properties(
     const yyz::MassPropertiesInput& lhs,
     const yyz::MassPropertiesInput& rhs) noexcept {
-    return same_interval_context(lhs.context, rhs.context) &&
+    return exact_interval_context(lhs.context, rhs.context) &&
            lhs.mass_state_id == rhs.mass_state_id &&
-           near(lhs.mass_kilograms, rhs.mass_kilograms) &&
-           near_vector(lhs.body_origin_to_center_of_mass.value,
-                       rhs.body_origin_to_center_of_mass.value) &&
-           near_matrix(lhs.inertia_about_center_of_mass.value,
-                       rhs.inertia_about_center_of_mass.value);
+           exact_double(lhs.mass_kilograms, rhs.mass_kilograms) &&
+           exact_vector(lhs.body_origin_to_center_of_mass.value,
+                        rhs.body_origin_to_center_of_mass.value) &&
+           exact_matrix(lhs.inertia_about_center_of_mass.value,
+                        rhs.inertia_about_center_of_mass.value);
 }
 
-[[nodiscard]] bool same_applied_wrench(
+[[nodiscard]] bool exact_applied_wrench(
     const yyz::AppliedBodyWrenchInput& lhs,
     const yyz::AppliedBodyWrenchInput& rhs) noexcept {
-    return same_interval_context(lhs.context, rhs.context) &&
+    return exact_interval_context(lhs.context, rhs.context) &&
            lhs.source_id == rhs.source_id &&
-           near_vector(lhs.force.value, rhs.force.value) &&
-           near_vector(lhs.body_origin_to_application.value,
-                       rhs.body_origin_to_application.value) &&
-           near_vector(lhs.intrinsic_moment_at_application.value,
-                       rhs.intrinsic_moment_at_application.value);
+           exact_vector(lhs.force.value, rhs.force.value) &&
+           exact_vector(lhs.body_origin_to_application.value,
+                        rhs.body_origin_to_application.value) &&
+           exact_vector(lhs.intrinsic_moment_at_application.value,
+                        rhs.intrinsic_moment_at_application.value);
 }
 
-[[nodiscard]] bool same_environment(
+[[nodiscard]] bool exact_environment(
     const yyz::EnvironmentInput& lhs,
     const yyz::EnvironmentInput& rhs) noexcept {
-    return same_sample_context(lhs.context, rhs.context) &&
-           near_vector(lhs.gravity.value, rhs.gravity.value) &&
-           near_vector(lhs.velocity_airmass.value,
-                       rhs.velocity_airmass.value) &&
-           near(lhs.density_kilograms_per_cubic_meter,
-                rhs.density_kilograms_per_cubic_meter) &&
-           near(lhs.speed_of_sound_meters_per_second,
-                rhs.speed_of_sound_meters_per_second);
+    return exact_sample_context(lhs.context, rhs.context) &&
+           exact_vector(lhs.gravity.value, rhs.gravity.value) &&
+           exact_vector(lhs.velocity_airmass.value,
+                        rhs.velocity_airmass.value) &&
+           exact_double(lhs.density_kilograms_per_cubic_meter,
+                        rhs.density_kilograms_per_cubic_meter) &&
+           exact_double(lhs.speed_of_sound_meters_per_second,
+                        rhs.speed_of_sound_meters_per_second);
 }
 
-[[nodiscard]] bool same_rigid_preparation(
+[[nodiscard]] bool exact_rigid_preparation(
     const yyz::ControlledRigidBoundaryPreparationOutput& lhs,
     const yyz::ControlledRigidBoundaryPreparationOutput& rhs) noexcept {
-    if (!same_environment(lhs.environment_response,
-                          rhs.environment_response) ||
-        !near_array(lhs.aerodynamic_coefficients
-                        .coefficients_ca_cy_cn_cl_cm_cn,
-                    rhs.aerodynamic_coefficients
-                        .coefficients_ca_cy_cn_cl_cm_cn) ||
-        !near_vector(lhs.closure_request.body_origin_to_center_of_mass.value,
-                     rhs.closure_request.body_origin_to_center_of_mass.value) ||
+    if (!exact_environment(lhs.environment_response,
+                           rhs.environment_response) ||
+        !exact_array(lhs.aerodynamic_coefficients
+                         .coefficients_ca_cy_cn_cl_cm_cn,
+                     rhs.aerodynamic_coefficients
+                         .coefficients_ca_cy_cn_cl_cm_cn) ||
+        !exact_vector(
+            lhs.closure_request.body_origin_to_center_of_mass.value,
+            rhs.closure_request.body_origin_to_center_of_mass.value) ||
         lhs.closure_request.contributions.size() !=
             rhs.closure_request.contributions.size()) {
         return false;
     }
     for (std::size_t index = 0U;
          index < lhs.closure_request.contributions.size(); ++index) {
-        if (!same_applied_wrench(lhs.closure_request.contributions[index],
-                                 rhs.closure_request.contributions[index])) {
+        if (!exact_applied_wrench(
+                lhs.closure_request.contributions[index],
+                rhs.closure_request.contributions[index])) {
             return false;
         }
     }
     return true;
 }
 
-[[nodiscard]] bool same_rigid_form(
+[[nodiscard]] bool exact_rigid_form(
     const yyz::RigidFormInput& lhs,
     const yyz::RigidFormInput& rhs) noexcept {
-    return near_vector(lhs.force_total.value, rhs.force_total.value) &&
-           near_vector(lhs.moment_total_about_center_of_mass.value,
-                       rhs.moment_total_about_center_of_mass.value);
+    return exact_vector(lhs.force_total.value, rhs.force_total.value) &&
+           exact_vector(lhs.moment_total_about_center_of_mass.value,
+                        rhs.moment_total_about_center_of_mass.value);
 }
 
-[[nodiscard]] bool same_guidance(
+[[nodiscard]] bool exact_guidance(
     const yyz::AltitudePitchGuidanceOutput& lhs,
     const yyz::AltitudePitchGuidanceOutput& rhs) noexcept {
-    return same_rigid_observation(lhs.source_observation,
-                                  rhs.source_observation) &&
-           near(lhs.measured_pitch_radians, rhs.measured_pitch_radians) &&
-           near(lhs.measured_pitch_rate_radians_per_second,
-                rhs.measured_pitch_rate_radians_per_second) &&
-           near(lhs.altitude_error_meters, rhs.altitude_error_meters) &&
-           near(lhs.altitude_feedback_radians,
-                rhs.altitude_feedback_radians) &&
-           near(lhs.vertical_speed_feedback_radians,
-                rhs.vertical_speed_feedback_radians) &&
-           near(lhs.raw_pitch_command_radians,
-                rhs.raw_pitch_command_radians) &&
-           near(lhs.pitch_command_radians, rhs.pitch_command_radians) &&
+    return exact_rigid_observation(lhs.source_observation,
+                                   rhs.source_observation) &&
+           exact_double(lhs.measured_pitch_radians,
+                        rhs.measured_pitch_radians) &&
+           exact_double(lhs.measured_pitch_rate_radians_per_second,
+                        rhs.measured_pitch_rate_radians_per_second) &&
+           exact_double(lhs.altitude_error_meters,
+                        rhs.altitude_error_meters) &&
+           exact_double(lhs.altitude_feedback_radians,
+                        rhs.altitude_feedback_radians) &&
+           exact_double(lhs.vertical_speed_feedback_radians,
+                        rhs.vertical_speed_feedback_radians) &&
+           exact_double(lhs.raw_pitch_command_radians,
+                        rhs.raw_pitch_command_radians) &&
+           exact_double(lhs.pitch_command_radians,
+                        rhs.pitch_command_radians) &&
            lhs.saturated == rhs.saturated;
 }
 
-[[nodiscard]] bool same_controller(
+[[nodiscard]] bool exact_controller(
     const yyz::PitchMomentControllerOutput& lhs,
     const yyz::PitchMomentControllerOutput& rhs) noexcept {
-    return same_sample_context(lhs.context, rhs.context) &&
-           near(lhs.pitch_error_radians, rhs.pitch_error_radians) &&
-           near(lhs.proportional_moment_newton_meters,
-                rhs.proportional_moment_newton_meters) &&
-           near(lhs.rate_damping_moment_newton_meters,
-                rhs.rate_damping_moment_newton_meters) &&
-           near(lhs.raw_moment_command_newton_meters,
-                rhs.raw_moment_command_newton_meters) &&
-           near(lhs.moment_command_newton_meters,
-                rhs.moment_command_newton_meters) &&
+    return exact_sample_context(lhs.context, rhs.context) &&
+           exact_double(lhs.pitch_error_radians,
+                        rhs.pitch_error_radians) &&
+           exact_double(lhs.proportional_moment_newton_meters,
+                        rhs.proportional_moment_newton_meters) &&
+           exact_double(lhs.rate_damping_moment_newton_meters,
+                        rhs.rate_damping_moment_newton_meters) &&
+           exact_double(lhs.raw_moment_command_newton_meters,
+                        rhs.raw_moment_command_newton_meters) &&
+           exact_double(lhs.moment_command_newton_meters,
+                        rhs.moment_command_newton_meters) &&
            lhs.saturated == rhs.saturated;
 }
 
-[[nodiscard]] bool same_actuator(
+[[nodiscard]] bool exact_actuator(
     const yyz::IdealBodyMomentActuatorOutput& lhs,
     const yyz::IdealBodyMomentActuatorOutput& rhs) noexcept {
-    return same_interval_context(lhs.context, rhs.context) &&
+    return exact_interval_context(lhs.context, rhs.context) &&
            lhs.source_id == rhs.source_id &&
-           near_vector(lhs.moment_about_center_of_mass.value,
-                       rhs.moment_about_center_of_mass.value);
+           exact_vector(lhs.moment_about_center_of_mass.value,
+                        rhs.moment_about_center_of_mass.value);
 }
 
-[[nodiscard]] bool same_propulsion(
+[[nodiscard]] bool exact_propulsion(
     const yyz::SuppliedPropulsionBodyWrench& lhs,
     const yyz::SuppliedPropulsionBodyWrench& rhs) noexcept {
-    return same_interval_context(lhs.context, rhs.context) &&
+    return exact_interval_context(lhs.context, rhs.context) &&
            lhs.source_id == rhs.source_id &&
-           near_vector(lhs.force.value, rhs.force.value) &&
-           near_vector(lhs.center_of_mass_to_application.value,
-                       rhs.center_of_mass_to_application.value) &&
-           near_vector(lhs.intrinsic_moment_at_application.value,
-                       rhs.intrinsic_moment_at_application.value);
+           exact_vector(lhs.force.value, rhs.force.value) &&
+           exact_vector(lhs.center_of_mass_to_application.value,
+                        rhs.center_of_mass_to_application.value) &&
+           exact_vector(lhs.intrinsic_moment_at_application.value,
+                        rhs.intrinsic_moment_at_application.value);
 }
 
-[[nodiscard]] bool same_mass_flow(
+[[nodiscard]] bool exact_mass_flow(
     const yyz::MassFlowIntervalInput& lhs,
     const yyz::MassFlowIntervalInput& rhs) noexcept {
-    return same_interval_context(lhs.context, rhs.context) &&
+    return exact_interval_context(lhs.context, rhs.context) &&
            lhs.mass_state_id == rhs.mass_state_id &&
-           near(lhs.fuel_consumption_rate_kilograms_per_second,
-                rhs.fuel_consumption_rate_kilograms_per_second);
+           exact_double(lhs.fuel_consumption_rate_kilograms_per_second,
+                        rhs.fuel_consumption_rate_kilograms_per_second);
 }
 
-[[nodiscard]] bool same_mass_state(
+[[nodiscard]] bool exact_mass_state(
     const yyz::MassState& lhs, const yyz::MassState& rhs) noexcept {
-    return same_sample_context(lhs.context, rhs.context) &&
+    return exact_sample_context(lhs.context, rhs.context) &&
            lhs.mass_state_id == rhs.mass_state_id &&
-           near(lhs.mass_kilograms, rhs.mass_kilograms) &&
-           near_vector(lhs.body_origin_to_center_of_mass.value,
-                       rhs.body_origin_to_center_of_mass.value) &&
-           near_matrix(lhs.inertia_about_center_of_mass.value,
-                       rhs.inertia_about_center_of_mass.value);
+           exact_double(lhs.mass_kilograms, rhs.mass_kilograms) &&
+           exact_vector(lhs.body_origin_to_center_of_mass.value,
+                        rhs.body_origin_to_center_of_mass.value) &&
+           exact_matrix(lhs.inertia_about_center_of_mass.value,
+                        rhs.inertia_about_center_of_mass.value);
 }
 
-[[nodiscard]] bool same_committed_boundary(
+[[nodiscard]] bool exact_committed_boundary(
     const yyz::CommittedRigidMassBoundary& lhs,
     const yyz::CommittedRigidMassBoundary& rhs) noexcept {
-    return same_sample_context(lhs.rigid_context, rhs.rigid_context) &&
-           same_rigid_state(lhs.rigid_state, rhs.rigid_state) &&
-           same_mass_state(lhs.mass_state, rhs.mass_state);
+    return exact_sample_context(lhs.rigid_context, rhs.rigid_context) &&
+           exact_rigid_state(lhs.rigid_state, rhs.rigid_state) &&
+           exact_mass_state(lhs.mass_state, rhs.mass_state);
 }
 
-[[nodiscard]] bool same_mission_metrics(
+[[nodiscard]] bool exact_mission_metrics(
     const yyz::MissionMetrics& lhs,
     const yyz::MissionMetrics& rhs) noexcept {
-    return near(lhs.duration_seconds, rhs.duration_seconds) &&
-           near(lhs.downrange_meters, rhs.downrange_meters) &&
-           near(lhs.vertical_displacement_meters,
-                rhs.vertical_displacement_meters) &&
-           near(lhs.remaining_mass_kilograms,
-                rhs.remaining_mass_kilograms) &&
-           near(lhs.consumed_mass_kilograms,
-                rhs.consumed_mass_kilograms) &&
-           near(lhs.speed_meters_per_second,
-                rhs.speed_meters_per_second);
+    return exact_double(lhs.duration_seconds, rhs.duration_seconds) &&
+           exact_double(lhs.downrange_meters, rhs.downrange_meters) &&
+           exact_double(lhs.vertical_displacement_meters,
+                        rhs.vertical_displacement_meters) &&
+           exact_double(lhs.remaining_mass_kilograms,
+                        rhs.remaining_mass_kilograms) &&
+           exact_double(lhs.consumed_mass_kilograms,
+                        rhs.consumed_mass_kilograms) &&
+           exact_double(lhs.speed_meters_per_second,
+                        rhs.speed_meters_per_second);
 }
 
-[[nodiscard]] bool same_mission_result(
+[[nodiscard]] bool exact_mission_result(
     const yyz::CommittedMissionResultOutput& lhs,
     const yyz::CommittedMissionResultOutput& rhs) noexcept {
     if (lhs.status != rhs.status || lhs.initial_tick != rhs.initial_tick ||
         lhs.final_tick != rhs.final_tick ||
-        !near(lhs.final_time_seconds, rhs.final_time_seconds) ||
+        !exact_double(lhs.final_time_seconds, rhs.final_time_seconds) ||
         lhs.termination.action != rhs.termination.action ||
         lhs.termination.reason_code != rhs.termination.reason_code ||
-        !near(lhs.termination.trigger_time_seconds,
-              rhs.termination.trigger_time_seconds) ||
+        !exact_double(lhs.termination.trigger_time_seconds,
+                      rhs.termination.trigger_time_seconds) ||
         lhs.termination.priority != rhs.termination.priority ||
         lhs.metrics.evaluated_sample_count !=
             rhs.metrics.evaluated_sample_count ||
-        !same_mission_metrics(lhs.metrics.terminal,
-                              rhs.metrics.terminal) ||
-        !near(lhs.metrics.peak_speed_meters_per_second,
-              rhs.metrics.peak_speed_meters_per_second) ||
+        !exact_mission_metrics(lhs.metrics.terminal,
+                               rhs.metrics.terminal) ||
+        !exact_double(lhs.metrics.peak_speed_meters_per_second,
+                      rhs.metrics.peak_speed_meters_per_second) ||
         lhs.metrics.peak_speed_tick != rhs.metrics.peak_speed_tick ||
-        !near(lhs.metrics.maximum_downrange_meters,
-              rhs.metrics.maximum_downrange_meters) ||
+        !exact_double(lhs.metrics.maximum_downrange_meters,
+                      rhs.metrics.maximum_downrange_meters) ||
         lhs.metrics.maximum_downrange_tick !=
             rhs.metrics.maximum_downrange_tick ||
-        !near(lhs.metrics.minimum_remaining_mass_kilograms,
-              rhs.metrics.minimum_remaining_mass_kilograms) ||
+        !exact_double(lhs.metrics.minimum_remaining_mass_kilograms,
+                      rhs.metrics.minimum_remaining_mass_kilograms) ||
         lhs.metrics.minimum_remaining_mass_tick !=
             rhs.metrics.minimum_remaining_mass_tick ||
-        !same_committed_boundary(lhs.terminal_boundary,
-                                 rhs.terminal_boundary)) {
+        !exact_committed_boundary(lhs.terminal_boundary,
+                                  rhs.terminal_boundary)) {
         return false;
     }
     for (std::size_t index = 0U;
@@ -375,7 +404,8 @@ template <std::size_t Size>
         const auto& left = lhs.terminal_predicates[index];
         const auto& right = rhs.terminal_predicates[index];
         if (left.predicate_id != right.predicate_id ||
-            !near(left.observed, right.observed) || left.met != right.met ||
+            !exact_double(left.observed, right.observed) ||
+            left.met != right.met ||
             left.action != right.action ||
             left.reason_code != right.reason_code ||
             left.priority != right.priority) {
@@ -385,7 +415,7 @@ template <std::size_t Size>
     return true;
 }
 
-[[nodiscard]] bool same_seal_metadata(
+[[nodiscard]] bool exact_seal_metadata(
     const std::vector<gnc::kernel::SessionCommittedOutputInfo>& lhs,
     const std::vector<gnc::kernel::SessionCommittedOutputInfo>& rhs) noexcept {
     if (lhs.size() != rhs.size()) return false;
@@ -398,10 +428,12 @@ template <std::size_t Size>
             left.generation != right.generation ||
             left.sequence != right.sequence ||
             left.sample_tick != right.sample_tick ||
-            !near(left.sample_time_seconds, right.sample_time_seconds) ||
-            !near(left.interval_start_seconds,
-                  right.interval_start_seconds) ||
-            !near(left.interval_end_seconds, right.interval_end_seconds) ||
+            !exact_double(left.sample_time_seconds,
+                          right.sample_time_seconds) ||
+            !exact_double(left.interval_start_seconds,
+                          right.interval_start_seconds) ||
+            !exact_double(left.interval_end_seconds,
+                          right.interval_end_seconds) ||
             left.quality != right.quality ||
             left.terminal_result != right.terminal_result) {
             return false;
@@ -411,41 +443,41 @@ template <std::size_t Size>
 }
 
 template <typename Value, typename Equal>
-[[nodiscard]] bool same_optional_payload(
+[[nodiscard]] bool exact_optional_payload(
     const std::optional<Value>& lhs, const std::optional<Value>& rhs,
     Equal equal) noexcept {
     return lhs.has_value() == rhs.has_value() &&
            (!lhs.has_value() || equal(*lhs, *rhs));
 }
 
-[[nodiscard]] bool same_sealed_observation_snapshot(
+[[nodiscard]] bool exact_sealed_observation_snapshot(
     const SealedObservationSnapshot& lhs,
     const SealedObservationSnapshot& rhs) noexcept {
-    return same_seal_metadata(lhs.seals, rhs.seals) &&
-           same_optional_payload(lhs.rigid_observation,
-                                 rhs.rigid_observation,
-                                 same_rigid_observation) &&
-           same_optional_payload(lhs.rigid_form, rhs.rigid_form,
-                                 same_rigid_form) &&
-           same_optional_payload(lhs.rigid_preparation,
-                                 rhs.rigid_preparation,
-                                 same_rigid_preparation) &&
-           same_optional_payload(lhs.mass_properties,
-                                 rhs.mass_properties,
-                                 same_mass_properties) &&
-           same_optional_payload(lhs.guidance, rhs.guidance,
-                                 same_guidance) &&
-           same_optional_payload(lhs.controller, rhs.controller,
-                                 same_controller) &&
-           same_optional_payload(lhs.actuator, rhs.actuator,
-                                 same_actuator) &&
-           same_optional_payload(lhs.propulsion, rhs.propulsion,
-                                 same_propulsion) &&
-           same_optional_payload(lhs.mass_flow, rhs.mass_flow,
-                                 same_mass_flow) &&
-           same_optional_payload(lhs.mission_result,
-                                 rhs.mission_result,
-                                 same_mission_result);
+    return exact_seal_metadata(lhs.seals, rhs.seals) &&
+           exact_optional_payload(lhs.rigid_observation,
+                                  rhs.rigid_observation,
+                                  exact_rigid_observation) &&
+           exact_optional_payload(lhs.rigid_form, rhs.rigid_form,
+                                  exact_rigid_form) &&
+           exact_optional_payload(lhs.rigid_preparation,
+                                  rhs.rigid_preparation,
+                                  exact_rigid_preparation) &&
+           exact_optional_payload(lhs.mass_properties,
+                                  rhs.mass_properties,
+                                  exact_mass_properties) &&
+           exact_optional_payload(lhs.guidance, rhs.guidance,
+                                  exact_guidance) &&
+           exact_optional_payload(lhs.controller, rhs.controller,
+                                  exact_controller) &&
+           exact_optional_payload(lhs.actuator, rhs.actuator,
+                                  exact_actuator) &&
+           exact_optional_payload(lhs.propulsion, rhs.propulsion,
+                                  exact_propulsion) &&
+           exact_optional_payload(lhs.mass_flow, rhs.mass_flow,
+                                  exact_mass_flow) &&
+           exact_optional_payload(lhs.mission_result,
+                                  rhs.mission_result,
+                                  exact_mission_result);
 }
 
 [[nodiscard]] bool all_frame_slots_absent(
@@ -535,15 +567,17 @@ void require_mission_oracle(const MissionResultProbe& value) {
     return lhs.present == rhs.present && lhs.completed == rhs.completed &&
            lhs.initial_tick == rhs.initial_tick &&
            lhs.final_tick == rhs.final_tick &&
-           lhs.final_time_seconds == rhs.final_time_seconds &&
+           exact_double(lhs.final_time_seconds, rhs.final_time_seconds) &&
            lhs.reason_code == rhs.reason_code && lhs.priority == rhs.priority &&
            lhs.evaluated_sample_count == rhs.evaluated_sample_count &&
-           lhs.duration_seconds == rhs.duration_seconds &&
-           lhs.downrange_meters == rhs.downrange_meters &&
-           lhs.remaining_mass_kilograms == rhs.remaining_mass_kilograms &&
-           lhs.consumed_mass_kilograms == rhs.consumed_mass_kilograms &&
-           lhs.terminal_speed_meters_per_second ==
-               rhs.terminal_speed_meters_per_second &&
+           exact_double(lhs.duration_seconds, rhs.duration_seconds) &&
+           exact_double(lhs.downrange_meters, rhs.downrange_meters) &&
+           exact_double(lhs.remaining_mass_kilograms,
+                        rhs.remaining_mass_kilograms) &&
+           exact_double(lhs.consumed_mass_kilograms,
+                        rhs.consumed_mass_kilograms) &&
+           exact_double(lhs.terminal_speed_meters_per_second,
+                        rhs.terminal_speed_meters_per_second) &&
            lhs.terminal_tick == rhs.terminal_tick;
 }
 
@@ -568,6 +602,7 @@ void require_mission_oracle(const MissionResultProbe& value) {
         lhs.run_sequence != rhs.run_sequence ||
         lhs.image_fingerprint != rhs.image_fingerprint ||
         lhs.plan_id != rhs.plan_id || lhs.mission_id != rhs.mission_id ||
+        lhs.source_semantic_hash != rhs.source_semantic_hash ||
         lhs.descriptor_semantic_hash != rhs.descriptor_semantic_hash ||
         lhs.initialization_committed != rhs.initialization_committed ||
         lhs.final_status != rhs.final_status ||
@@ -598,6 +633,56 @@ void require_mission_oracle(const MissionResultProbe& value) {
         }
     }
     return true;
+}
+
+[[nodiscard]] bool has_exact_image_binding(
+    const gnc::kernel::RunOutcome& outcome,
+    const ExecutionPlanImage& image) noexcept {
+    return outcome.image_fingerprint == image.fingerprint() &&
+           outcome.plan_id == image.plan_id() &&
+           outcome.mission_id == image.mission_id() &&
+           outcome.source_semantic_hash == image.source_semantic_hash() &&
+           outcome.descriptor_semantic_hash ==
+               image.descriptor_semantic_hash();
+}
+
+[[nodiscard]] bool is_empty_lifecycle_rejection(
+    const gnc::kernel::StepOutcome& outcome,
+    const gnc::kernel::RunId& run_id,
+    std::uint64_t run_sequence,
+    std::uint64_t committed_epoch,
+    std::int64_t committed_tick) noexcept {
+    return outcome.status == gnc::kernel::StepStatus::Failed &&
+           outcome.result.error ==
+               SessionError::InvalidLifecycleTransition &&
+           outcome.run_id == run_id &&
+           outcome.run_sequence == run_sequence &&
+           !outcome.branch_selected && outcome.transaction_handle == 0U &&
+           outcome.base_epoch == committed_epoch &&
+           outcome.committed_epoch == committed_epoch &&
+           outcome.tick_before == committed_tick &&
+           outcome.tick_after == committed_tick &&
+           outcome.last_region_handle == 0U &&
+           outcome.last_callsite_handle == 0U &&
+           outcome.last_image_handle == 0U &&
+           outcome.candidates.planned_count == 0U &&
+           outcome.candidates.present_count == 0U &&
+           outcome.candidates.valid_count == 0U &&
+           !outcome.histories.staged &&
+           outcome.histories.history_count == 0U &&
+           outcome.histories.prospective_sample_count == 0U &&
+           !outcome.observation_seal.staged &&
+           outcome.observation_seal.output_count == 0U &&
+           !outcome.result_seal.staged &&
+           !outcome.result_seal.result_present &&
+           outcome.primary_diagnostic.has_value() &&
+           outcome.primary_diagnostic->code ==
+               RuntimeDiagnosticCode::LifecycleTransitionRejected &&
+           outcome.primary_diagnostic->stage ==
+               RuntimeDiagnosticStage::Lifecycle &&
+           outcome.primary_diagnostic->run_id == run_id &&
+           outcome.primary_diagnostic->tick == committed_tick &&
+           outcome.primary_diagnostic->base_epoch == committed_epoch;
 }
 
 [[nodiscard]] RuntimeDiagnosticCode expected_runtime_code(
@@ -816,6 +901,7 @@ void verify_initialization_identity_and_commit(
             "empty RunId crossed InitializationCommit");
     const auto* empty_outcome = created.session->run_outcome();
     require(empty_outcome != nullptr && empty_outcome->run_id.empty() &&
+                has_exact_image_binding(*empty_outcome, *image) &&
                 !empty_outcome->initialization_committed &&
                 empty_outcome->final_status ==
                     gnc::kernel::RunFinalStatus::Failed &&
@@ -860,11 +946,18 @@ void verify_initialization_identity_and_commit(
     require(!rejected_step &&
                 rejected_step.result.error ==
                     SessionError::InvalidLifecycleTransition &&
+                is_empty_lifecycle_rejection(
+                    rejected_step, mismatch_id, 0U, 0U, 0) &&
+                is_empty_lifecycle_rejection(
+                    mismatch.session->last_step_outcome(),
+                    mismatch_id, 0U, 0U, 0) &&
                 !rejected_run &&
                 rejected_run.error ==
                     SessionError::InvalidLifecycleTransition &&
                 exactly_same(*mismatch.session->run_outcome(),
-                             frozen_mismatch),
+                             frozen_mismatch) &&
+                has_exact_image_binding(
+                    *mismatch.session->run_outcome(), *image),
             "post-initialization-failure rejection changed frozen evidence");
 
     auto successful = initialize_session(
@@ -910,6 +1003,7 @@ void verify_complete_step_transactions(
     require(first.status == gnc::kernel::StepStatus::Committed &&
                 first.run_id.value() == "run:step-transaction" &&
                 first.run_sequence == 0U &&
+                first.branch_selected &&
                 first.transaction_handle == transaction.handle &&
                 first.branch ==
                     gnc::contracts::TransactionBranch::Continue &&
@@ -984,6 +1078,7 @@ void verify_complete_step_transactions(
     require(second.status == gnc::kernel::StepStatus::Committed &&
                 second.run_id == first.run_id &&
                 second.run_sequence == 0U &&
+                second.branch_selected &&
                 second.transaction_handle == transaction.handle &&
                 second.branch ==
                     gnc::contracts::TransactionBranch::Continue &&
@@ -1053,6 +1148,7 @@ void verify_complete_step_transactions(
     require(terminal.status == gnc::kernel::StepStatus::Terminated &&
                 terminal.run_id == first.run_id &&
                 terminal.run_sequence == 0U &&
+                terminal.branch_selected &&
                 terminal.transaction_handle == transaction.handle &&
                 terminal.branch ==
                     gnc::contracts::TransactionBranch::Terminal &&
@@ -1121,6 +1217,8 @@ void verify_complete_step_transactions(
                     image->fingerprint() &&
                 completed_outcome->plan_id == image->plan_id() &&
                 completed_outcome->mission_id == image->mission_id() &&
+                completed_outcome->source_semantic_hash ==
+                    image->source_semantic_hash() &&
                 completed_outcome->descriptor_semantic_hash ==
                     image->descriptor_semantic_hash() &&
                 completed_outcome->initialization_committed &&
@@ -1170,6 +1268,11 @@ void verify_complete_step_transactions(
     require(!rejected &&
                 rejected.result.error ==
                     SessionError::InvalidLifecycleTransition &&
+                is_empty_lifecycle_rejection(
+                    rejected, terminal.run_id, 0U, 3U, 2) &&
+                is_empty_lifecycle_rejection(
+                    bundle.session->last_step_outcome(),
+                    terminal.run_id, 0U, 3U, 2) &&
                 !rejected_run &&
                 rejected_run.error ==
                     SessionError::InvalidLifecycleTransition &&
@@ -1264,6 +1367,7 @@ void verify_precommit_rollback(
             message);
     const auto* failed_outcome = bundle.session->run_outcome();
     require(failed.status == gnc::kernel::StepStatus::Failed &&
+                failed.branch_selected &&
                 failed.primary_diagnostic.has_value() &&
                 failed.primary_diagnostic->code ==
                     expected_runtime_code(expected) &&
@@ -1279,6 +1383,7 @@ void verify_precommit_rollback(
                     gnc::kernel::RunFinalStatus::Failed &&
                 failed_outcome->validity ==
                     gnc::contracts::EvidenceValidity::Invalid &&
+                has_exact_image_binding(*failed_outcome, *image) &&
                 failed_outcome->final_committed_epoch == 0U &&
                 failed_outcome->final_tick == 0 &&
                 failed_outcome->committed_step_count == 0U &&
@@ -1309,6 +1414,11 @@ void verify_precommit_rollback(
     require(!retry &&
                 retry.result.error ==
                     SessionError::InvalidLifecycleTransition &&
+                is_empty_lifecycle_rejection(
+                    retry, failed.run_id, 0U, 0U, 0) &&
+                is_empty_lifecycle_rejection(
+                    bundle.session->last_step_outcome(),
+                    failed.run_id, 0U, 0U, 0) &&
                 !rerun &&
                 rerun.error == SessionError::InvalidLifecycleTransition &&
                 bundle.session->state() == gnc::kernel::SessionState::Failed &&
@@ -1845,9 +1955,19 @@ void verify_query_count_invariance(
             "terminal seal lost presence, quality, or result identity");
     require(baseline_snapshot.mission_result.has_value(),
             "terminal snapshot omitted mission result");
-    require(same_sealed_observation_snapshot(baseline_snapshot,
-                                             repeated_snapshot),
+    require(exact_sealed_observation_snapshot(baseline_snapshot,
+                                              repeated_snapshot),
             "discarded query evaluations changed a typed sealed payload");
+    auto mutated_snapshot = baseline_snapshot;
+    require(mutated_snapshot.rigid_observation.has_value(),
+            "exact payload comparator mutation lacks a rigid observation");
+    auto& mutated_position =
+        mutated_snapshot.rigid_observation->state.position.value(0);
+    mutated_position = std::nextafter(
+        mutated_position, std::numeric_limits<double>::infinity());
+    require(!exact_sealed_observation_snapshot(baseline_snapshot,
+                                               mutated_snapshot),
+            "exact payload comparator accepted a one-ULP mutation");
     require(exactly_same(committed_probe(*baseline.session,
                                          baseline.adapter),
                          committed_probe(*repeated.session,

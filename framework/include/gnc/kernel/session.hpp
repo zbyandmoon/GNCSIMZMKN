@@ -260,6 +260,7 @@ struct StepOutcome {
     SessionResult result;
     RunId run_id;
     std::uint64_t run_sequence = 0U;
+    bool branch_selected = false;
     std::uint32_t transaction_handle = 0U;
     contracts::TransactionBranch branch =
         contracts::TransactionBranch::Continue;
@@ -297,6 +298,7 @@ struct RunOutcome {
     std::string image_fingerprint;
     std::string plan_id;
     std::string mission_id;
+    std::string source_semantic_hash;
     std::string descriptor_semantic_hash;
     bool initialization_committed = false;
     RunFinalStatus final_status = RunFinalStatus::Failed;

@@ -923,6 +923,7 @@ struct Session::Impl final : SessionObjectAccess,
             outcome.run_id = *committed_run_id;
         }
         outcome.run_sequence = committed_run_sequence;
+        outcome.branch_selected = step_summary.branch_selected;
         outcome.transaction_handle = step_summary.transaction_handle;
         outcome.branch = step_summary.branch;
         outcome.base_epoch = step_summary.base_epoch;
@@ -974,6 +975,25 @@ struct Session::Impl final : SessionObjectAccess,
                 : (outcome.last_callsite_handle != 0U
                        ? outcome.last_callsite_handle
                        : outcome.transaction_handle);
+        outcome.primary_diagnostic = std::move(diagnostic);
+        return outcome;
+    }
+
+    [[nodiscard]] StepOutcome make_lifecycle_rejection_outcome(
+        SessionResult result, RuntimeDiagnostic diagnostic) const noexcept {
+        StepOutcome outcome;
+        outcome.status = StepStatus::Failed;
+        outcome.result = result;
+        if (committed_run_id.has_value()) {
+            outcome.run_id = *committed_run_id;
+        } else if (run_outcome_frozen) {
+            outcome.run_id = run_outcome_storage.run_id;
+        }
+        outcome.run_sequence = committed_run_sequence;
+        outcome.base_epoch = committed_epoch;
+        outcome.committed_epoch = committed_epoch;
+        outcome.tick_before = committed_tick;
+        outcome.tick_after = committed_tick;
         outcome.primary_diagnostic = std::move(diagnostic);
         return outcome;
     }
@@ -3738,8 +3758,9 @@ StepOutcome Session::execute_step() noexcept {
             impl.run_outcome_frozen
                 ? impl.run_outcome_storage.validity
                 : contracts::EvidenceValidity::Unknown);
-        return impl.make_step_outcome(
-            StepStatus::Failed, result, diagnostic);
+        impl.step_outcome = impl.make_lifecycle_rejection_outcome(
+            result, diagnostic);
+        return impl.step_outcome;
     }
     impl.current_diagnostic_stage = RuntimeDiagnosticStage::Schedule;
     if (impl.cycle_frame.open) {
@@ -4322,6 +4343,8 @@ SessionCreation create_session(
             implementation->image->plan_id();
         implementation->run_outcome_storage.mission_id =
             implementation->image->mission_id();
+        implementation->run_outcome_storage.source_semantic_hash =
+            implementation->image->source_semantic_hash();
         implementation->run_outcome_storage.descriptor_semantic_hash =
             implementation->image->descriptor_semantic_hash();
         implementation->run_outcome_storage.initial_tick =
