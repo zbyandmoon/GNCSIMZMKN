@@ -537,15 +537,15 @@
       "id": "R3-STR-001",
       "stage": "R3",
       "title": "Implement Session-local state and runtime stores with compiled handles",
-      "status": "done",
+      "status": "review",
       "priority": "P0",
       "size": "XL",
       "owner_role": "runtime_numerics_lead",
       "assignee": null,
       "depends_on": ["R2-GATE-001"],
-      "deliverables": ["CommittedStateStore", "TransactionCandidateStore", "IntegrationHeld-only CommittedOutputStore", "SessionRuntimeBindings", "compiled state/slot handles and codec identities"],
+      "deliverables": ["CommittedStateStore", "TransactionCandidateStore", "transaction-local IntegrationHeld storage", "SessionRuntimeBindings", "compiled state/slot handles and codec identities"],
       "acceptance": ["Each mutable state/runtime block has one owner, exact compiled identity and Session-local storage", "Independent Sessions sharing one Image and provider cannot observe or mutate each other's stores"],
-      "evidence": ["r3.kernel-session-materialization.probe validates exact Image extents, state/slot codecs, typed materializer identities, strong-exception-safe construction and reverse destruction", "r3.kernel-opening-boundary.probe proves committed/candidate/runtime/held-output isolation across two Sessions, deep-copies only IntegrationHeld values after success, and leaves committed state epoch/tick unchanged"],
+      "evidence": ["r3.kernel-session-materialization.probe validates exact Image extents, state/slot codecs, typed materializer identities, exact unique Runtime Cell preparation dependencies, undeclared-preparation rejection before placement, strong-exception-safe construction and reverse destruction", "r3.kernel-opening-boundary.probe and r3.kernel-step-transaction.probe prove committed/candidate/runtime isolation across two Sessions; IntegrationHeld values stay transaction-local, never enter committed output, and are destroyed with the frame after success or failure"],
       "architecture_refs": ["12 §9", "14 §3"]
     },
     {
@@ -560,14 +560,14 @@
       "depends_on": ["R3-STR-001"],
       "deliverables": ["Compiled slots", "bounded CycleFrame", "typed input/output authorization", "view generation and lifetime guards"],
       "acceptance": ["No frame view remains valid after frame close", "Only the exact compiled writer token can publish each slot and missing required input fails closed"],
-      "evidence": ["r3.kernel-opening-boundary.probe covers bounded first-write construction, reverse close, stale-view rejection, absent input, wrong writer token, deterministic order and failure cleanup"],
+      "evidence": ["r3.kernel-opening-boundary.probe and r3.kernel-step-transaction.probe cover bounded first-write construction, reverse close, stale-view rejection, absent input, exact writer/candidate token authorization, scoped frame reads, deterministic order and success/failure cleanup"],
       "architecture_refs": ["14 §4"]
     },
     {
       "id": "R3-TXN-001",
       "stage": "R3",
       "title": "Implement ComponentDelta, StepJournal and atomic ModelCommit",
-      "status": "planned",
+      "status": "review",
       "priority": "P0",
       "size": "XL",
       "owner_role": "runtime_numerics_lead",
@@ -575,7 +575,7 @@
       "depends_on": ["R3-STR-001", "R3-FRM-001"],
       "deliverables": ["Instant/interval replacements", "TransactionCandidateStore branch execution", "validate/commit/rollback", "transactional command disposition at the first cutoff consumer", "epoch rules"],
       "acceptance": ["Every injected pre-commit failure leaves the committed epoch unchanged"],
-      "evidence": ["Failure-point transaction matrix"],
+      "evidence": ["r3.kernel-step-transaction.probe executes two REF-YYZ Continue branches in one Session, validates rigid/mass candidates, atomically advances (epoch,tick) from (0,0) through (1,1) to (2,2), and rejects a third Continue before tick 2 terminal evaluation", "The same probe injects projection, mid-boundary, held-closure/after-held, derivative/RK-stage, mass-evolution, rigid/mass validation, last-precommit, candidate-rearm, wrong-token, missing-input, stale-view and cross-owner failures; every precommit failure preserves the full committed pair and epoch/tick, destroys transaction-local state, and permits retry", "Transactional command disposition remains with the first real schedule-cutoff consumer in R3-SCH-001; no command queue or ledger was prebuilt in this slice"],
       "architecture_refs": ["14 §8–§13"]
     },
     {
@@ -597,7 +597,7 @@
       "id": "R3-CON-001",
       "stage": "R3",
       "title": "Implement IntegrationScopePlan and FrozenInterval closure",
-      "status": "planned",
+      "status": "review",
       "priority": "P0",
       "size": "XL",
       "owner_role": "runtime_numerics_lead",
@@ -605,7 +605,7 @@
       "depends_on": ["R3-TXN-001", "R1-FND-001"],
       "deliverables": ["RK4 scope executor", "pure closure handles", "candidate-state views"],
       "acceptance": ["Query call count cannot change physical result or observation"],
-      "evidence": ["Convergence and continuous-group replacement suite"],
+      "evidence": ["r3.kernel-step-transaction.probe executes the Image fixed-step policy through four RK4 derivative stages per interval, reads the FrozenInterval held form only through a narrow IntegrationScope, stages rigid/mass candidates through scoped writers, and matches both intervals of ORACLE-YYZ-MISSION-COMPOSITION-001 with maximum absolute difference 1.7763568394002505e-15", "Derivative-stage rejection, held lifetime, missing authorized inputs, Runtime Cell and IntegrationScope cross-owner reads, invalid candidates and two-Session isolation are directly covered; existing R1 rigid-step and two-interval oracles retain the independent convergence evidence"],
       "architecture_refs": ["03 §15", "14 §14–§18"]
     },
     {
@@ -620,7 +620,7 @@
       "depends_on": ["R2-GATE-001"],
       "deliverables": ["Lifecycle state machine", "resource journals", "RunBinding and RunId rules"],
       "acceptance": ["Create/initialize/reset/restore/dispose failures close resources deterministically"],
-      "evidence": ["r3.kernel-session-materialization.probe covers Created, Initialized, structural and identity preflight, injected allocation/preparation/factory/initial-state failures, reverse destruction and successful subsequent Session creation; reset, checkpoint and restore remain open", "r3.kernel-opening-boundary.probe covers execution-time frame cleanup after success and injected boundary failures"],
+      "evidence": ["r3.kernel-session-materialization.probe covers Created, Initialized, structural and identity preflight, injected allocation/preparation/factory/initial-state failures, reverse destruction and successful subsequent Session creation; reset, checkpoint and restore remain open", "r3.kernel-opening-boundary.probe and r3.kernel-step-transaction.probe cover execution-time frame, held-value and candidate cleanup after success and injected precommit failures"],
       "architecture_refs": ["06"]
     },
     {

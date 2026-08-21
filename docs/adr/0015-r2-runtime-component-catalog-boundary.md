@@ -39,7 +39,7 @@ R1 已交付 `AltitudePitchGuidanceKernel`。它从 committed rigid observation 
 
 ## Implementation status
 
-当前实现已交付两项真实 StateOwner、产品入口，以及 planning/proof/exact-link review。七个 RuntimeComponent 各自冻结并 exact-link package-specific typed RuntimeCellFactory；Image 为 factory 保存 runtime component、provider preparation/plan、state、input/output/writer、invocation/callsite、interval model、integration/transaction policy 与 evaluator history 的直接数字 handle。environment/aero query 使用授权 caller 的 `CallerLocal` typed return，不分配 result storage；FrozenInterval Closure 只生成一个 coordinator-owned held interval slot 和 writer。RigidBody/Mass state codec、stored-value codec、按 storage class 划分的确定性 extent 与 slot size/alignment/offset/reader/lifetime 也已闭合。link 阶段保持零调用。`R2-CAT-001`、`R2-PLAN-001`、`R2-PRF-001` 与 `R2-LINK-001` 已完成，仓库所有者于 2026-08-20 判定 G3 `Passed`。R3 Session 已实际调用 typed factory/codec，并按 Image region/DAG 执行 tick 0 projection 与 boundary science entries；`IntegrationHeld + HoldInterval` 输出在成功后深拷贝到 Session-local committed output。区间 RK4、transaction commit 和 terminal publication仍待后续任务。
+当前实现已交付两项真实 StateOwner、产品入口，以及 planning/proof/exact-link review。七个 RuntimeComponent 各自冻结并 exact-link package-specific typed RuntimeCellFactory；Image 为 factory 保存 runtime component、provider preparation/plan、state、input/output/writer、invocation/callsite、interval model、integration/transaction policy 与 evaluator history 的直接数字 handle。environment/aero query 使用授权 caller 的 `CallerLocal` typed return，不分配 result storage；FrozenInterval Closure 只生成一个 coordinator-owned held interval slot 和 writer。RigidBody/Mass state codec、stored-value codec、按 storage class 划分的确定性 extent 与 slot size/alignment/offset/reader/lifetime 也已闭合。link 阶段保持零调用。`R2-CAT-001`、`R2-PLAN-001`、`R2-PRF-001` 与 `R2-LINK-001` 已完成，仓库所有者于 2026-08-20 判定 G3 `Passed`。R3 Session 已实际调用 typed factory/codec；每个 Runtime Cell factory 只能查看 Image 精确声明且去重后的 preparation 依赖，未声明依赖在 placement 前 fail closed。Session 按 Image region/DAG 执行 tick 0 projection/boundary entries和两次 Continue，在窄 state/frame/candidate authority 下完成 Image-backed RK4、mass evolution、candidate validation 与 rigid/mass 原子提交。`IntegrationHeld + HoldInterval` 值始终属于当前 transaction，完成消费后随 CycleFrame 销毁。terminal evaluation/publication仍待后续任务。
 
 ## Executable evidence
 
@@ -52,7 +52,9 @@ R1 已交付 `AltitudePitchGuidanceKernel`。它从 committed rigid observation 
 - `tests/yyz_static_product_contracts.cpp`
 - `tests/kernel_session_materialization.cpp`
 - `tests/kernel_opening_boundary.cpp`
+- `tests/kernel_step_transaction.cpp`
 - `r2.compiler-runtime-component-catalog.probe`
 - `r2.yyz-static-product-contracts.probe`
 - `r3.kernel-session-materialization.probe`
 - `r3.kernel-opening-boundary.probe`
+- `r3.kernel-step-transaction.probe`

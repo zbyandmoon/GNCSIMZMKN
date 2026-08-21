@@ -50,7 +50,7 @@ owner 已决定在 R2 补齐 package-owned RigidBody/Mass StateOwner 静态合�
 
 ## Implementation status
 
-当前 complete API 已形成 deterministic descriptor、派生 proof 与 exact-entry Image review artifact，并保持 link 阶段零调用。每个 RuntimeComponent 的 package-specific typed RuntimeCellFactory、RigidBody/Mass state codec 与真实 stored-value codec 均以独立 identity、signature、call shape、C++ type witness 和 Image handle exact-link。已授权 environment/aero query 使用 `CallerLocal` route，没有 CycleFrame result slot 或 writer；FrozenInterval Closure 使用唯一 `HeldInterval` slot/writer，正式 closure output 与 held model 共用一个权威值。Image 还冻结 fixed-step RK4/step/numerical policy、workspace `None/0`、candidate invariant/projection、Continue/Terminal/Failure transaction sets，以及 fail-closed preparation lifecycle。仓库所有者于 2026-08-20 判定 G3 `Passed`。R3 Session 已沿数字 handle 恢复 typed entry/artifact，物化 Session-local prepared objects、Runtime Cells、committed/candidate stores 与窄 committed output，并在 bounded CycleFrame 上执行 tick 0 query、closure、projection 和 boundary component entries。`IntegrationHeld + HoldInterval` 值在 frame 内暂存并于边界成功后深拷贝，失败时不发布。Kernel 没有 model-id switch、signature 解析或默认数值策略。derivative、integrator、transaction branch 和 terminal evaluator 的实际执行仍待后续切片。
+当前 complete API 已形成 deterministic descriptor、派生 proof 与 exact-entry Image review artifact，并保持 link 阶段零调用。每个 RuntimeComponent 的 package-specific typed RuntimeCellFactory、RigidBody/Mass state codec 与真实 stored-value codec 均以独立 identity、signature、call shape、C++ type witness 和 Image handle exact-link。已授权 environment/aero query 使用 `CallerLocal` route，没有 CycleFrame result slot 或 writer；FrozenInterval Closure 使用唯一 `HeldInterval` slot/writer，正式 closure output 与 held model 共用一个权威值。Image 还冻结 fixed-step RK4/step/numerical policy、workspace `None/0`、candidate invariant/projection、Continue/Terminal/Failure transaction sets，以及 fail-closed preparation lifecycle。仓库所有者于 2026-08-20 判定 G3 `Passed`。R3 Session 已沿数字 handle 恢复 typed entry/artifact，物化 Session-local prepared objects、Runtime Cells 和 committed/candidate stores，并在 bounded CycleFrame 上执行 tick 0 boundary及两次 Continue。held 值仅由 transaction-local frame 保存；窄 IntegrationScope 读取精确授权的 committed state、frame slots、算法与数值 policy，执行四阶段 RK4并写入 rigid candidate，独立 interval evolution写入 mass candidate。提交前完成两项 candidate 验证与最后一致性检查，再以 no-fail swap 原子推进 epoch/tick。Kernel 没有 model-id switch、signature 解析或默认数值策略。terminal evaluator 与 terminal branch publication仍待后续切片。
 
 ## Executable evidence
 
@@ -68,7 +68,9 @@ owner 已决定在 R2 补齐 package-owned RigidBody/Mass StateOwner 静态合�
 - `tests/compiler_complete_yyz_plan.cpp`
 - `tests/kernel_session_materialization.cpp`
 - `tests/kernel_opening_boundary.cpp`
+- `tests/kernel_step_transaction.cpp`
 - `r2.compiler-static-plan.probe`
 - `r2.compiler-complete-yyz-plan.probe`
 - `r3.kernel-session-materialization.probe`
 - `r3.kernel-opening-boundary.probe`
+- `r3.kernel-step-transaction.probe`
