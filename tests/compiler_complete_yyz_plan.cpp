@@ -1181,10 +1181,10 @@ void verify_complete_ref_graph() {
                     gnc::contracts::HeldIntervalEndPolicy::
                         ReleaseAtTerminalSeal &&
                 terminal_branch.committed_state_preserved &&
-                !terminal_branch.model_commit &&
+                terminal_branch.model_commit &&
                 terminal_branch.observation_seal &&
                 terminal_branch.result_seal_after_observation &&
-                terminal_branch.epoch_delta == 0 &&
+                terminal_branch.epoch_delta == 1 &&
                 terminal_branch.tick_delta == 0 &&
                 failure_branch.branch ==
                     gnc::contracts::TransactionBranch::Failure &&

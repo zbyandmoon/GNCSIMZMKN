@@ -3766,8 +3766,10 @@ inline void lower_transactions(LoweringContext& context) {
             gnc::contracts::HeldIntervalEndPolicy::
                 ReleaseAtTerminalSeal;
         terminal_branch.committed_state_preserved = true;
+        terminal_branch.model_commit = true;
         terminal_branch.observation_seal = true;
         terminal_branch.result_seal_after_observation = true;
+        terminal_branch.epoch_delta = 1;
         TransactionBranchPlan failure_branch;
         failure_branch.branch =
             gnc::contracts::TransactionBranch::Failure;
@@ -6919,8 +6921,8 @@ namespace complete_plan_detail {
                     true,
                     gnc::contracts::TransactionFailureOwner::Unspecified,
                     gnc::contracts::TransactionFailureRoute::Unspecified,
-                    false, true, true,
-                    0, 0) &&
+                    true, true, true,
+                    1, 0) &&
                 branch_matches(
                     2U, gnc::contracts::TransactionBranch::Failure, {},
                     candidate_slots, {}, expected_held, {}, {},
