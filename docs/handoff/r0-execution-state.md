@@ -2,15 +2,15 @@
 
 - 更新日期：2026-08-21
 - 当前 gate：`R3`
-- 产品状态：R0 科学/性能基线、R1 模型生态与 R2 静态 Compiler 已闭合，仓库所有者于 2026-08-20 判定 G3 `Passed`。R2 descriptor revision 6 与 Image revision 3 冻结 REF-YYZ 的完整静态选择；`TransactionPlan` 独占 continue/terminal/failure 槽位处置语义。当前 R3 consumer 已沿冻结 Image 与显式 YYZ adapter 完成 `Created → Initialized`、Session-local stores、bounded `CycleFrame`、tick 0 opening boundary，以及两次完整 Continue StepTransaction。Image-backed fixed-step RK4、质量区间演化、rigid/mass candidate 验证和原子提交把同一 Session 从 `(epoch=0,tick=0)` 推进到 `(1,1)` 与 `(2,2)`；tick 2 commit 后停止，terminal evaluation/publication 仍未进入实现
+- 产品状态：R0 科学/性能基线、R1 模型生态与 R2 静态 Compiler 已闭合，仓库所有者于 2026-08-20 判定 G3 `Passed`。R2 descriptor revision 6 与 Image revision 3 冻结 REF-YYZ 的完整静态选择；`TransactionPlan` 独占 Continue/Terminal/Failure 槽位处置语义。当前 R3 consumer 已沿冻结 Image 与显式 YYZ adapter 完成 `Created → Initialized`、Session-local stores、bounded `CycleFrame`、最小 `StepJournal`、Image-backed committed history、ObservationSeal，以及两次 Continue 加一次 Terminal 的完整 StepTransaction。统一执行入口把同一 Session 从 `(epoch=0,tick=0)` 依次推进到 `(1,1)`、`(2,2)` 与 `(3,2)`；Terminal 保持刚体/质量状态字节，完成 tick 2 observation 与 mission result seal，随后进入 `Completed`
 - 当前分支：`codex/r2-local-continuation`
-- 本批次接续基线：精确 head `bd3f9016b697ecd8f3d28cd870f0673d4d8f0dd8`
+- 本批次接续基线：精确 head `3cf9d9bb6af5be14f79913e6a4d52ba36941097a`
 
 ## 当前治理
 
 2026-08-12 的机器角色授权已撤销。默认由一个实现智能体完成分析、实现、测试和文档同步；只有用户明确要求并行或子智能体时才委派。仓库所有者保留科学口径、公共时间/frame/ownership 语义、阶段门、发布和明显扩大范围的选择。
 
-阶段顺序固定为：R1 已交付 Definition、PreparedModel 和 Kernel 的无 Session 独立求值；R2 交付 MissionSource 到 proven/linked ExecutionPlan 的静态编译；R3 已交付正式 Session 初始化、opening boundary 和首个两区间原子推进切片，后续补齐 terminal evaluation/publication 与通用运行能力。公共 framework abstraction 仍需真实 consumer 支撑。
+阶段顺序固定为：R1 已交付 Definition、PreparedModel 和 Kernel 的无 Session 独立求值；R2 交付 MissionSource 到 proven/linked ExecutionPlan 的静态编译；R3 已交付正式 Session 初始化、opening boundary 和首个 terminal-capable REF-YYZ StepTransaction 切片，后续补齐通用调度、生命周期与运行诊断能力。公共 framework abstraction 仍需真实 consumer 支撑。
 
 当前规则以以下文件为准：
 
@@ -75,13 +75,16 @@
 - R3 Session 生产代码只依赖 Foundation 与 Contracts。`Created` 保存 immutable Image 和固定 materialization provider；初始化先完成 revision、handle 集合、extent membership、bounds/alignment/overlap、state/lifecycle 语义、materializer identity、精确 preparation 依赖与 type witness 预检，再按数字 lifecycle handle 调用三类 prepare 与七类 package factory。每个 factory 只能取得唯一且精确声明的 prepared artifact，未声明的合法 preparation 对其不可见并在 placement 前失败。`CommittedStateStore` 和 `TransactionCandidateStore` 从 initial codec 各自 clone 两份 state，`SessionRuntimeBindings` 独占 Runtime Cell。frame slot 延迟到首次写入时 placement-construct。Session 使用显式 construct/copy/replace/validate/destroy/no-fail swap 操作，不执行 byte copy、zero-fill 或领域类型恢复。YYZ 类型恢复与 `std::any_cast` 限定在 fixture/package adapter 实现。
 - 初始化预留全部 journal 后才开始 raw allocation/placement；分配、preparation、factory 或 initial-state 任一点失败都会逆序销毁并释放 extent，诊断 detail 使用静态存储。`r3.kernel-session-materialization.probe` 覆盖结构错误、等 size/alignment 异 type、wrong entry/role/codec、低内存注入、部分 placement 回收和下一 Session 成功。
 - bounded `CycleFrame` 保存 generation、sequence、presence、timing 与 quality header；输入 view 和 output writer 依据 Image callsite 做 exact authorization。首写构造、后续替换、frame close 逆序销毁并令旧 view 失效。两个 `IntegrationHeld` 值只存在于当前 transaction 的 frame-owned staging，由窄 `IntegrationScope` 在 RK4 和 candidate 生成期间读取，随后随 frame 销毁；committed output 与 checkpoint 均不保存 held 值。Runtime Cell 只读取其声明的 committed state block，IntegrationScope 只读取当前 integration group 的 committed state 与已授权 frame slots，跨 owner 读取在产品 kernel 调用前拒绝。
-- 首个 Continue executor 从 Image region/DAG、IntegrationScopePlan 和 TransactionPlan 派生固定顺序：committed projection与 boundary entries、FrozenInterval closure、四阶段 RK4、质量区间演化、candidate 验证、最后提交前检查、两个 state block 的 no-fail 原子交换、epoch/tick 推进和 frame close。两次提交匹配 `ORACLE-YYZ-MISSION-COMPOSITION-001` 的 tick 1/tick 2 rigid/mass 状态，最大绝对差 `1.7763568394002505e-15`。projection、中段 boundary、held closure/after-held、derivative/RK stage、mass evolution、两类 candidate validation、最后提交前、candidate rearm、错误 token、缺输入、过期 view、跨 owner 读取和未声明 preparation 故障均 fail closed；所有提交前故障保留完整 committed state、epoch/tick 且同一 Session 可重试。两份 Session 共享同一 Image/provider 时保持 state、runtime binding、candidate、held/frame 与故障注入隔离。
-- 普通 current-boundary output 与 held form 在 frame close 后销毁；tick 2 terminal evaluation/output publication仍未执行。CommandLedger/queues 移入 `R3-SCH-001`/`R3-TXN-001`，等待首次真实 schedule cutoff consumer。
+- 统一 `execute_step()` 从 Image region/DAG、IntegrationScopePlan 和 TransactionPlan 派生权威分支。tick 0 与 tick 1 依次执行 committed projection、boundary entries、FrozenInterval closure、四阶段 RK4、质量区间演化、candidate 验证、history/ObservationSeal staging、最终预检和 no-fail 原子提交，形成 `(0,0) → (1,1) → (2,2)`。tick 2 执行完整 boundary DAG；evaluator 从唯一授权的三份 chronological rigid/mass committed samples 生成正式 terminal result，Terminal instant ModelCommit 保持两个 state object 的字节并把 block/global epoch 推进到 3，tick 保持 2，随后依次提交 tick 2 ObservationSeal 与 result seal。Session 进入 `Completed`，额外 step 返回 lifecycle error。
+- `r3.kernel-step-transaction.probe` 的终端结果匹配 `ORACLE-YYZ-MISSION-COMPOSITION-001`：`Completed`、initial/final tick `0/2`、`0.2 s`、`downrange-goal`、priority `200`、3 份样本、downrange `21.981798901675346 m`、remaining/consumed mass `99.9/0.1 kg`、terminal speed `109.84183032040381 m/s`；本探针全部数值断言的最大绝对差为 `1.4210854715202004e-14`。environment/aero query 的完整运行调用数从各 3 次增加到各 9 次后，committed states、sealed outputs、terminal result、termination decision 与 epoch/tick 保持逐字段相同。
+- Session-owned history 与 sealed value 使用 Image codec/materializer 深拷贝，frame close 后继续有效；evaluator 只能读取其 callsite 精确绑定的 history handle、sample 与 member。两份 Session 共享同一 Image/provider 时，state、runtime binding、candidate、held/frame、history、seal 与故障注入保持隔离。`IntegrationHeld + HoldInterval` 始终留在当前 transaction，未进入 committed output、history、terminal result 或未来 checkpoint。
+- history copy/shape/type/order、projection、中段 boundary、held closure/after-held、derivative/RK stage、mass evolution、两类 candidate validation、candidate completeness/rearm、错误 writer/candidate token、缺输入、过期 view、跨 owner state/history、output seal clone/validation、terminal evaluator/output 和 final-precommit 故障均 fail closed。执行期故障保留最近一次成功的完整 committed state、state block epoch、global epoch/tick、history 与 seal，清理当前 frame/held/candidate/staging，并进入 `Failed`；同一 Session 拒绝重试，独立新 Session 可以完成全程。
+- 当前 sealed storage 只保留最新 boundary 与完整 terminal result。CommandLedger/queues 留在 `R3-SCH-001`，等待首次真实 schedule cutoff consumer；reset/checkpoint/restore、完整 RunId/RunBinding、Diagnostic/PolicyDecision/RunOutcome 继续由 `R3-LIF-001` 与 `R3-DIA-001` 闭合。
 
 ## 后续阶段边界
 
-1. `R3-STR-001`、`R3-FRM-001`、`R3-TXN-001` 与 `R3-CON-001` 进入 `review`；`R3-LIF-001` 保持 `ready`，reset/checkpoint/restore 仍待后续切片。`R3-SCH-001` 保持 `planned`，R4 及后续任务继续锁定。
-2. 下一切片应接入 tick 2 terminal evaluator、terminal branch seal/publication 与 committed-history consumer，并继续保持 transaction-local held 生命周期。CommandLedger/queues 随首次 schedule cutoff consumer进入 SCH/TXN；通用多 scope、多 transaction scheduler等待对应真实 consumer。
+1. `R3-STR-001`、`R3-FRM-001`、`R3-TXN-001` 与 `R3-CON-001` 进入 `review`；`R3-LIF-001` 保持 `ready`，reset/checkpoint/restore 与完整 RunId/RunBinding 仍待后续切片。`R3-SCH-001`、`R3-DIA-001` 与 `R3-YYZ-001` 保持 `planned`，R4～R8 继续锁定。
+2. 下一切片应由 backlog 中进入 `ready` 的工作决定。当前开放项包括 CommandLedger/queues 与 event/cancellation 通用调度、多 IntegrationScope/多 transaction scheduler、reset/checkpoint/restore、完整 Diagnostic/PolicyDecision/RunOutcome，以及 00A 全产品 YYZ runtime；当前 terminal result seal 不提前建立 R4 Field、Artifact、Dataset 或 sink。
 3. 当前 Image 限定于 10 Hz、0.2 s、两区间 REF-YYZ qualification graph，不覆盖 00A/Reference A 的 30 s、100/10/20 Hz 全产品图。DecisionAuthority、entity activation/topology、intervention/fault routing、Observation/Encoding、SourceFrontend 多格式和产品级 CAVH command 仍按各自真实 consumer 推进。
 4. JSON/YAML/INI、多端 adapter、manager、runtime registry、serializer、StateFragment、Artifact、Workflow 与前端保持关闭。
 
