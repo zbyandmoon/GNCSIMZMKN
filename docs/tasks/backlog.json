@@ -537,7 +537,7 @@
       "id": "R3-STR-001",
       "stage": "R3",
       "title": "Implement Session-local state and runtime stores with compiled handles",
-      "status": "review",
+      "status": "done",
       "priority": "P0",
       "size": "XL",
       "owner_role": "runtime_numerics_lead",
@@ -552,7 +552,7 @@
       "id": "R3-FRM-001",
       "stage": "R3",
       "title": "Implement bounded CycleFrame and typed input views",
-      "status": "review",
+      "status": "done",
       "priority": "P0",
       "size": "L",
       "owner_role": "runtime_numerics_lead",
@@ -575,7 +575,7 @@
       "depends_on": ["R3-STR-001", "R3-FRM-001"],
       "deliverables": ["Instant/interval replacements", "TransactionCandidateStore branch execution", "validate/commit/rollback", "transactional command disposition at the first cutoff consumer", "epoch rules"],
       "acceptance": ["Every injected pre-commit failure leaves the committed epoch unchanged"],
-      "evidence": ["r3.kernel-step-transaction.probe executes one Image-derived authoritative path through Continue, Continue and Terminal, with a minimum StepJournal for every branch; it atomically advances (epoch,tick) from (0,0) through (1,1), (2,2) and (3,2), keeps terminal rigid/mass bytes unchanged, synchronizes both state-block epochs at 3, and seals tick 0/1/2 observations before the terminal result", "The same probe injects history clone/authorization/shape/type/order, projection, mid-boundary, held-closure/after-held, derivative/RK-stage, mass-evolution, rigid/mass validation, candidate completeness/rearm, wrong writer/candidate token, missing input, stale view, cross-owner state/history, output seal clone/validation, terminal evaluator/output and final-precommit failures at zero, nonzero and terminal epochs; every failure preserves the last committed state/history/seal and epoch/tick, destroys transaction staging, enters Failed, rejects same-Session retry, and permits a fresh Session to complete", "Terminal success enters Completed and rejects another step; transactional command disposition remains with the first real schedule-cutoff consumer in R3-SCH-001, with no command queue or ledger prebuilt in this slice"],
+      "evidence": ["r3.kernel-step-transaction.probe executes one Image-derived authoritative path through Continue, Continue and Terminal, with StepJournal and StepOutcome for every branch; it atomically advances (epoch,tick) from (0,0) through (1,1), (2,2) and (3,2), keeps terminal rigid/mass bytes unchanged, synchronizes both state-block epochs at 3, and seals tick 0/1/2 observations before the terminal result", "The same probe injects history clone/authorization/shape/type/order, projection, mid-boundary, held-closure/after-held, derivative/RK-stage, mass-evolution, rigid/mass validation, candidate completeness/rearm, wrong writer/candidate token, missing input, stale view, cross-owner state/history, output seal clone/validation, terminal evaluator/output and final-precommit failures at zero, nonzero and terminal epochs; every failure preserves the last committed state/history/seal and epoch/tick, destroys transaction staging, freezes one primary diagnostic and Failed RunOutcome, rejects same-Session retry, and permits a fresh Session to complete", "Terminal success enters Completed and freezes a Valid RunOutcome. Command cutoff and committed application receipts remain with R3-SCH-001; this slice adds no command queue or ledger"],
       "architecture_refs": ["14 §8–§13"]
     },
     {
@@ -597,22 +597,22 @@
       "id": "R3-CON-001",
       "stage": "R3",
       "title": "Implement IntegrationScopePlan and FrozenInterval closure",
-      "status": "review",
+      "status": "done",
       "priority": "P0",
       "size": "XL",
       "owner_role": "runtime_numerics_lead",
       "assignee": null,
-      "depends_on": ["R3-TXN-001", "R1-FND-001"],
+      "depends_on": ["R3-STR-001", "R3-FRM-001", "R1-FND-001"],
       "deliverables": ["RK4 scope executor", "pure closure handles", "candidate-state views"],
       "acceptance": ["Query call count cannot change physical result or observation"],
-      "evidence": ["r3.kernel-step-transaction.probe executes the Image fixed-step policy through four RK4 derivative stages per Continue interval, reads the FrozenInterval held form only through a narrow IntegrationScope, stages rigid/mass candidates through scoped writers, and matches ORACLE-YYZ-MISSION-COMPOSITION-001 through the terminal result with maximum observed absolute difference 1.4210854715202004e-14", "Two complete runs call each environment/aero PureQuery 3 times and 9 times respectively, discarding 6 extra evaluations; rigid/mass committed states, sealed boundary outputs, terminal result, termination decision and epoch/tick remain exactly equal. Derivative-stage rejection, held lifetime, missing authorized inputs, Runtime Cell and IntegrationScope cross-owner reads, invalid candidates and two-Session isolation remain directly covered"],
+      "evidence": ["r3.kernel-step-transaction.probe executes the Image fixed-step policy through four RK4 derivative stages per Continue interval, reads the FrozenInterval held form only through a narrow IntegrationScope, stages rigid/mass candidates through scoped writers, and matches ORACLE-YYZ-MISSION-COMPOSITION-001 through the terminal result with maximum observed absolute difference 1.4210854715202004e-14", "Two complete runs call each environment/aero PureQuery 3 times and 9 times respectively, discarding 6 extra evaluations. The package-aware qualification snapshot reads every current sealed CycleFrame payload and the terminal result through its concrete C++ type; exact fields, nested SampleContext/quality, scientific values, committed rigid/mass state, termination and epoch/tick all remain equal. Derivative-stage rejection, held lifetime, missing authorized inputs, cross-owner reads, invalid candidates and two-Session isolation remain directly covered"],
       "architecture_refs": ["03 §15", "14 §14–§18"]
     },
     {
       "id": "R3-LIF-001",
       "stage": "R3",
       "title": "Implement Session lifecycle, resources, reset, checkpoint and restore core",
-      "status": "ready",
+      "status": "review",
       "priority": "P0",
       "size": "XL",
       "owner_role": "runtime_numerics_lead",
@@ -620,14 +620,14 @@
       "depends_on": ["R2-GATE-001"],
       "deliverables": ["Lifecycle state machine", "resource journals", "RunBinding and RunId rules"],
       "acceptance": ["Create/initialize/reset/restore/dispose failures close resources deterministically"],
-      "evidence": ["r3.kernel-session-materialization.probe covers Created, Initialized, structural and identity preflight, injected allocation/preparation/factory/initial-state failures, reverse destruction and successful subsequent Session creation", "r3.kernel-step-transaction.probe covers Completed after terminal success, Failed after every execution-time precommit failure, rejection of further execution in either terminal lifecycle state, preservation of the last successful commit/history/seal, and successful independent Session creation; reset, checkpoint, restore and full RunId/RunBinding lifecycle remain open"],
+      "evidence": ["r3.kernel-session-materialization.probe covers Created with no active RunId, exact caller-owned RunId/RunBinding validation, InitializationCommit at run_sequence 0/epoch 0/tick 0, unified Failed initialization outcomes, injected allocation/preparation/factory/initial-state failures, reverse destruction and successful subsequent Session creation", "r3.kernel-step-transaction.probe covers manual and run_to_terminal paths through Completed, immutable Failed/Completed RunOutcome, rejection of further execution without primary-diagnostic replacement, preservation of the last successful commit/history/seal, distinct RunId isolation and successful fresh-Session completion. Reset, checkpoint, restore and complete RunResource open/finalize hooks remain open"],
       "architecture_refs": ["06"]
     },
     {
       "id": "R3-DIA-001",
       "stage": "R3",
       "title": "Implement runtime Diagnostic, PolicyDecision and Outcome path",
-      "status": "planned",
+      "status": "review",
       "priority": "P0",
       "size": "L",
       "owner_role": "runtime_numerics_lead",
@@ -635,7 +635,7 @@
       "depends_on": ["R1-CTR-001", "R3-TXN-001", "R3-LIF-001"],
       "deliverables": ["Diagnostic pipeline", "Step/Run outcomes", "policy fixtures"],
       "acceptance": ["All public failures carry stable code, source/subject, cause and validity effect"],
-      "evidence": ["Runtime failure taxonomy suite"],
+      "evidence": ["r3.kernel-session-materialization.probe and r3.kernel-step-transaction.probe cover the narrow in-process runtime path: stable initialization/schedule/authorization/history/seal/candidate/invocation/allocation/internal mappings, stage/subject/RunId/tick/base-epoch/cause/validity facts, fixed FailOperation policy, StepOutcome and immutable Completed/Failed RunOutcome. The complete DiagnosticRecord enrichment, configurable policy, renderer/store and durable artifact path remain open"],
       "architecture_refs": ["07"]
     },
     {
@@ -650,7 +650,7 @@
       "depends_on": ["R3-CON-001", "R3-LIF-001", "R3-DIA-001", "R1-YYZ-001", "R2-LINK-001"],
       "deliverables": ["End-to-end YYZ run", "difference report", "terminal outcome"],
       "acceptance": ["All differences trace to approved model, time, numerical or defect decisions"],
-      "evidence": ["YYZ M1 evidence bundle"],
+      "evidence": ["r3.kernel-step-transaction.probe now drives the frozen REF-YYZ Image through caller-bound InitializationCommit, Continue, Continue, Terminal, empty finalization and immutable Completed RunOutcome while matching ORACLE-YYZ-MISSION-COMPOSITION-001. Remaining R3-SCH/R3-LIF/R3-DIA dependencies keep the full YYZ task planned"],
       "architecture_refs": ["00A", "15 §2–§9"]
     },
     {
