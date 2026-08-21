@@ -39,7 +39,7 @@ owner 已决定在 R2 补齐 package-owned RigidBody/Mass StateOwner 静态合�
 - `QueryExecutionSpecInputs`/`ClosureExecutionSpecInputs` 是正式 `QueryPlan`/`ClosurePlan` 的编译输入；R2 plan/link 增加 authorized invocation caller、稳定 slot/layout identity、linked entry、IntegrationScope 与 transaction facts。
 - `PlanProofRecord`/`PlanProofIndex` 与 exact linker 在完整静态图上形成；linker 只解析已冻结 identity/layout/authorization，不执行 entry 或物化 runtime object。
 - 未闭合 RuntimeComponent source继续 fail closed。完整合法 RuntimeComponent source通过新的完整计划路径生成 Descriptor/Image。
-- `PreparedModel`、Bound handle、workspace allocation、RuntimeInstance物化与 Session均留在 R3。
+- `PreparedModel`、Bound handle、workspace allocation、RuntimeInstance物化与 Session均归属 R3。
 
 ## Alternatives considered
 
@@ -50,7 +50,7 @@ owner 已决定在 R2 补齐 package-owned RigidBody/Mass StateOwner 静态合�
 
 ## Implementation status
 
-当前 complete API 已形成 deterministic descriptor、派生 proof 与 exact-entry Image review artifact，并保持 link 阶段零调用。每个 RuntimeComponent 的 package-specific typed RuntimeCellFactory、RigidBody/Mass state codec 与真实 stored-value codec 均以独立 identity、signature、call shape、C++ type witness 和 Image handle exact-link。已授权 environment/aero query 使用 `CallerLocal` route，没有 CycleFrame result slot 或 writer；FrozenInterval Closure 使用唯一 `HeldInterval` slot/writer，正式 closure output 与 held model 共用一个权威值。Image 还冻结 fixed-step RK4/step/numerical policy、workspace `None/0`、candidate invariant/projection、Continue/Terminal/Failure transaction sets，以及 fail-closed preparation lifecycle。R3 只需沿数字 handle 恢复已选 entry 和 artifact；model-id switch、signature 解析、默认数值策略与 telemetry authoritative flow 均不参与依赖发现。实际调用与 Session 对象物化在 G3 通过后开展。
+当前 complete API 已形成 deterministic descriptor、派生 proof 与 exact-entry Image review artifact，并保持 link 阶段零调用。每个 RuntimeComponent 的 package-specific typed RuntimeCellFactory、RigidBody/Mass state codec 与真实 stored-value codec 均以独立 identity、signature、call shape、C++ type witness 和 Image handle exact-link。已授权 environment/aero query 使用 `CallerLocal` route，没有 CycleFrame result slot 或 writer；FrozenInterval Closure 使用唯一 `HeldInterval` slot/writer，正式 closure output 与 held model 共用一个权威值。Image 还冻结 fixed-step RK4/step/numerical policy、workspace `None/0`、candidate invariant/projection、Continue/Terminal/Failure transaction sets，以及 fail-closed preparation lifecycle。仓库所有者于 2026-08-20 判定 G3 `Passed`。R3 Session 已沿数字 handle 恢复 typed entry/artifact，物化 Session-local prepared objects、Runtime Cells、committed/candidate stores 与窄 committed output，并在 bounded CycleFrame 上执行 tick 0 query、closure、projection 和 boundary component entries。`IntegrationHeld + HoldInterval` 值在 frame 内暂存并于边界成功后深拷贝，失败时不发布。Kernel 没有 model-id switch、signature 解析或默认数值策略。derivative、integrator、transaction branch 和 terminal evaluator 的实际执行仍待后续切片。
 
 ## Executable evidence
 
@@ -66,5 +66,9 @@ owner 已决定在 R2 补齐 package-owned RigidBody/Mass StateOwner 静态合�
 - `packages/yyz-rigid-step/include/yyz/rigid_step.hpp`
 - `tests/compiler_static_plan.cpp`
 - `tests/compiler_complete_yyz_plan.cpp`
+- `tests/kernel_session_materialization.cpp`
+- `tests/kernel_opening_boundary.cpp`
 - `r2.compiler-static-plan.probe`
 - `r2.compiler-complete-yyz-plan.probe`
+- `r3.kernel-session-materialization.probe`
+- `r3.kernel-opening-boundary.probe`

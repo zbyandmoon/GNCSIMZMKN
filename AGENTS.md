@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本仓库是 GNCZMKN 目标架构的全新实现。G0/G1/G2/G3 已通过，当前处于 R3；产品代码已完成 R1 Foundation/Contracts/YYZ/CAVH 模型切片、R2 静态 Compiler，并进入 Image-backed Session 初始化。蓝图描述目标语义，已交付能力只以当前源码、fixture、oracle 和自动测试为准。
+本仓库是 GNCZMKN 目标架构的全新实现。G0/G1/G2/G3 已通过，当前处于 R3；产品代码已完成 R1 Foundation/Contracts/YYZ/CAVH 模型切片、R2 静态 Compiler、Image-backed Session 初始化与 tick 0 opening boundary。蓝图描述目标语义，已交付能力只以当前源码、fixture、oracle 和自动测试为准。
 
 ## 每次开始
 
@@ -27,7 +27,7 @@
 ## 当前阶段
 
 - 当前 gate 为 R3。
-- R2 已通过 G3；当前已交付冻结 Image 到 Session `Created → Initialized` 的首个纵向切片，尚无 cycle execution、RK4、transaction commit 或 terminal publication。
+- R2 已通过 G3；当前已交付冻结 Image 到 Session `Created → Initialized`、Session-local stores、bounded CycleFrame 与 tick 0 opening boundary。区间推进、RK4、transaction commit 和 terminal publication仍未交付。
 - 仅 backlog 中进入 `ready` 的 R3 工作已解锁；R4～R8 保持锁定，直到对应 gate 通过。
 - 文档中的 `V1` 表示目标范围，不代表当前实现状态。
 

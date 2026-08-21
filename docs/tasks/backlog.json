@@ -1,7 +1,7 @@
 {
   "schema_version": "gnczmkn.task-backlog/1",
   "current_gate": "R3",
-  "updated_at": "2026-08-20",
+  "updated_at": "2026-08-21",
   "status_values": ["planned", "ready", "in_progress", "blocked", "review", "done"],
   "tasks": [
     {
@@ -536,31 +536,31 @@
     {
       "id": "R3-STR-001",
       "stage": "R3",
-      "title": "Implement state, output and control stores with compiled handles",
-      "status": "ready",
+      "title": "Implement Session-local state and runtime stores with compiled handles",
+      "status": "done",
       "priority": "P0",
       "size": "XL",
       "owner_role": "runtime_numerics_lead",
       "assignee": null,
       "depends_on": ["R2-GATE-001"],
-      "deliverables": ["CommittedStateStore", "OutputStore", "CommandLedger/queues", "codec entries"],
-      "acceptance": ["Each mutable block has one owner and Session-local storage"],
-      "evidence": ["r3.kernel-session-materialization.probe allocates exact Image storage extents and safely constructs, clones, validates, replaces and destroys the current state/output objects; control stores and transaction visibility remain open"],
+      "deliverables": ["CommittedStateStore", "TransactionCandidateStore", "IntegrationHeld-only CommittedOutputStore", "SessionRuntimeBindings", "compiled state/slot handles and codec identities"],
+      "acceptance": ["Each mutable state/runtime block has one owner, exact compiled identity and Session-local storage", "Independent Sessions sharing one Image and provider cannot observe or mutate each other's stores"],
+      "evidence": ["r3.kernel-session-materialization.probe validates exact Image extents, state/slot codecs, typed materializer identities, strong-exception-safe construction and reverse destruction", "r3.kernel-opening-boundary.probe proves committed/candidate/runtime/held-output isolation across two Sessions, deep-copies only IntegrationHeld values after success, and leaves committed state epoch/tick unchanged"],
       "architecture_refs": ["12 §9", "14 §3"]
     },
     {
       "id": "R3-FRM-001",
       "stage": "R3",
       "title": "Implement bounded CycleFrame and typed input views",
-      "status": "planned",
+      "status": "review",
       "priority": "P0",
       "size": "L",
       "owner_role": "runtime_numerics_lead",
       "assignee": null,
       "depends_on": ["R3-STR-001"],
-      "deliverables": ["Compiled slots", "bounded arena", "view lifetime guards"],
-      "acceptance": ["No frame view survives a transaction or enters async evidence sinks"],
-      "evidence": ["Lifetime and capacity tests"],
+      "deliverables": ["Compiled slots", "bounded CycleFrame", "typed input/output authorization", "view generation and lifetime guards"],
+      "acceptance": ["No frame view remains valid after frame close", "Only the exact compiled writer token can publish each slot and missing required input fails closed"],
+      "evidence": ["r3.kernel-opening-boundary.probe covers bounded first-write construction, reverse close, stale-view rejection, absent input, wrong writer token, deterministic order and failure cleanup"],
       "architecture_refs": ["14 §4"]
     },
     {
@@ -573,7 +573,7 @@
       "owner_role": "runtime_numerics_lead",
       "assignee": null,
       "depends_on": ["R3-STR-001", "R3-FRM-001"],
-      "deliverables": ["Instant/interval replacements", "validate/commit/rollback", "epoch rules"],
+      "deliverables": ["Instant/interval replacements", "TransactionCandidateStore branch execution", "validate/commit/rollback", "transactional command disposition at the first cutoff consumer", "epoch rules"],
       "acceptance": ["Every injected pre-commit failure leaves the committed epoch unchanged"],
       "evidence": ["Failure-point transaction matrix"],
       "architecture_refs": ["14 §8–§13"]
@@ -588,7 +588,7 @@
       "owner_role": "runtime_numerics_lead",
       "assignee": null,
       "depends_on": ["R3-FRM-001", "R2-PLAN-001"],
-      "deliverables": ["Region executor", "schedule cutoff", "safe-point command/event handling"],
+      "deliverables": ["Region executor", "schedule cutoff", "cutoff-owned CommandLedger/queues", "safe-point command/event handling"],
       "acceptance": ["Execution order derives only from the plan and cancellation has one outcome"],
       "evidence": ["Schedule and cancellation suite"],
       "architecture_refs": ["06", "14 §5–§7"]
@@ -620,7 +620,7 @@
       "depends_on": ["R2-GATE-001"],
       "deliverables": ["Lifecycle state machine", "resource journals", "RunBinding and RunId rules"],
       "acceptance": ["Create/initialize/reset/restore/dispose failures close resources deterministically"],
-      "evidence": ["r3.kernel-session-materialization.probe covers Created, Initialized, preparation/factory/initial-state failure rollback, reverse destruction and successful subsequent Session creation; reset, checkpoint, restore and execution-time resources remain open"],
+      "evidence": ["r3.kernel-session-materialization.probe covers Created, Initialized, structural and identity preflight, injected allocation/preparation/factory/initial-state failures, reverse destruction and successful subsequent Session creation; reset, checkpoint and restore remain open", "r3.kernel-opening-boundary.probe covers execution-time frame cleanup after success and injected boundary failures"],
       "architecture_refs": ["06"]
     },
     {

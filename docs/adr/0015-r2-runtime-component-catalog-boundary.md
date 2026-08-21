@@ -29,7 +29,7 @@ R1 已交付 `AltitudePitchGuidanceKernel`。它从 committed rigid observation 
 - `R2-PLAN-001`、`R2-PRF-001`、`R2-LINK-001` 在完整真实 YYZ graph 上连续推进；局部或未闭合图不发布 Descriptor/Image。
 - sampled output contract 原样锁定现有被 controller 消费的 `AltitudePitchGuidanceOutput`；本次闭合图不改写其中 measured/error/saturation 字段的既有产品语义，也不执行新的 command/telemetry contract 拆分。
 - state schema、initial builder、projection、derivative 与 interval candidate 只随真实 RigidBody/Mass owner 和完整静态图进入公共 descriptor。
-- Runtime scheduler、Runtime Cell 实例、Session、CommittedStateStore、CycleFrame、StepTransaction 执行和 serializer 保持未实现。
+- Runtime scheduler、Runtime Cell 实例、Session、CommittedStateStore、CycleFrame 与 StepTransaction 执行归属 R3；serializer 留待出现真实持久化 consumer。
 
 ## Alternatives considered
 
@@ -39,7 +39,7 @@ R1 已交付 `AltitudePitchGuidanceKernel`。它从 committed rigid observation 
 
 ## Implementation status
 
-当前实现已交付两项真实 StateOwner、产品入口，以及 planning/proof/exact-link review。七个 RuntimeComponent 各自冻结并 exact-link package-specific typed RuntimeCellFactory；Image 为 factory 保存 runtime component、provider preparation/plan、state、input/output/writer、invocation/callsite、interval model、integration/transaction policy 与 evaluator history 的直接数字 handle。environment/aero query 使用授权 caller 的 `CallerLocal` typed return，不分配 result storage；FrozenInterval Closure 只生成一个 coordinator-owned held interval slot 和 writer。RigidBody/Mass state codec、stored-value codec、按 storage class 划分的确定性 extent 与 slot size/alignment/offset/reader/lifetime 也已闭合。link 阶段保持零调用。`R2-CAT-001` 已完成，`R2-PLAN-001`、`R2-PRF-001` 与 `R2-LINK-001` 均进入 owner review；G3 仍为 `planned`。实际 factory/codec/science entry 调用、Session-local RuntimeCell 与执行属于 R3。
+当前实现已交付两项真实 StateOwner、产品入口，以及 planning/proof/exact-link review。七个 RuntimeComponent 各自冻结并 exact-link package-specific typed RuntimeCellFactory；Image 为 factory 保存 runtime component、provider preparation/plan、state、input/output/writer、invocation/callsite、interval model、integration/transaction policy 与 evaluator history 的直接数字 handle。environment/aero query 使用授权 caller 的 `CallerLocal` typed return，不分配 result storage；FrozenInterval Closure 只生成一个 coordinator-owned held interval slot 和 writer。RigidBody/Mass state codec、stored-value codec、按 storage class 划分的确定性 extent 与 slot size/alignment/offset/reader/lifetime 也已闭合。link 阶段保持零调用。`R2-CAT-001`、`R2-PLAN-001`、`R2-PRF-001` 与 `R2-LINK-001` 已完成，仓库所有者于 2026-08-20 判定 G3 `Passed`。R3 Session 已实际调用 typed factory/codec，并按 Image region/DAG 执行 tick 0 projection 与 boundary science entries；`IntegrationHeld + HoldInterval` 输出在成功后深拷贝到 Session-local committed output。区间 RK4、transaction commit 和 terminal publication仍待后续任务。
 
 ## Executable evidence
 
@@ -50,5 +50,9 @@ R1 已交付 `AltitudePitchGuidanceKernel`。它从 committed rigid observation 
 - `packages/yyz-rigid-step/src/mass_commit.cpp`
 - `tests/compiler_runtime_component_catalog.cpp`
 - `tests/yyz_static_product_contracts.cpp`
+- `tests/kernel_session_materialization.cpp`
+- `tests/kernel_opening_boundary.cpp`
 - `r2.compiler-runtime-component-catalog.probe`
 - `r2.yyz-static-product-contracts.probe`
+- `r3.kernel-session-materialization.probe`
+- `r3.kernel-opening-boundary.probe`
