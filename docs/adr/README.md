@@ -25,3 +25,4 @@ ADR 记录已经收窄到实现层的关键选择，并连接需求、架构分�
 - [0015 R2 stateless sampled RuntimeComponent Catalog boundary](0015-r2-runtime-component-catalog-boundary.md)
 - [0016 R2 portable query and closure execution-input groundwork](0016-r2-portable-query-closure-specs.md)
 - [0017 R3 in-process run identity, initialization commit and outcomes](0017-r3-in-process-run-lifecycle-outcomes.md)
+- [0018 R3 completed-run reset, outcome retention and explicit dispose](0018-r3-completed-run-reset-outcome-retention-and-explicit-dispose.md)

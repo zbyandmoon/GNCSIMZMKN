@@ -620,7 +620,7 @@
       "depends_on": ["R2-GATE-001"],
       "deliverables": ["Lifecycle state machine", "resource journals", "RunBinding and RunId rules"],
       "acceptance": ["Create/initialize/reset/restore/dispose failures close resources deterministically"],
-      "evidence": ["r3.kernel-session-materialization.probe covers Created with no active RunId, exact caller-owned RunId/RunBinding validation, InitializationCommit at run_sequence 0/epoch 0/tick 0, unified Failed initialization outcomes, injected allocation/preparation/factory/initial-state failures, reverse destruction and successful subsequent Session creation", "r3.kernel-step-transaction.probe covers manual and run_to_terminal paths through Completed, immutable Failed/Completed RunOutcome, rejection of further execution without primary-diagnostic replacement, preservation of the last successful commit/history/seal, distinct RunId isolation and successful fresh-Session completion. Reset, checkpoint, restore and complete RunResource open/finalize hooks remain open"],
+      "evidence": ["r3.kernel-session-materialization.probe covers Created with no active RunId, exact caller-owned RunId/RunBinding validation, InitializationCommit at run_sequence 0/epoch 0/tick 0, unified Failed initialization outcomes, injected allocation/preparation/factory/initial-state failures, reverse destruction and successful subsequent Session creation", "r3.kernel-step-transaction.probe executes sequence 0, 1 and 2 in one Session. Completed-only ResetCommit validates a caller-owned Session-local unique RunId and exact binding, increments sequence/epoch once, restores tick 0 initial state, clears history/seal/result/journal/step count, reuses Image/provider/prepared/runtime bindings, and preserves stable historical RunOutcome pointers while every run follows Continue, Continue, Terminal", "reset request, initial rebuild, state clone/replace/validation, outcome/history allocation and final-precheck injections preserve the old committed sequence/state/epoch/tick/history/seal/outcome and freeze a Failed Unknown Reset attempt without post-failure allocation; a fresh Session still completes", "explicit dispose is covered from Created, Completed, initialization Failed and execution Failed, releases all materialized counts with one reverse cleanup, and retains Image, last committed RunId and frozen outcome queries until Session destruction. Checkpoint, branch restore, active-run truncating reset and complete RunResource open/finalize hooks remain open"],
       "architecture_refs": ["06"]
     },
     {
@@ -635,7 +635,7 @@
       "depends_on": ["R1-CTR-001", "R3-TXN-001", "R3-LIF-001"],
       "deliverables": ["Diagnostic pipeline", "Step/Run outcomes", "policy fixtures"],
       "acceptance": ["All public failures carry stable code, source/subject, cause and validity effect"],
-      "evidence": ["r3.kernel-session-materialization.probe and r3.kernel-step-transaction.probe cover the narrow in-process runtime path: stable initialization/schedule/authorization/history/seal/candidate/invocation/allocation/internal mappings, stage/subject/RunId/tick/base-epoch/cause/validity facts, fixed FailOperation policy, StepOutcome and immutable Completed/Failed RunOutcome. The complete DiagnosticRecord enrichment, configurable policy, renderer/store and durable artifact path remain open"],
+      "evidence": ["r3.kernel-session-materialization.probe and r3.kernel-step-transaction.probe cover the narrow in-process runtime path: stable initialization/reset/schedule/authorization/history/seal/candidate/invocation/allocation/internal mappings, stage/subject/RunId/tick/base-epoch/cause/validity facts, fixed FailOperation policy, StepOutcome, ResetOutcome, general Initialize/Reset run-start facts, immutable Completed/Failed RunOutcome and stable sequence queries. The complete DiagnosticRecord enrichment, configurable policy, renderer/store and durable artifact path remain open"],
       "architecture_refs": ["07"]
     },
     {
@@ -650,7 +650,7 @@
       "depends_on": ["R3-CON-001", "R3-LIF-001", "R3-DIA-001", "R1-YYZ-001", "R2-LINK-001"],
       "deliverables": ["End-to-end YYZ run", "difference report", "terminal outcome"],
       "acceptance": ["All differences trace to approved model, time, numerical or defect decisions"],
-      "evidence": ["r3.kernel-step-transaction.probe now drives the frozen REF-YYZ Image through caller-bound InitializationCommit, Continue, Continue, Terminal, empty finalization and immutable Completed RunOutcome while matching ORACLE-YYZ-MISSION-COMPOSITION-001. Remaining R3-SCH/R3-LIF/R3-DIA dependencies keep the full YYZ task planned"],
+      "evidence": ["r3.kernel-step-transaction.probe drives the frozen REF-YYZ Image through caller-bound InitializationCommit and two Completed-run ResetCommits; sequence 0, 1 and 2 each follow Continue, Continue, Terminal, empty finalization and immutable Completed RunOutcome while exact science/sealed payload/result replay matches ORACLE-YYZ-MISSION-COMPOSITION-001. Remaining R3-SCH/R3-LIF/R3-DIA dependencies keep the full YYZ task planned"],
       "architecture_refs": ["00A", "15 §2–§9"]
     },
     {

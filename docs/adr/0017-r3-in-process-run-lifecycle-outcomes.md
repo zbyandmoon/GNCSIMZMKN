@@ -5,6 +5,7 @@
 - Owner: Repository owner
 - Related tasks: R3-LIF-001、R3-DIA-001、R3-TXN-001、R3-YYZ-001
 - Architecture references: 06 §3、§7、§19，07 §3、§6～§7，14 §5、§7
+- Extended by: ADR-0018 completed-run reset, outcome retention and explicit dispose
 
 ## Context
 
@@ -28,7 +29,7 @@ R3 已有 Image-backed Session、完整 Continue/Terminal StepTransaction、comm
 - REF-YYZ 现在具有 `Created → InitializationCommit → Continue → Continue → Terminal → Completed RunOutcome` 的单一正式路径。
 - 初始化和执行失败均保留第一原因；cleanup 或重入拒绝不会覆盖已冻结 outcome。
 - 两个 Session 可以共享 immutable Image/provider，同时各自拥有 RunId、state、history、seal、diagnostic 和 outcome。
-- reset/checkpoint/restore、完整 RunResource hooks、command/event/cancellation、持久化 evidence 和完整 DiagnosticPolicy pipeline 继续由后续 R3 切片交付。
+- checkpoint/branch restore、active-run truncating reset、完整 RunResource hooks、command/event/cancellation、持久化 evidence 和完整 DiagnosticPolicy pipeline 继续由后续 R3 切片交付。Completed-run reset、历史 outcome ownership 与 explicit dispose 已由 ADR-0018 补充。
 
 ## Alternatives considered
 
@@ -46,4 +47,4 @@ R3 已有 Image-backed Session、完整 Continue/Terminal StepTransaction、comm
 
 ## Supersession rule
 
-只有 reset/restore、多 run Session、跨进程 transport 或持久化 Artifact 的真实 consumer 需要改变 identity、commit visibility 或 outcome ownership 时，才重新评审本决定。
+Completed-run multi-run Session 已按 ADR-0018 扩展。branch restore、active-run truncation、跨进程 transport 或持久化 Artifact 的真实 consumer 需要改变 identity、commit visibility 或 outcome ownership 时，再评审对应决定。
