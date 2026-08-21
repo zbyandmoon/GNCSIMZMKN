@@ -3477,10 +3477,6 @@ SessionResult Session::execute_step() noexcept {
     }
 }
 
-SessionResult Session::execute_continue_step() noexcept {
-    return execute_step();
-}
-
 std::size_t Session::preparation_count() const noexcept {
     return has_materialized_storage(state())
                ? implementation_->preparations.size()

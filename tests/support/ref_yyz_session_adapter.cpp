@@ -3421,6 +3421,38 @@ void build_invocations(
     }
 }
 
+template <typename Value>
+[[nodiscard]] kernel::SessionResult copy_sealed_value(
+    const kernel::Session& session,
+    const kernel::SessionCommittedOutputInfo& seal,
+    std::optional<Value>& destination) {
+    if (destination.has_value()) {
+        return {kernel::SessionError::ObjectValidationFailed,
+                seal.slot_handle,
+                "sealed output type appears more than once"};
+    }
+    kernel::SessionObjectIdentityView view;
+    auto status = kernel::qualification::SessionAccess::read_committed_output(
+        session, seal.slot_handle, view);
+    if (!status) return status;
+    const auto expected_role =
+        seal.terminal_result
+            ? kernel::SessionObjectRole::TerminalOutputValue
+            : kernel::SessionObjectRole::CycleFrameValue;
+    if (!view || view.role != expected_role ||
+        view.image_object_handle != seal.slot_handle ||
+        view.codec_entry_handle != seal.codec_entry_handle ||
+        view.size_bytes != sizeof(Value) ||
+        view.alignment_bytes != alignof(Value) ||
+        view.type_identity != &typeid(Value)) {
+        return {kernel::SessionError::ObjectTypeMismatch,
+                seal.slot_handle,
+                "sealed output qualification type mismatch"};
+    }
+    destination.emplace(*static_cast<const Value*>(view.address));
+    return {};
+}
+
 } // namespace
 
 RefYyzSessionAdapter make_session_adapter(
@@ -3641,6 +3673,77 @@ kernel::SessionResult read_mission_result_for_qualification(
         return {kernel::SessionError::InternalFailure,
                 adapter.mission_result_slot_handle,
                 "mission result qualification copy failed"};
+    }
+}
+
+kernel::SessionResult read_sealed_observation_snapshot_for_qualification(
+    const kernel::Session& session,
+    SealedObservationSnapshot& result) noexcept {
+    result = {};
+    try {
+        result.seals = session.committed_outputs();
+        for (const auto& seal : result.seals) {
+            const auto slot = std::find_if(
+                session.image().slots().begin(),
+                session.image().slots().end(), [&seal](const auto& candidate) {
+                    return candidate.handle == seal.slot_handle;
+                });
+            if (slot == session.image().slots().end()) {
+                result = {};
+                return {kernel::SessionError::InvalidImageHandle,
+                        seal.slot_handle,
+                        "sealed output slot is absent from Image"};
+            }
+
+            kernel::SessionResult status;
+            if (slot->layout_id == yyz::kRigidObservationLayoutIdentity) {
+                status = copy_sealed_value(session, seal,
+                                           result.rigid_observation);
+            } else if (slot->layout_id ==
+                       yyz::kRigidFormInputLayoutIdentity) {
+                status = copy_sealed_value(session, seal, result.rigid_form);
+            } else if (slot->layout_id ==
+                       yyz::kControlledRigidBoundaryPreparationLayoutIdentity) {
+                status = copy_sealed_value(session, seal,
+                                           result.rigid_preparation);
+            } else if (slot->layout_id ==
+                       yyz::kMassPropertiesLayoutIdentity) {
+                status = copy_sealed_value(session, seal,
+                                           result.mass_properties);
+            } else if (slot->layout_id ==
+                       yyz::kGuidanceOutputLayoutIdentity) {
+                status = copy_sealed_value(session, seal, result.guidance);
+            } else if (slot->layout_id ==
+                       yyz::kControllerOutputLayoutIdentity) {
+                status = copy_sealed_value(session, seal, result.controller);
+            } else if (slot->layout_id ==
+                       yyz::kActuatorOutputLayoutIdentity) {
+                status = copy_sealed_value(session, seal, result.actuator);
+            } else if (slot->layout_id ==
+                       yyz::kPropulsionWrenchLayoutIdentity) {
+                status = copy_sealed_value(session, seal, result.propulsion);
+            } else if (slot->layout_id == yyz::kMassFlowLayoutIdentity) {
+                status = copy_sealed_value(session, seal, result.mass_flow);
+            } else if (slot->layout_id ==
+                       yyz::kMissionResultLayoutIdentity) {
+                status = copy_sealed_value(session, seal,
+                                           result.mission_result);
+            } else {
+                result = {};
+                return {kernel::SessionError::ObjectTypeMismatch,
+                        seal.slot_handle,
+                        "sealed REF-YYZ output layout is unsupported"};
+            }
+            if (!status) {
+                result = {};
+                return status;
+            }
+        }
+        return {};
+    } catch (...) {
+        result = {};
+        return {kernel::SessionError::InternalFailure, 0U,
+                "sealed observation qualification copy failed"};
     }
 }
 

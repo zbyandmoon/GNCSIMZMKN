@@ -678,7 +678,6 @@ class Session final {
     [[nodiscard]] const contracts::ExecutionPlanImage& image() const noexcept;
     [[nodiscard]] SessionResult initialize() noexcept;
     [[nodiscard]] SessionResult execute_step() noexcept;
-    [[nodiscard]] SessionResult execute_continue_step() noexcept;
     [[nodiscard]] const SessionResult& last_result() const noexcept;
     [[nodiscard]] const SessionBoundarySummary& last_boundary_summary()
         const noexcept;

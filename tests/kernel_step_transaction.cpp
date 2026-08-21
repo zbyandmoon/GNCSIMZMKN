@@ -25,6 +25,9 @@ using gnc::tests::ref_yyz::AdapterOptions;
 using gnc::tests::ref_yyz::CommittedRigidMassProbe;
 using gnc::tests::ref_yyz::FailurePhase;
 using gnc::tests::ref_yyz::MissionResultProbe;
+using gnc::tests::ref_yyz::SealedObservationSnapshot;
+
+namespace yyz = gnc::packages::yyz;
 
 double maximum_observed_absolute_difference = 0.0;
 
@@ -103,6 +106,344 @@ template <std::size_t Size>
         }
     }
     return true;
+}
+
+[[nodiscard]] bool near_vector(
+    const gnc::foundation::Vec3& lhs,
+    const gnc::foundation::Vec3& rhs) noexcept {
+    for (Eigen::Index index = 0; index < 3; ++index) {
+        if (!near(lhs(index), rhs(index))) return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool near_matrix(
+    const gnc::foundation::Mat3& lhs,
+    const gnc::foundation::Mat3& rhs) noexcept {
+    for (Eigen::Index row = 0; row < 3; ++row) {
+        for (Eigen::Index column = 0; column < 3; ++column) {
+            if (!near(lhs(row, column), rhs(row, column))) return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool same_sample_context(
+    const gnc::contracts::SampleContext& lhs,
+    const gnc::contracts::SampleContext& rhs) noexcept {
+    return lhs.frame == rhs.frame &&
+           lhs.clock_domain == rhs.clock_domain &&
+           lhs.sample_time.tick == rhs.sample_time.tick &&
+           near(lhs.sample_time.seconds, rhs.sample_time.seconds) &&
+           lhs.configuration_revision == rhs.configuration_revision &&
+           lhs.quality == rhs.quality;
+}
+
+[[nodiscard]] bool same_interval_context(
+    const gnc::contracts::IntervalSampleContext& lhs,
+    const gnc::contracts::IntervalSampleContext& rhs) noexcept {
+    return same_sample_context(lhs.sample, rhs.sample) &&
+           lhs.validity.effective_from.tick ==
+               rhs.validity.effective_from.tick &&
+           near(lhs.validity.effective_from.seconds,
+                rhs.validity.effective_from.seconds) &&
+           lhs.validity.effective_until.tick ==
+               rhs.validity.effective_until.tick &&
+           near(lhs.validity.effective_until.seconds,
+                rhs.validity.effective_until.seconds);
+}
+
+[[nodiscard]] bool same_rigid_state(
+    const yyz::RigidState& lhs, const yyz::RigidState& rhs) noexcept {
+    return near_vector(lhs.position.value, rhs.position.value) &&
+           near_vector(lhs.velocity.value, rhs.velocity.value) &&
+           near_array(gnc::foundation::quaternion_to_wxyz(lhs.attitude.value),
+                      gnc::foundation::quaternion_to_wxyz(rhs.attitude.value)) &&
+           near_vector(lhs.angular_rate.value, rhs.angular_rate.value);
+}
+
+[[nodiscard]] bool same_rigid_observation(
+    const yyz::CommittedRigidObservation& lhs,
+    const yyz::CommittedRigidObservation& rhs) noexcept {
+    return same_sample_context(lhs.context, rhs.context) &&
+           same_rigid_state(lhs.state, rhs.state);
+}
+
+[[nodiscard]] bool same_mass_properties(
+    const yyz::MassPropertiesInput& lhs,
+    const yyz::MassPropertiesInput& rhs) noexcept {
+    return same_interval_context(lhs.context, rhs.context) &&
+           lhs.mass_state_id == rhs.mass_state_id &&
+           near(lhs.mass_kilograms, rhs.mass_kilograms) &&
+           near_vector(lhs.body_origin_to_center_of_mass.value,
+                       rhs.body_origin_to_center_of_mass.value) &&
+           near_matrix(lhs.inertia_about_center_of_mass.value,
+                       rhs.inertia_about_center_of_mass.value);
+}
+
+[[nodiscard]] bool same_applied_wrench(
+    const yyz::AppliedBodyWrenchInput& lhs,
+    const yyz::AppliedBodyWrenchInput& rhs) noexcept {
+    return same_interval_context(lhs.context, rhs.context) &&
+           lhs.source_id == rhs.source_id &&
+           near_vector(lhs.force.value, rhs.force.value) &&
+           near_vector(lhs.body_origin_to_application.value,
+                       rhs.body_origin_to_application.value) &&
+           near_vector(lhs.intrinsic_moment_at_application.value,
+                       rhs.intrinsic_moment_at_application.value);
+}
+
+[[nodiscard]] bool same_environment(
+    const yyz::EnvironmentInput& lhs,
+    const yyz::EnvironmentInput& rhs) noexcept {
+    return same_sample_context(lhs.context, rhs.context) &&
+           near_vector(lhs.gravity.value, rhs.gravity.value) &&
+           near_vector(lhs.velocity_airmass.value,
+                       rhs.velocity_airmass.value) &&
+           near(lhs.density_kilograms_per_cubic_meter,
+                rhs.density_kilograms_per_cubic_meter) &&
+           near(lhs.speed_of_sound_meters_per_second,
+                rhs.speed_of_sound_meters_per_second);
+}
+
+[[nodiscard]] bool same_rigid_preparation(
+    const yyz::ControlledRigidBoundaryPreparationOutput& lhs,
+    const yyz::ControlledRigidBoundaryPreparationOutput& rhs) noexcept {
+    if (!same_environment(lhs.environment_response,
+                          rhs.environment_response) ||
+        !near_array(lhs.aerodynamic_coefficients
+                        .coefficients_ca_cy_cn_cl_cm_cn,
+                    rhs.aerodynamic_coefficients
+                        .coefficients_ca_cy_cn_cl_cm_cn) ||
+        !near_vector(lhs.closure_request.body_origin_to_center_of_mass.value,
+                     rhs.closure_request.body_origin_to_center_of_mass.value) ||
+        lhs.closure_request.contributions.size() !=
+            rhs.closure_request.contributions.size()) {
+        return false;
+    }
+    for (std::size_t index = 0U;
+         index < lhs.closure_request.contributions.size(); ++index) {
+        if (!same_applied_wrench(lhs.closure_request.contributions[index],
+                                 rhs.closure_request.contributions[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool same_rigid_form(
+    const yyz::RigidFormInput& lhs,
+    const yyz::RigidFormInput& rhs) noexcept {
+    return near_vector(lhs.force_total.value, rhs.force_total.value) &&
+           near_vector(lhs.moment_total_about_center_of_mass.value,
+                       rhs.moment_total_about_center_of_mass.value);
+}
+
+[[nodiscard]] bool same_guidance(
+    const yyz::AltitudePitchGuidanceOutput& lhs,
+    const yyz::AltitudePitchGuidanceOutput& rhs) noexcept {
+    return same_rigid_observation(lhs.source_observation,
+                                  rhs.source_observation) &&
+           near(lhs.measured_pitch_radians, rhs.measured_pitch_radians) &&
+           near(lhs.measured_pitch_rate_radians_per_second,
+                rhs.measured_pitch_rate_radians_per_second) &&
+           near(lhs.altitude_error_meters, rhs.altitude_error_meters) &&
+           near(lhs.altitude_feedback_radians,
+                rhs.altitude_feedback_radians) &&
+           near(lhs.vertical_speed_feedback_radians,
+                rhs.vertical_speed_feedback_radians) &&
+           near(lhs.raw_pitch_command_radians,
+                rhs.raw_pitch_command_radians) &&
+           near(lhs.pitch_command_radians, rhs.pitch_command_radians) &&
+           lhs.saturated == rhs.saturated;
+}
+
+[[nodiscard]] bool same_controller(
+    const yyz::PitchMomentControllerOutput& lhs,
+    const yyz::PitchMomentControllerOutput& rhs) noexcept {
+    return same_sample_context(lhs.context, rhs.context) &&
+           near(lhs.pitch_error_radians, rhs.pitch_error_radians) &&
+           near(lhs.proportional_moment_newton_meters,
+                rhs.proportional_moment_newton_meters) &&
+           near(lhs.rate_damping_moment_newton_meters,
+                rhs.rate_damping_moment_newton_meters) &&
+           near(lhs.raw_moment_command_newton_meters,
+                rhs.raw_moment_command_newton_meters) &&
+           near(lhs.moment_command_newton_meters,
+                rhs.moment_command_newton_meters) &&
+           lhs.saturated == rhs.saturated;
+}
+
+[[nodiscard]] bool same_actuator(
+    const yyz::IdealBodyMomentActuatorOutput& lhs,
+    const yyz::IdealBodyMomentActuatorOutput& rhs) noexcept {
+    return same_interval_context(lhs.context, rhs.context) &&
+           lhs.source_id == rhs.source_id &&
+           near_vector(lhs.moment_about_center_of_mass.value,
+                       rhs.moment_about_center_of_mass.value);
+}
+
+[[nodiscard]] bool same_propulsion(
+    const yyz::SuppliedPropulsionBodyWrench& lhs,
+    const yyz::SuppliedPropulsionBodyWrench& rhs) noexcept {
+    return same_interval_context(lhs.context, rhs.context) &&
+           lhs.source_id == rhs.source_id &&
+           near_vector(lhs.force.value, rhs.force.value) &&
+           near_vector(lhs.center_of_mass_to_application.value,
+                       rhs.center_of_mass_to_application.value) &&
+           near_vector(lhs.intrinsic_moment_at_application.value,
+                       rhs.intrinsic_moment_at_application.value);
+}
+
+[[nodiscard]] bool same_mass_flow(
+    const yyz::MassFlowIntervalInput& lhs,
+    const yyz::MassFlowIntervalInput& rhs) noexcept {
+    return same_interval_context(lhs.context, rhs.context) &&
+           lhs.mass_state_id == rhs.mass_state_id &&
+           near(lhs.fuel_consumption_rate_kilograms_per_second,
+                rhs.fuel_consumption_rate_kilograms_per_second);
+}
+
+[[nodiscard]] bool same_mass_state(
+    const yyz::MassState& lhs, const yyz::MassState& rhs) noexcept {
+    return same_sample_context(lhs.context, rhs.context) &&
+           lhs.mass_state_id == rhs.mass_state_id &&
+           near(lhs.mass_kilograms, rhs.mass_kilograms) &&
+           near_vector(lhs.body_origin_to_center_of_mass.value,
+                       rhs.body_origin_to_center_of_mass.value) &&
+           near_matrix(lhs.inertia_about_center_of_mass.value,
+                       rhs.inertia_about_center_of_mass.value);
+}
+
+[[nodiscard]] bool same_committed_boundary(
+    const yyz::CommittedRigidMassBoundary& lhs,
+    const yyz::CommittedRigidMassBoundary& rhs) noexcept {
+    return same_sample_context(lhs.rigid_context, rhs.rigid_context) &&
+           same_rigid_state(lhs.rigid_state, rhs.rigid_state) &&
+           same_mass_state(lhs.mass_state, rhs.mass_state);
+}
+
+[[nodiscard]] bool same_mission_metrics(
+    const yyz::MissionMetrics& lhs,
+    const yyz::MissionMetrics& rhs) noexcept {
+    return near(lhs.duration_seconds, rhs.duration_seconds) &&
+           near(lhs.downrange_meters, rhs.downrange_meters) &&
+           near(lhs.vertical_displacement_meters,
+                rhs.vertical_displacement_meters) &&
+           near(lhs.remaining_mass_kilograms,
+                rhs.remaining_mass_kilograms) &&
+           near(lhs.consumed_mass_kilograms,
+                rhs.consumed_mass_kilograms) &&
+           near(lhs.speed_meters_per_second,
+                rhs.speed_meters_per_second);
+}
+
+[[nodiscard]] bool same_mission_result(
+    const yyz::CommittedMissionResultOutput& lhs,
+    const yyz::CommittedMissionResultOutput& rhs) noexcept {
+    if (lhs.status != rhs.status || lhs.initial_tick != rhs.initial_tick ||
+        lhs.final_tick != rhs.final_tick ||
+        !near(lhs.final_time_seconds, rhs.final_time_seconds) ||
+        lhs.termination.action != rhs.termination.action ||
+        lhs.termination.reason_code != rhs.termination.reason_code ||
+        !near(lhs.termination.trigger_time_seconds,
+              rhs.termination.trigger_time_seconds) ||
+        lhs.termination.priority != rhs.termination.priority ||
+        lhs.metrics.evaluated_sample_count !=
+            rhs.metrics.evaluated_sample_count ||
+        !same_mission_metrics(lhs.metrics.terminal,
+                              rhs.metrics.terminal) ||
+        !near(lhs.metrics.peak_speed_meters_per_second,
+              rhs.metrics.peak_speed_meters_per_second) ||
+        lhs.metrics.peak_speed_tick != rhs.metrics.peak_speed_tick ||
+        !near(lhs.metrics.maximum_downrange_meters,
+              rhs.metrics.maximum_downrange_meters) ||
+        lhs.metrics.maximum_downrange_tick !=
+            rhs.metrics.maximum_downrange_tick ||
+        !near(lhs.metrics.minimum_remaining_mass_kilograms,
+              rhs.metrics.minimum_remaining_mass_kilograms) ||
+        lhs.metrics.minimum_remaining_mass_tick !=
+            rhs.metrics.minimum_remaining_mass_tick ||
+        !same_committed_boundary(lhs.terminal_boundary,
+                                 rhs.terminal_boundary)) {
+        return false;
+    }
+    for (std::size_t index = 0U;
+         index < lhs.terminal_predicates.size(); ++index) {
+        const auto& left = lhs.terminal_predicates[index];
+        const auto& right = rhs.terminal_predicates[index];
+        if (left.predicate_id != right.predicate_id ||
+            !near(left.observed, right.observed) || left.met != right.met ||
+            left.action != right.action ||
+            left.reason_code != right.reason_code ||
+            left.priority != right.priority) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool same_seal_metadata(
+    const std::vector<gnc::kernel::SessionCommittedOutputInfo>& lhs,
+    const std::vector<gnc::kernel::SessionCommittedOutputInfo>& rhs) noexcept {
+    if (lhs.size() != rhs.size()) return false;
+    for (std::size_t index = 0U; index < lhs.size(); ++index) {
+        const auto& left = lhs[index];
+        const auto& right = rhs[index];
+        if (left.slot_handle != right.slot_handle ||
+            left.codec_entry_handle != right.codec_entry_handle ||
+            left.present != right.present ||
+            left.generation != right.generation ||
+            left.sequence != right.sequence ||
+            left.sample_tick != right.sample_tick ||
+            !near(left.sample_time_seconds, right.sample_time_seconds) ||
+            !near(left.interval_start_seconds,
+                  right.interval_start_seconds) ||
+            !near(left.interval_end_seconds, right.interval_end_seconds) ||
+            left.quality != right.quality ||
+            left.terminal_result != right.terminal_result) {
+            return false;
+        }
+    }
+    return true;
+}
+
+template <typename Value, typename Equal>
+[[nodiscard]] bool same_optional_payload(
+    const std::optional<Value>& lhs, const std::optional<Value>& rhs,
+    Equal equal) noexcept {
+    return lhs.has_value() == rhs.has_value() &&
+           (!lhs.has_value() || equal(*lhs, *rhs));
+}
+
+[[nodiscard]] bool same_sealed_observation_snapshot(
+    const SealedObservationSnapshot& lhs,
+    const SealedObservationSnapshot& rhs) noexcept {
+    return same_seal_metadata(lhs.seals, rhs.seals) &&
+           same_optional_payload(lhs.rigid_observation,
+                                 rhs.rigid_observation,
+                                 same_rigid_observation) &&
+           same_optional_payload(lhs.rigid_form, rhs.rigid_form,
+                                 same_rigid_form) &&
+           same_optional_payload(lhs.rigid_preparation,
+                                 rhs.rigid_preparation,
+                                 same_rigid_preparation) &&
+           same_optional_payload(lhs.mass_properties,
+                                 rhs.mass_properties,
+                                 same_mass_properties) &&
+           same_optional_payload(lhs.guidance, rhs.guidance,
+                                 same_guidance) &&
+           same_optional_payload(lhs.controller, rhs.controller,
+                                 same_controller) &&
+           same_optional_payload(lhs.actuator, rhs.actuator,
+                                 same_actuator) &&
+           same_optional_payload(lhs.propulsion, rhs.propulsion,
+                                 same_propulsion) &&
+           same_optional_payload(lhs.mass_flow, rhs.mass_flow,
+                                 same_mass_flow) &&
+           same_optional_payload(lhs.mission_result,
+                                 rhs.mission_result,
+                                 same_mission_result);
 }
 
 [[nodiscard]] bool all_frame_slots_absent(
@@ -288,91 +629,6 @@ void require_tick_two_oracle(const CommittedRigidMassProbe& value) {
                                10.0, 0.0, 0.0, 0.0, 20.0, 0.0,
                                0.0, 0.0, 30.0}),
             "constant mass geometry changed across two commits");
-}
-
-[[maybe_unused]] void verify_two_continue_steps(
-    const std::shared_ptr<const ExecutionPlanImage>& image) {
-    auto bundle = initialize_session(image);
-    const auto opening = committed_probe(*bundle.session, bundle.adapter);
-    require(bundle.session->committed_epoch() == 0U &&
-                bundle.session->committed_tick() == 0 &&
-                near(opening.mass_kilograms, 100.0),
-            "opening committed pair is invalid");
-
-    const auto first = bundle.session->execute_continue_step();
-    require(static_cast<bool>(first), "first Continue step failed");
-    const auto first_committed = committed_probe(*bundle.session,
-                                                 bundle.adapter);
-    require_tick_one_oracle(first_committed);
-    const auto& first_summary = bundle.session->last_step_summary();
-    require(first_summary.committed && first_summary.base_epoch == 0U &&
-                first_summary.committed_epoch == 1U &&
-                first_summary.base_tick == 0 &&
-                first_summary.committed_tick == 1 &&
-                first_summary.executed_callsite_handles.size() == 8U &&
-                first_summary.skipped_callsite_handles.size() == 1U &&
-                first_summary.integration_scope_handles.size() == 1U &&
-                first_summary.candidate_slot_handles.size() == 2U &&
-                first_summary.output_write_count == 9U &&
-                !bundle.session->frame_open() &&
-                all_frame_slots_absent(*bundle.session) &&
-                bundle.session->committed_outputs().empty(),
-            "first Continue transaction metadata is incomplete");
-
-    const auto second = bundle.session->execute_continue_step();
-    if (!second) {
-        throw std::runtime_error(
-            std::string("second Continue step failed: ") +
-            std::string(gnc::kernel::to_string(second.error)) + " / " +
-            std::string(second.detail) + " / handle=" +
-            std::to_string(second.image_handle));
-    }
-    const auto second_committed = committed_probe(*bundle.session,
-                                                  bundle.adapter);
-    require_tick_two_oracle(second_committed);
-    const auto& second_summary = bundle.session->last_step_summary();
-    require(second_summary.committed && second_summary.base_epoch == 1U &&
-                second_summary.committed_epoch == 2U &&
-                second_summary.base_tick == 1 &&
-                second_summary.committed_tick == 2 &&
-                second_summary.executed_callsite_handles.size() == 8U &&
-                second_summary.skipped_callsite_handles.size() == 1U &&
-                second_summary.integration_scope_handles.size() == 1U &&
-                second_summary.candidate_slot_handles.size() == 2U &&
-                !bundle.adapter.opening_boundary->terminal_evaluator_called &&
-                !bundle.session->frame_open() &&
-                all_frame_slots_absent(*bundle.session) &&
-                bundle.session->committed_outputs().empty(),
-            "second Continue transaction or terminal cutoff is invalid");
-    require(bundle.adapter.step_execution->completed_intervals.size() == 2U &&
-                bundle.adapter.step_execution->completed_intervals[0U]
-                        .opening_tick == 0 &&
-                bundle.adapter.step_execution->completed_intervals[1U]
-                        .opening_tick == 1 &&
-                bundle.adapter.step_execution->completed_intervals[0U]
-                        .rk4_derivative_evaluations == 4U &&
-                bundle.adapter.step_execution->completed_intervals[1U]
-                        .rk4_derivative_evaluations == 4U &&
-                near(bundle.adapter.step_execution->completed_intervals[0U]
-                         .integration_mass_kilograms,
-                     100.0) &&
-                near(bundle.adapter.step_execution->completed_intervals[1U]
-                         .integration_mass_kilograms,
-                     99.95),
-            "Image RK4 or next-step committed-mass visibility changed");
-    const auto committed_blocks = bundle.session->state_blocks();
-    require(std::all_of(
-                committed_blocks.begin(), committed_blocks.end(),
-                [](const auto& block) {
-                    return block.committed_epoch == 2U;
-                }),
-            "atomic state-block epochs did not advance together");
-    const auto third = bundle.session->execute_continue_step();
-    require(!third &&
-                third.error == SessionError::InvalidLifecycleTransition &&
-                bundle.session->committed_epoch() == 2U &&
-                bundle.session->committed_tick() == 2,
-            "Session advanced or evaluated the terminal tick");
 }
 
 void verify_complete_step_transactions(
@@ -1008,6 +1264,45 @@ void verify_query_count_invariance(
                     static_cast<bool>(repeated.session->execute_step()),
                 "query-count invariance run failed");
     }
+    SealedObservationSnapshot baseline_snapshot;
+    SealedObservationSnapshot repeated_snapshot;
+    const auto baseline_snapshot_read =
+        gnc::tests::ref_yyz::
+            read_sealed_observation_snapshot_for_qualification(
+                *baseline.session, baseline_snapshot);
+    const auto repeated_snapshot_read =
+        gnc::tests::ref_yyz::
+            read_sealed_observation_snapshot_for_qualification(
+                *repeated.session, repeated_snapshot);
+    require(baseline_snapshot_read && repeated_snapshot_read,
+            "typed sealed-output qualification read failed");
+    const auto& transaction = image->transactions().front();
+    const auto* terminal_branch = gnc::contracts::find_transaction_branch(
+        transaction, gnc::contracts::TransactionBranch::Terminal);
+    require(terminal_branch != nullptr &&
+                baseline_snapshot.seals.size() ==
+                    terminal_branch->sealed_output_slot_handles.size() &&
+                repeated_snapshot.seals.size() ==
+                    terminal_branch->sealed_output_slot_handles.size(),
+            "terminal seal does not contain every planned REF-YYZ output");
+    require(std::all_of(
+                baseline_snapshot.seals.begin(),
+                baseline_snapshot.seals.end(), [](const auto& seal) {
+                    return seal.present &&
+                           seal.quality ==
+                               gnc::contracts::DataQuality::Valid;
+                }) &&
+                std::count_if(
+                    baseline_snapshot.seals.begin(),
+                    baseline_snapshot.seals.end(), [](const auto& seal) {
+                        return seal.terminal_result;
+                    }) == 1,
+            "terminal seal lost presence, quality, or result identity");
+    require(baseline_snapshot.mission_result.has_value(),
+            "terminal snapshot omitted mission result");
+    require(same_sealed_observation_snapshot(baseline_snapshot,
+                                             repeated_snapshot),
+            "discarded query evaluations changed a typed sealed payload");
     require(exactly_same(committed_probe(*baseline.session,
                                          baseline.adapter),
                          committed_probe(*repeated.session,
@@ -1016,6 +1311,18 @@ void verify_query_count_invariance(
                                                   baseline.adapter),
                              mission_result_probe(*repeated.session,
                                                   repeated.adapter)) &&
+                baseline.session->state() ==
+                    gnc::kernel::SessionState::Completed &&
+                repeated.session->state() ==
+                    gnc::kernel::SessionState::Completed &&
+                baseline.session->last_step_journal().branch ==
+                    gnc::contracts::TransactionBranch::Terminal &&
+                repeated.session->last_step_journal().branch ==
+                    gnc::contracts::TransactionBranch::Terminal &&
+                baseline.session->committed_epoch() == 3U &&
+                repeated.session->committed_epoch() == 3U &&
+                baseline.session->committed_tick() == 2 &&
+                repeated.session->committed_tick() == 2 &&
                 baseline.adapter.opening_boundary->environment_query_calls ==
                     3U &&
                 baseline.adapter.opening_boundary->aerodynamic_query_calls ==
@@ -1029,7 +1336,7 @@ void verify_query_count_invariance(
                 same_committed_outputs(
                     baseline.session->committed_outputs(),
                     repeated.session->committed_outputs()),
-            "discarded environment/aero query calls changed physical or sealed output");
+            "discarded environment/aero queries changed committed state, termination, or a typed sealed payload");
 }
 
 void run() {

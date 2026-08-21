@@ -2,10 +2,13 @@
 
 #include "gnc/kernel/session.hpp"
 
+#include <yyz/mass_commit.hpp>
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -194,6 +197,26 @@ struct MissionResultProbe {
     std::int64_t terminal_tick = -1;
 };
 
+// Package-aware qualification evidence. Every optional holds the exact
+// concrete value copied from the current committed seal; seal metadata keeps
+// the authoritative sample time and quality for each value.
+struct SealedObservationSnapshot {
+    std::vector<kernel::SessionCommittedOutputInfo> seals;
+    std::optional<packages::yyz::CommittedRigidObservation>
+        rigid_observation;
+    std::optional<packages::yyz::RigidFormInput> rigid_form;
+    std::optional<packages::yyz::ControlledRigidBoundaryPreparationOutput>
+        rigid_preparation;
+    std::optional<packages::yyz::MassPropertiesInput> mass_properties;
+    std::optional<packages::yyz::AltitudePitchGuidanceOutput> guidance;
+    std::optional<packages::yyz::PitchMomentControllerOutput> controller;
+    std::optional<packages::yyz::IdealBodyMomentActuatorOutput> actuator;
+    std::optional<packages::yyz::SuppliedPropulsionBodyWrench> propulsion;
+    std::optional<packages::yyz::MassFlowIntervalInput> mass_flow;
+    std::optional<packages::yyz::CommittedMissionResultOutput>
+        mission_result;
+};
+
 struct CapturedFrameView {
     std::shared_ptr<kernel::SessionInputView> view;
     std::uint32_t slot_handle = 0U;
@@ -267,5 +290,10 @@ struct NonTrivialObjectProbe {
 [[nodiscard]] kernel::SessionResult read_mission_result_for_qualification(
     const kernel::Session& session, const RefYyzSessionAdapter& adapter,
     MissionResultProbe& result) noexcept;
+
+[[nodiscard]] kernel::SessionResult
+read_sealed_observation_snapshot_for_qualification(
+    const kernel::Session& session,
+    SealedObservationSnapshot& result) noexcept;
 
 } // namespace gnc::tests::ref_yyz
