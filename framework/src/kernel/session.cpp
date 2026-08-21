@@ -277,6 +277,8 @@ template <typename Value>
         return RuntimeDiagnosticCode::MaterializationFailed;
     case SessionError::ResetStateFailed:
         return RuntimeDiagnosticCode::ResetStateRebuildFailed;
+    case SessionError::ResetCapabilityMissing:
+        return RuntimeDiagnosticCode::ResetCapabilityMissing;
     case SessionError::ResetPrecommitFailed:
         return RuntimeDiagnosticCode::ResetPrecommitFailed;
     case SessionError::InvalidSchedule:
@@ -360,6 +362,8 @@ template <typename Value>
         return "run.reset_request.invalid";
     case RuntimeDiagnosticCode::ResetStateRebuildFailed:
         return "run.reset_state.rebuild_failed";
+    case RuntimeDiagnosticCode::ResetCapabilityMissing:
+        return "run.reset.capability_missing";
     case RuntimeDiagnosticCode::ResetPrecommitFailed:
         return "run.reset.precommit_failed";
     }
@@ -405,6 +409,8 @@ std::string_view to_string(SessionError error) noexcept {
     case SessionError::SlotConstructionFailed: return "SlotConstructionFailed";
     case SessionError::InitialStateFailed: return "InitialStateFailed";
     case SessionError::ResetStateFailed: return "ResetStateFailed";
+    case SessionError::ResetCapabilityMissing:
+        return "ResetCapabilityMissing";
     case SessionError::ResetPrecommitFailed: return "ResetPrecommitFailed";
     case SessionError::ObjectValidationFailed: return "ObjectValidationFailed";
     case SessionError::InvalidLifecycleTransition:
@@ -478,8 +484,10 @@ std::string_view to_string(RuntimeDiagnosticCode code) noexcept {
         return "GNC-RUN-RST-0001";
     case RuntimeDiagnosticCode::ResetStateRebuildFailed:
         return "GNC-RUN-RST-0002";
-    case RuntimeDiagnosticCode::ResetPrecommitFailed:
+    case RuntimeDiagnosticCode::ResetCapabilityMissing:
         return "GNC-RUN-RST-0003";
+    case RuntimeDiagnosticCode::ResetPrecommitFailed:
+        return "GNC-RUN-RST-0004";
     }
     return "GNC-RUN-INT-0001";
 }
@@ -1013,7 +1021,9 @@ struct Session::Impl final : SessionObjectAccess,
         outcome.primary_diagnostic = diagnostic;
         outcome.related_diagnostics.clear();
         outcome.finalization_status =
-            RunFinalizationStatus::Succeeded;
+            outcome.run_start_committed
+                ? RunFinalizationStatus::Succeeded
+                : RunFinalizationStatus::NotStarted;
         run_outcome_frozen = true;
     }
 
@@ -1196,7 +1206,7 @@ struct Session::Impl final : SessionObjectAccess,
             outcome.final_committed_epoch = committed_epoch;
             outcome.primary_diagnostic = diagnostic;
             outcome.finalization_status =
-                RunFinalizationStatus::Succeeded;
+                RunFinalizationStatus::NotStarted;
             current_run_outcome = reset_failure_outcome_storage.get();
             run_outcome_storages.push_back(
                 std::move(reset_failure_outcome_storage));
@@ -2658,6 +2668,21 @@ struct Session::Impl final : SessionObjectAccess,
                                    ? 0U
                                    : committed.block->handle,
                                "reset state lacks a no-fail commit operation");
+            }
+        }
+        return {};
+    }
+
+    [[nodiscard]] SessionResult validate_reset_capabilities() noexcept {
+        for (const auto& component : image->runtime_components()) {
+            const auto count = static_cast<std::size_t>(std::count(
+                component.lifecycle_capabilities.begin(),
+                component.lifecycle_capabilities.end(), "Resettable"));
+            if (count != 1U) {
+                return failure(
+                    SessionError::ResetCapabilityMissing,
+                    component.handle,
+                    "Runtime Cell does not declare exact reset reuse eligibility");
             }
         }
         return {};
@@ -4217,6 +4242,11 @@ ResetOutcome Session::reset(ResetRequest request) noexcept {
             impl.failure(SessionError::ResetPrecommitFailed, 0U,
                          "reset sequence or epoch cannot advance"),
             RuntimeDiagnosticStage::ResetPrecommit);
+    }
+    const auto reset_eligibility = impl.validate_reset_capabilities();
+    if (!reset_eligibility) {
+        return impl.fail_reset(
+            reset_eligibility, RuntimeDiagnosticStage::ResetPrecommit);
     }
 
     std::string_view allocation_detail =

@@ -561,6 +561,7 @@ describe_yyz_rigid_step_package() {
     const std::vector<gnc::model_sdk::RuntimeLifecycleCapability>
         lifecycle{
             gnc::model_sdk::RuntimeLifecycleCapability::Instantiate,
+            gnc::model_sdk::RuntimeLifecycleCapability::Resettable,
             gnc::model_sdk::RuntimeLifecycleCapability::Dispose};
 
     const auto rigid_found = std::find_if(

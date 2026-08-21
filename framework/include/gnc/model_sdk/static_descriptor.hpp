@@ -180,6 +180,7 @@ using RuntimeExecutionObligation = gnc::contracts::ExecutionObligation;
 
 enum class RuntimeLifecycleCapability : std::uint8_t {
     Instantiate,
+    Resettable,
     Dispose,
 };
 
@@ -188,6 +189,8 @@ enum class RuntimeLifecycleCapability : std::uint8_t {
     switch (capability) {
     case RuntimeLifecycleCapability::Instantiate:
         return "Instantiate";
+    case RuntimeLifecycleCapability::Resettable:
+        return "Resettable";
     case RuntimeLifecycleCapability::Dispose:
         return "Dispose";
     }

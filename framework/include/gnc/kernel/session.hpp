@@ -53,6 +53,7 @@ enum class SessionError : std::uint8_t {
     SlotConstructionFailed,
     InitialStateFailed,
     ResetStateFailed,
+    ResetCapabilityMissing,
     ResetPrecommitFailed,
     ObjectValidationFailed,
     InvalidLifecycleTransition,
@@ -177,6 +178,7 @@ enum class RuntimeDiagnosticCode : std::uint8_t {
     LifecycleTransitionRejected,
     ResetRequestInvalid,
     ResetStateRebuildFailed,
+    ResetCapabilityMissing,
     ResetPrecommitFailed,
 };
 

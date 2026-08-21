@@ -548,6 +548,8 @@ void verify_failure_unwind(
                     gnc::contracts::EvidenceValidity::Unknown &&
                 !creation.session->run_outcome()
                      ->run_start_committed &&
+                creation.session->run_outcome()->finalization_status ==
+                    gnc::kernel::RunFinalizationStatus::NotStarted &&
                 creation.session->run_outcome()->run_start_kind ==
                     gnc::kernel::RunStartKind::Initialize &&
                 creation.session->run_outcome()
@@ -976,6 +978,8 @@ void verify_reset_allocation_failure_atomicity(
                         failed_outcome->validity ==
                             gnc::contracts::EvidenceValidity::Unknown &&
                         failed_outcome->primary_diagnostic.has_value() &&
+                        failed_outcome->finalization_status ==
+                            gnc::kernel::RunFinalizationStatus::NotStarted &&
                         creation.session->run_outcome_for_sequence(1U) ==
                             failed_outcome,
                     "reset allocation failure allocated while freezing or changed committed evidence");

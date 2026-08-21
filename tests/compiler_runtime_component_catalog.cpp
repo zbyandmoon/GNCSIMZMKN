@@ -158,6 +158,7 @@ void expect_invalid_catalog(StaticPackageDescriptor package,
                 runtime.lifecycle_capabilities ==
                     std::vector<RuntimeLifecycleCapability>{
                         RuntimeLifecycleCapability::Instantiate,
+                        RuntimeLifecycleCapability::Resettable,
                         RuntimeLifecycleCapability::Dispose} &&
                 runtime.obligation_entries.size() == 1U,
             "SampledTransform recipe, schedule, lifecycle, or entry differs");

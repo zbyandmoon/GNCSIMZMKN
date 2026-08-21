@@ -549,13 +549,14 @@ inline void validate_runtime_component(
     const std::vector<gnc::model_sdk::RuntimeLifecycleCapability>
         expected_lifecycle{
             gnc::model_sdk::RuntimeLifecycleCapability::Instantiate,
+            gnc::model_sdk::RuntimeLifecycleCapability::Resettable,
             gnc::model_sdk::RuntimeLifecycleCapability::Dispose};
     if (runtime.lifecycle_capabilities != expected_lifecycle) {
         diagnostics.push_back(
             {DiagnosticCode::InvalidCatalogDescriptor, source,
              definition.model_id,
-             "current R2 runtime lifecycle is exactly "
-             "Instantiate and Dispose"});
+             "current runtime lifecycle is exactly Instantiate, "
+             "Resettable, and Dispose"});
     }
     if (evaluator) {
         if (!runtime.evaluator_history_shape.has_value()) {

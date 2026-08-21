@@ -749,6 +749,8 @@ void require_mission_oracle(const MissionResultProbe& value) {
         return RuntimeDiagnosticCode::MaterializationFailed;
     case SessionError::ResetStateFailed:
         return RuntimeDiagnosticCode::ResetStateRebuildFailed;
+    case SessionError::ResetCapabilityMissing:
+        return RuntimeDiagnosticCode::ResetCapabilityMissing;
     case SessionError::ResetPrecommitFailed:
         return RuntimeDiagnosticCode::ResetPrecommitFailed;
     case SessionError::InvalidSchedule:
@@ -796,6 +798,27 @@ void require_mission_oracle(const MissionResultProbe& value) {
     const auto compiled = gnc::tests::ref_yyz::compile_complete_image();
     require(compiled.succeeded(), "REF-YYZ Image compilation failed");
     return std::make_shared<const ExecutionPlanImage>(*compiled.value);
+}
+
+[[nodiscard]] std::shared_ptr<const ExecutionPlanImage>
+build_image_without_reset_capability(
+    const ExecutionPlanImage& baseline) {
+    auto data = baseline.data();
+    require(!data.runtime_components.empty(),
+            "reset capability negative lacks a Runtime Cell");
+    auto& capabilities =
+        data.runtime_components.front().lifecycle_capabilities;
+    const auto found = std::find(capabilities.begin(), capabilities.end(),
+                                 "Resettable");
+    require(found != capabilities.end(),
+            "reset capability negative lacks its baseline capability");
+    capabilities.erase(found);
+    data.image_fingerprint =
+        gnc::compiler::complete_plan_detail::image_fingerprint(data);
+    require(data.image_fingerprint != baseline.fingerprint(),
+            "reset capability did not enter the Image fingerprint");
+    return std::make_shared<const ExecutionPlanImage>(
+        ExecutionPlanImage::freeze(std::move(data)));
 }
 
 [[nodiscard]] gnc::kernel::InitializationRequest initialization_request(
@@ -961,7 +984,7 @@ void verify_initialization_identity_and_commit(
                 empty_outcome->committed_step_count == 0U &&
                 empty_outcome->primary_diagnostic.has_value() &&
                 empty_outcome->finalization_status ==
-                    gnc::kernel::RunFinalizationStatus::Succeeded,
+                    gnc::kernel::RunFinalizationStatus::NotStarted,
             "empty RunId did not freeze a precommit failure outcome");
 
     auto mismatch = gnc::kernel::create_session(image, adapter.provider);
@@ -1003,6 +1026,8 @@ void verify_initialization_identity_and_commit(
                 !rejected_run &&
                 rejected_run.error ==
                     SessionError::InvalidLifecycleTransition &&
+                frozen_mismatch.finalization_status ==
+                    gnc::kernel::RunFinalizationStatus::NotStarted &&
                 exactly_same(*mismatch.session->run_outcome(),
                              frozen_mismatch) &&
                 has_exact_image_binding(
@@ -1025,6 +1050,83 @@ void verify_initialization_identity_and_commit(
             "fresh Session did not complete after initialization failures");
     require_mission_oracle(mission_result_probe(*successful.session,
                                                 successful.adapter));
+}
+
+void verify_reset_capability_fail_closed(
+    const std::shared_ptr<const ExecutionPlanImage>& baseline) {
+    const auto image = build_image_without_reset_capability(*baseline);
+    auto bundle = initialize_session(
+        image, {}, "run:reset-capability-base");
+    require(static_cast<bool>(bundle.session->run_to_terminal()),
+            "reset capability negative could not complete its first run");
+
+    const auto before_state = committed_probe(*bundle.session,
+                                               bundle.adapter);
+    const auto before_blocks = bundle.session->state_blocks();
+    const auto before_histories = bundle.session->committed_histories();
+    const auto before_outputs = bundle.session->committed_outputs();
+    const auto before_result = mission_result_probe(*bundle.session,
+                                                    bundle.adapter);
+    const auto before_epoch = bundle.session->committed_epoch();
+    const auto before_tick = bundle.session->committed_tick();
+    const auto before_steps = bundle.session->committed_step_count();
+    const auto trace_size = bundle.adapter.trace->events.size();
+    const auto* completed = bundle.session->run_outcome();
+    require(completed != nullptr,
+            "reset capability negative lacks its completed outcome");
+    const auto completed_copy = *completed;
+
+    const auto reset = bundle.session->reset(
+        reset_request(*image, "run:reset-capability-rejected"));
+    const auto* failed = bundle.session->run_outcome();
+    require(!reset &&
+                reset.result.error ==
+                    SessionError::ResetCapabilityMissing &&
+                reset.result.image_handle ==
+                    image->runtime_components().front().handle &&
+                reset.primary_diagnostic.has_value() &&
+                reset.primary_diagnostic->code ==
+                    RuntimeDiagnosticCode::ResetCapabilityMissing &&
+                reset.primary_diagnostic->stage ==
+                    RuntimeDiagnosticStage::ResetPrecommit &&
+                !reset.reset_commit &&
+                bundle.session->state() ==
+                    gnc::kernel::SessionState::Failed &&
+                bundle.session->committed_epoch() == before_epoch &&
+                bundle.session->committed_tick() == before_tick &&
+                bundle.session->committed_step_count() == before_steps &&
+                exactly_same(committed_probe(*bundle.session,
+                                             bundle.adapter),
+                             before_state) &&
+                same_state_blocks(bundle.session->state_blocks(),
+                                  before_blocks) &&
+                exactly_same(bundle.session->committed_histories(),
+                             before_histories) &&
+                same_committed_outputs(bundle.session->committed_outputs(),
+                                       before_outputs) &&
+                exactly_same(mission_result_probe(*bundle.session,
+                                                  bundle.adapter),
+                             before_result) &&
+                bundle.adapter.trace->events.size() == trace_size &&
+                bundle.session->run_outcome_for_sequence(0U) == completed &&
+                exactly_same(*completed, completed_copy) &&
+                failed != nullptr && failed != completed &&
+                failed->run_id.value() ==
+                    "run:reset-capability-rejected" &&
+                failed->run_sequence == 1U &&
+                failed->run_start_kind ==
+                    gnc::kernel::RunStartKind::Reset &&
+                !failed->run_start_committed &&
+                failed->final_status ==
+                    gnc::kernel::RunFinalStatus::Failed &&
+                failed->validity ==
+                    gnc::contracts::EvidenceValidity::Unknown &&
+                failed->finalization_status ==
+                    gnc::kernel::RunFinalizationStatus::NotStarted &&
+                failed->primary_diagnostic.has_value() &&
+                exactly_same(*failed->primary_diagnostic,
+                             *reset.primary_diagnostic),
+            "missing reset capability crossed staging or changed committed evidence");
 }
 
 void verify_complete_step_transactions(
@@ -2448,7 +2550,7 @@ void verify_reset_precommit_failure(
                 exactly_same(*failed_outcome->primary_diagnostic,
                              *failed.primary_diagnostic) &&
                 failed_outcome->finalization_status ==
-                    gnc::kernel::RunFinalizationStatus::Succeeded &&
+                    gnc::kernel::RunFinalizationStatus::NotStarted &&
                 bundle.session->run_outcome_for_sequence(1U) ==
                     failed_outcome,
             "reset precommit failure changed committed evidence or lost its attempt outcome");
@@ -2651,6 +2753,7 @@ void run() {
     verify_two_session_isolation(image);
     verify_query_count_invariance(image);
     verify_completed_run_reset(image);
+    verify_reset_capability_fail_closed(image);
     verify_reset_failure_matrix(image);
     verify_dispose_lifecycle(image);
 }

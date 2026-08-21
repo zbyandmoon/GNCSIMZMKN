@@ -886,6 +886,7 @@ describe_yyz_rigid_step_base_package() {
     rigid_runtime.schedule.max_input_age_steps = 0U;
     rigid_runtime.lifecycle_capabilities = {
         gnc::model_sdk::RuntimeLifecycleCapability::Instantiate,
+        gnc::model_sdk::RuntimeLifecycleCapability::Resettable,
         gnc::model_sdk::RuntimeLifecycleCapability::Dispose};
     rigid_runtime.resource_plan_id =
         std::string(kYyzNoWorkspaceResourcePlanIdentity);

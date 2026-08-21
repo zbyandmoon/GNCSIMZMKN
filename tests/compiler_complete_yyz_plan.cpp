@@ -767,7 +767,8 @@ void verify_complete_ref_graph() {
                 guidance->step_interval == 1U && guidance->offset == 0U &&
                 guidance->max_input_age_steps == 0U &&
                 guidance->lifecycle_capabilities ==
-                    std::vector<std::string>{"Instantiate", "Dispose"} &&
+                    std::vector<std::string>{"Instantiate", "Resettable",
+                                             "Dispose"} &&
                 guidance->callsite_handles.size() == 1U,
             "guidance image schedule/lifecycle facts changed");
     require(evaluator != nullptr &&
@@ -780,7 +781,8 @@ void verify_complete_ref_graph() {
                 evaluator->step_interval == 0U && evaluator->offset == 0U &&
                 evaluator->max_input_age_steps == 0U &&
                 evaluator->lifecycle_capabilities ==
-                    std::vector<std::string>{"Instantiate", "Dispose"} &&
+                    std::vector<std::string>{"Instantiate", "Resettable",
+                                             "Dispose"} &&
                 evaluator->callsite_handles.size() == 1U,
             "terminal evaluator image schedule/lifecycle facts changed");
     require(rigid != nullptr && rigid->state_block_handles.size() == 1U &&
