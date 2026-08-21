@@ -2,6 +2,7 @@
 
 #include "gnc/kernel/session.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -15,6 +16,7 @@ enum class FailurePhase : std::uint8_t {
     Preparation,
     RuntimeCell,
     InitialState,
+    Boundary,
 };
 
 enum class TraceObjectKind : std::uint8_t {
@@ -41,6 +43,73 @@ struct FailurePoint {
 struct AdapterOptions {
     FailurePoint failure;
     bool omit_first_slot_materializer = false;
+    bool swap_first_two_preparation_materializers = false;
+    bool disguise_second_preparation_as_first = false;
+    bool wrong_first_runtime_factory_identity = false;
+    std::size_t wrong_writer_token_boundary_ordinal =
+        static_cast<std::size_t>(-1);
+    std::size_t omit_output_boundary_ordinal =
+        static_cast<std::size_t>(-1);
+    std::size_t fail_after_output_boundary_ordinal =
+        static_cast<std::size_t>(-1);
+    bool reverse_invocation_registration = false;
+};
+
+struct BoundaryContextProbe {
+    std::int64_t tick = -1;
+    double sample_seconds = 0.0;
+    double interval_start_seconds = 0.0;
+    double interval_end_seconds = 0.0;
+    std::int64_t configuration_revision = -1;
+    bool quality_valid = false;
+};
+
+struct OpeningBoundaryProbe {
+    std::vector<std::uint32_t> call_order;
+    std::vector<BoundaryContextProbe> contexts;
+    std::array<double, 3U> observation_position{};
+    std::array<double, 3U> observation_velocity{};
+    std::array<double, 4U> observation_attitude_wxyz{};
+    std::array<double, 3U> observation_angular_rate{};
+    double mass_kilograms = 0.0;
+    std::array<double, 3U> center_of_mass{};
+    std::array<double, 9U> inertia{};
+    double guidance_altitude_error = 0.0;
+    double guidance_raw_command = 0.0;
+    double guidance_command = 0.0;
+    double guidance_limit = 0.0;
+    bool guidance_saturated = false;
+    double controller_pitch_error = 0.0;
+    double controller_raw_moment = 0.0;
+    double controller_moment = 0.0;
+    double controller_limit = 0.0;
+    bool controller_saturated = false;
+    std::array<double, 3U> actuator_moment{};
+    std::array<double, 3U> propulsion_force{};
+    std::array<double, 3U> propulsion_application_from_com{};
+    std::array<double, 3U> propulsion_intrinsic_moment{};
+    double mass_flow_rate = 0.0;
+    std::array<double, 3U> gravity{};
+    std::array<double, 3U> wind{};
+    double density = 0.0;
+    double speed_of_sound = 0.0;
+    double airspeed = 0.0;
+    double alpha = 0.0;
+    double beta = 0.0;
+    double dynamic_pressure = 0.0;
+    double mach = 0.0;
+    std::array<double, 6U> aerodynamic_coefficients{};
+    std::size_t closure_contribution_count = 0U;
+    std::array<double, 3U> held_force{};
+    std::array<double, 3U> held_moment{};
+    bool controlled_preparation_written = false;
+    bool held_form_written = false;
+    bool terminal_evaluator_called = false;
+};
+
+struct CapturedFrameView {
+    std::shared_ptr<kernel::SessionInputView> view;
+    std::uint32_t slot_handle = 0U;
 };
 
 struct TraceEvent {
@@ -62,6 +131,8 @@ struct MaterializationTrace {
 struct RefYyzSessionAdapter {
     std::shared_ptr<const kernel::SessionMaterializationProvider> provider;
     std::shared_ptr<MaterializationTrace> trace;
+    std::shared_ptr<OpeningBoundaryProbe> opening_boundary;
+    std::shared_ptr<CapturedFrameView> captured_input;
     std::uint32_t mass_state_block_handle = 0U;
     std::uint32_t mission_result_slot_handle = 0U;
     std::uint32_t first_non_state_slot_handle = 0U;
@@ -79,16 +150,24 @@ struct RefYyzSessionAdapter {
 struct NonTrivialObjectProbe {
     bool state_is_non_trivial = false;
     bool output_is_non_trivial = false;
-    bool initial_mass_string_present = false;
-    bool state_clone_restored_string = false;
-    bool first_output_replace_succeeded = false;
-    bool second_output_replace_succeeded = false;
-    bool output_string_replaced = false;
+    bool state_store_cloned_twice = false;
+    bool frame_values_deferred = false;
 };
 
 // Kept behind the adapter facade so the Session probe includes no YYZ
 // concrete state, output, definition, or Runtime Cell header.
 [[nodiscard]] NonTrivialObjectProbe exercise_non_trivial_objects(
-    kernel::Session& session, const RefYyzSessionAdapter& adapter);
+    const kernel::Session& session, const RefYyzSessionAdapter& adapter);
+
+[[nodiscard]] kernel::SessionResult read_captured_stale_input(
+    const RefYyzSessionAdapter& adapter) noexcept;
+
+[[nodiscard]] kernel::SessionResult read_mass_candidate_for_qualification(
+    const kernel::Session& session, const RefYyzSessionAdapter& adapter,
+    double& mass_kilograms) noexcept;
+
+[[nodiscard]] kernel::SessionResult replace_mass_candidate_for_qualification(
+    kernel::Session& session, const RefYyzSessionAdapter& adapter,
+    double mass_kilograms) noexcept;
 
 } // namespace gnc::tests::ref_yyz
