@@ -230,6 +230,21 @@ if(GNC_BUILD_TESTS)
     endif()
     gnc_enable_warnings(gnc_kernel_session_materialization_probe)
 
+    # R3 opening-boundary slice: bounded CycleFrame and exact REF-YYZ calls.
+    add_executable(
+        gnc_kernel_opening_boundary_probe
+        tests/kernel_opening_boundary.cpp
+        tests/support/ref_yyz_complete_composition.cpp
+        tests/support/ref_yyz_session_adapter.cpp)
+    target_link_libraries(
+        gnc_kernel_opening_boundary_probe
+        PRIVATE compiler kernel_session yyz_rigid_step)
+    if(MSVC)
+        target_compile_options(
+            gnc_kernel_opening_boundary_probe PRIVATE /bigobj)
+    endif()
+    gnc_enable_warnings(gnc_kernel_opening_boundary_probe)
+
     # R0 validation spike: intentionally isolated from product modules and Legacy.
     add_executable(
         gnc_scientific_conventions
@@ -462,6 +477,9 @@ if(GNC_BUILD_TESTS)
     add_test(
         NAME r3.kernel-session-materialization.probe
         COMMAND gnc_kernel_session_materialization_probe --self-check)
+    add_test(
+        NAME r3.kernel-opening-boundary.probe
+        COMMAND gnc_kernel_opening_boundary_probe --self-check)
     add_test(
         NAME r0.scientific-conventions.properties
         COMMAND gnc_scientific_conventions --self-check)
