@@ -550,7 +550,7 @@ void verify_allocation_failure_unwind(
     bool observed_partial_object_failure = false;
     bool observed_success = false;
     for (std::int64_t fail_after = 0;
-         fail_after < 192 && !observed_success; ++fail_after) {
+         fail_after < 512 && !observed_success; ++fail_after) {
         adapter.trace->events.clear();
         auto creation = gnc::kernel::create_session(image, adapter.provider);
         require(static_cast<bool>(creation),

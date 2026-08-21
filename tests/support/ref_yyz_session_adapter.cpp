@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <any>
 #include <array>
+#include <cmath>
 #include <functional>
 #include <iterator>
 #include <limits>
@@ -156,7 +157,8 @@ make_state_materializer(
     const Codec& codec, std::uint32_t initial_binding_handle,
     std::uint32_t builder_entry_handle,
     std::shared_ptr<MaterializationTrace> trace,
-    std::shared_ptr<bool> fail_next_replace, Construct construct);
+    std::shared_ptr<bool> fail_next_replace,
+    std::size_t fail_copy_ordinal, Construct construct);
 
 template <typename Value>
 [[nodiscard]] std::shared_ptr<const SessionObjectMaterializer>
@@ -164,7 +166,11 @@ make_default_slot_materializer(
     std::string layout_identity, std::uint32_t codec_entry_handle,
     const gnc::model_sdk::TypedInProcessSlotCodec<Value>& codec,
     std::uint32_t slot_handle, SessionObjectRole role,
-    std::shared_ptr<MaterializationTrace> trace);
+    std::shared_ptr<MaterializationTrace> trace,
+    std::size_t fail_copy_ordinal =
+        (std::numeric_limits<std::size_t>::max)(),
+    std::size_t fail_validate_ordinal =
+        (std::numeric_limits<std::size_t>::max)());
 
 [[nodiscard]] double initial_float(
     const PlanImageInitialBinding& binding, std::string_view field_id);
@@ -333,7 +339,12 @@ template <typename Value>
 slot_materializer_if(
     const ExecutionPlanImage& image, const PlanImageSlot& slot,
     std::string_view layout_identity,
-    const std::shared_ptr<MaterializationTrace>& trace) {
+    const AdapterOptions& options,
+    const std::shared_ptr<MaterializationTrace>& trace,
+    std::size_t fail_copy_ordinal =
+        (std::numeric_limits<std::size_t>::max)(),
+    std::size_t fail_validate_ordinal =
+        (std::numeric_limits<std::size_t>::max)()) {
     using Codec = gnc::model_sdk::TypedInProcessSlotCodec<Value>;
     using Getter = gnc::model_sdk::InProcessCodecGetter<Codec>;
     if (slot.layout_id != layout_identity ||
@@ -348,9 +359,22 @@ slot_materializer_if(
                   gnc::contracts::SlotStorageClass::TerminalResult
             ? SessionObjectRole::TerminalOutputValue
             : SessionObjectRole::CycleFrameValue;
+    if (fail_copy_ordinal ==
+            (std::numeric_limits<std::size_t>::max)() &&
+        slot.storage_class ==
+            gnc::contracts::SlotStorageClass::CycleFrame) {
+        if (options.fail_cycle_output_copy_ordinal !=
+            static_cast<std::size_t>(-1)) {
+            fail_copy_ordinal =
+                options.fail_cycle_output_copy_ordinal;
+        } else if (options.fail_cycle_output_seal_clone) {
+            fail_copy_ordinal = 1U;
+        }
+    }
     return make_default_slot_materializer<Value>(
         std::string(layout_identity), slot.codec_entry_handle, getter(),
-        slot.handle, role, trace);
+        slot.handle, role, trace, fail_copy_ordinal,
+        fail_validate_ordinal);
 }
 
 void build_slots(const ExecutionPlanImage& image,
@@ -374,50 +398,62 @@ void build_slots(const ExecutionPlanImage& image,
 
         std::shared_ptr<const SessionObjectMaterializer> materializer;
         materializer = slot_materializer_if<yyz::CommittedRigidObservation>(
-            image, slot, yyz::kRigidObservationLayoutIdentity, trace);
+            image, slot, yyz::kRigidObservationLayoutIdentity, options,
+            trace);
         if (materializer == nullptr) {
             materializer = slot_materializer_if<yyz::RigidFormInput>(
-                image, slot, yyz::kRigidFormInputLayoutIdentity, trace);
+                image, slot, yyz::kRigidFormInputLayoutIdentity, options,
+                trace);
         }
         if (materializer == nullptr) {
             materializer = slot_materializer_if<
                 yyz::ControlledRigidBoundaryPreparationOutput>(
                 image, slot,
                 yyz::kControlledRigidBoundaryPreparationLayoutIdentity,
-                trace);
+                options, trace);
         }
         if (materializer == nullptr) {
             materializer = slot_materializer_if<yyz::MassPropertiesInput>(
-                image, slot, yyz::kMassPropertiesLayoutIdentity, trace);
+                image, slot, yyz::kMassPropertiesLayoutIdentity, options,
+                trace);
         }
         if (materializer == nullptr) {
             materializer = slot_materializer_if<
                 yyz::AltitudePitchGuidanceOutput>(
-                image, slot, yyz::kGuidanceOutputLayoutIdentity, trace);
+                image, slot, yyz::kGuidanceOutputLayoutIdentity, options,
+                trace);
         }
         if (materializer == nullptr) {
             materializer = slot_materializer_if<
                 yyz::PitchMomentControllerOutput>(
-                image, slot, yyz::kControllerOutputLayoutIdentity, trace);
+                image, slot, yyz::kControllerOutputLayoutIdentity, options,
+                trace);
         }
         if (materializer == nullptr) {
             materializer = slot_materializer_if<
                 yyz::IdealBodyMomentActuatorOutput>(
-                image, slot, yyz::kActuatorOutputLayoutIdentity, trace);
+                image, slot, yyz::kActuatorOutputLayoutIdentity, options,
+                trace);
         }
         if (materializer == nullptr) {
             materializer = slot_materializer_if<
                 yyz::SuppliedPropulsionBodyWrench>(
-                image, slot, yyz::kPropulsionWrenchLayoutIdentity, trace);
+                image, slot, yyz::kPropulsionWrenchLayoutIdentity, options,
+                trace);
         }
         if (materializer == nullptr) {
             materializer = slot_materializer_if<yyz::MassFlowIntervalInput>(
-                image, slot, yyz::kMassFlowLayoutIdentity, trace);
+                image, slot, yyz::kMassFlowLayoutIdentity, options, trace);
         }
         if (materializer == nullptr) {
             materializer = slot_materializer_if<
                 yyz::CommittedMissionResultOutput>(
-                image, slot, yyz::kMissionResultLayoutIdentity, trace);
+                image, slot, yyz::kMissionResultLayoutIdentity, options,
+                trace,
+                options.fail_terminal_result_seal_clone ? 1U :
+                    (std::numeric_limits<std::size_t>::max)(),
+                options.fail_terminal_final_precommit ? 5U :
+                    (std::numeric_limits<std::size_t>::max)());
             if (materializer != nullptr) {
                 adapter.mission_result_slot_handle = slot.handle;
             }
@@ -584,6 +620,7 @@ void build_initial_states(
                     block.codec_entry_handle, codec_getter(), handle,
                     binding->builder_entry_handle, trace,
                     fail_next_state_replace,
+                    options.fail_state_copy_ordinal,
                     [algorithm = definition.rigid.algorithm,
                      input = std::move(input), initial, fail, trace,
                      handle](const SessionObjectAccess&,
@@ -629,6 +666,7 @@ void build_initial_states(
                     block.codec_entry_handle, codec_getter(), handle,
                     binding->builder_entry_handle, trace,
                     fail_next_state_replace,
+                    options.fail_state_copy_ordinal,
                     [definition = std::move(definition),
                      input = std::move(input), initial, fail, trace,
                      handle](const SessionObjectAccess&,
@@ -896,10 +934,14 @@ class SlotOperations final : public InProcessObjectOperations {
     SlotOperations(std::string layout_identity,
                    std::uint32_t codec_entry_handle, const Codec& codec,
                    std::uint32_t handle,
-                   std::shared_ptr<MaterializationTrace> trace)
+                   std::shared_ptr<MaterializationTrace> trace,
+                   std::size_t fail_copy_ordinal,
+                   std::size_t fail_validate_ordinal)
         : layout_identity_(std::move(layout_identity)),
           codec_entry_handle_(codec_entry_handle), codec_(codec),
-          handle_(handle), trace_(std::move(trace)) {}
+          handle_(handle), trace_(std::move(trace)),
+          fail_copy_ordinal_(fail_copy_ordinal),
+          fail_validate_ordinal_(fail_validate_ordinal) {}
 
     [[nodiscard]] InProcessObjectLayout layout() const noexcept override {
         return {sizeof(Value), alignof(Value), layout_identity_,
@@ -911,6 +953,12 @@ class SlotOperations final : public InProcessObjectOperations {
     [[nodiscard]] bool copy_construct(
         const void* source, void* destination) const noexcept override {
         try {
+            const auto ordinal = copy_count_++;
+            if (ordinal == fail_copy_ordinal_) {
+                record(trace_, TraceAction::InjectedFailure,
+                       TraceObjectKind::Slot, handle_);
+                return false;
+            }
             new (destination)
                 Value(codec_.copy(*static_cast<const Value*>(source)));
             record(trace_, TraceAction::CopyConstruct,
@@ -939,6 +987,12 @@ class SlotOperations final : public InProcessObjectOperations {
     }
 
     [[nodiscard]] bool validate(const void* object) const noexcept override {
+        const auto ordinal = validate_count_++;
+        if (ordinal == fail_validate_ordinal_) {
+            record(trace_, TraceAction::InjectedFailure,
+                   TraceObjectKind::Slot, handle_);
+            return false;
+        }
         return codec_.validate != nullptr &&
                codec_.validate(*static_cast<const Value*>(object));
     }
@@ -958,6 +1012,12 @@ class SlotOperations final : public InProcessObjectOperations {
     Codec codec_;
     std::uint32_t handle_;
     std::shared_ptr<MaterializationTrace> trace_;
+    std::size_t fail_copy_ordinal_ =
+        (std::numeric_limits<std::size_t>::max)();
+    std::size_t fail_validate_ordinal_ =
+        (std::numeric_limits<std::size_t>::max)();
+    mutable std::size_t copy_count_ = 0U;
+    mutable std::size_t validate_count_ = 0U;
 };
 
 template <typename Value, typename Codec>
@@ -967,11 +1027,13 @@ class StateOperations final : public InProcessObjectOperations {
                     std::uint32_t codec_entry_handle, const Codec& codec,
                     std::uint32_t handle,
                     std::shared_ptr<MaterializationTrace> trace,
-                    std::shared_ptr<bool> fail_next_replace)
+                    std::shared_ptr<bool> fail_next_replace,
+                    std::size_t fail_copy_ordinal)
         : layout_identity_(std::move(layout_identity)),
           codec_entry_handle_(codec_entry_handle), codec_(codec),
           handle_(handle), trace_(std::move(trace)),
-          fail_next_replace_(std::move(fail_next_replace)) {}
+          fail_next_replace_(std::move(fail_next_replace)),
+          fail_copy_ordinal_(fail_copy_ordinal) {}
 
     [[nodiscard]] InProcessObjectLayout layout() const noexcept override {
         return {sizeof(Value), alignof(Value), layout_identity_,
@@ -983,6 +1045,12 @@ class StateOperations final : public InProcessObjectOperations {
     [[nodiscard]] bool copy_construct(
         const void* source, void* destination) const noexcept override {
         try {
+            const auto ordinal = copy_count_++;
+            if (ordinal == fail_copy_ordinal_) {
+                record(trace_, TraceAction::InjectedFailure,
+                       TraceObjectKind::State, handle_);
+                return false;
+            }
             new (destination)
                 Value(codec_.clone(*static_cast<const Value*>(source)));
             record(trace_, TraceAction::CopyConstruct,
@@ -1049,6 +1117,9 @@ class StateOperations final : public InProcessObjectOperations {
     std::uint32_t handle_;
     std::shared_ptr<MaterializationTrace> trace_;
     std::shared_ptr<bool> fail_next_replace_;
+    std::size_t fail_copy_ordinal_ =
+        (std::numeric_limits<std::size_t>::max)();
+    mutable std::size_t copy_count_ = 0U;
 };
 
 class FixedMaterializer final : public SessionObjectMaterializer {
@@ -1459,10 +1530,12 @@ make_default_slot_materializer(
     std::string layout_identity, std::uint32_t codec_entry_handle,
     const gnc::model_sdk::TypedInProcessSlotCodec<Value>& codec,
     std::uint32_t slot_handle, SessionObjectRole role,
-    std::shared_ptr<MaterializationTrace> trace) {
+    std::shared_ptr<MaterializationTrace> trace,
+    std::size_t fail_copy_ordinal,
+    std::size_t fail_validate_ordinal) {
     auto operations = std::make_shared<SlotOperations<Value>>(
         std::move(layout_identity), codec_entry_handle, codec, slot_handle,
-        trace);
+        trace, fail_copy_ordinal, fail_validate_ordinal);
     return std::make_shared<FixedMaterializer>(
         operations,
         SessionMaterializerIdentity{slot_handle, role, 0U,
@@ -1486,10 +1559,12 @@ make_state_materializer(
     const Codec& codec, std::uint32_t initial_binding_handle,
     std::uint32_t builder_entry_handle,
     std::shared_ptr<MaterializationTrace> trace,
-    std::shared_ptr<bool> fail_next_replace, Construct construct) {
+    std::shared_ptr<bool> fail_next_replace,
+    std::size_t fail_copy_ordinal, Construct construct) {
     auto operations = std::make_shared<StateOperations<Value, Codec>>(
         std::move(layout_identity), codec_entry_handle, codec,
-        initial_binding_handle, trace, std::move(fail_next_replace));
+        initial_binding_handle, trace, std::move(fail_next_replace),
+        fail_copy_ordinal);
     return std::make_shared<FixedMaterializer>(
         operations,
         SessionMaterializerIdentity{
@@ -2419,9 +2494,26 @@ void build_rigid_invocations(
             step_context.configuration_revision =
                 closure_definition.configuration_revision;
             step_context.quality = context.quality();
+            for (std::size_t extra = 0U;
+                 extra < options.extra_discarded_boundary_evaluations;
+                 ++extra) {
+                const auto discarded = cell->bindings.boundary_evaluation(
+                    cell->definition, cell->bindings.bound_invocations,
+                    {step_context, *state, *mass, *propulsion, *actuator});
+                ++probe->environment_query_calls;
+                ++probe->aerodynamic_query_calls;
+                ++probe->discarded_boundary_evaluations;
+                if (!discarded.succeeded() || !discarded.has_value()) {
+                    return {gnc::kernel::SessionError::InvocationFailed,
+                            context.callsite_handle(),
+                            "discarded boundary query pass failed"};
+                }
+            }
             const auto prepared = cell->bindings.boundary_evaluation(
                 cell->definition, cell->bindings.bound_invocations,
                 {step_context, *state, *mass, *propulsion, *actuator});
+            ++probe->environment_query_calls;
+            ++probe->aerodynamic_query_calls;
             if (!prepared.succeeded() || !prepared.has_value()) {
                 return {gnc::kernel::SessionError::InvocationFailed,
                         context.callsite_handle(),
@@ -3076,17 +3168,187 @@ void build_propulsion_invocations(
 void build_evaluator_invocations(
     const ExecutionPlanImage& image,
     const PlanImageRuntimeComponent& component,
+    const AdapterOptions& options,
+    const std::shared_ptr<MaterializationTrace>& trace,
     const std::shared_ptr<OpeningBoundaryProbe>& probe,
     CompiledProvider& provider) {
     const auto& callsite = component_callsite<
         yyz::CommittedMissionHistoryEvaluationCall>(image, component);
+    if (component.evaluator_history_handles.size() != 1U) {
+        throw std::runtime_error("evaluator history handle is not singular");
+    }
+    const auto* linked_history = find_handle(
+        image.evaluator_histories(),
+        component.evaluator_history_handles.front());
+    if (linked_history == nullptr ||
+        linked_history->evaluator_callsite_handle != callsite.handle ||
+        linked_history->history_depth !=
+            yyz::kCommittedMissionHistoryDepth ||
+        linked_history->ordered_members.size() != 2U ||
+        linked_history->ordered_members[0U].member_id !=
+            yyz::kCommittedMissionRigidHistoryMemberId ||
+        linked_history->ordered_members[0U].state_schema_id !=
+            yyz::kRigidStateSchemaIdentity ||
+        linked_history->ordered_members[0U].state_layout_id !=
+            yyz::kRigidStateLayoutIdentity ||
+        linked_history->ordered_members[1U].member_id !=
+            yyz::kCommittedMissionMassHistoryMemberId ||
+        linked_history->ordered_members[1U].state_schema_id !=
+            yyz::kMassStateSchemaIdentity ||
+        linked_history->ordered_members[1U].state_layout_id !=
+            yyz::kMassStateLayoutIdentity) {
+        throw std::runtime_error("evaluator history shape changed");
+    }
+    const auto history = *linked_history;
+    const auto factory = component.runtime_cell_factory_entry_handle;
     install_invocation<yyz::CommittedMissionResultRuntimeCell>(
         provider, component, callsite,
-        [probe](const SessionInvocationContext& context) -> SessionResult {
+        [options, trace, probe, history, factory](
+            const SessionInvocationContext& context) -> SessionResult {
+            std::size_t ordinal = 0U;
+            auto status = begin_boundary_invocation(
+                context, options, trace, probe, ordinal);
+            if (!status) return status;
             probe->terminal_evaluator_called = true;
-            return {gnc::kernel::SessionError::InvocationFailed,
-                    context.callsite_handle(),
-                    "terminal evaluator lacks required committed history"};
+            ++probe->terminal_evaluator_calls;
+            const auto* cell = checked_runtime<
+                yyz::CommittedMissionResultRuntimeCell>(context, factory);
+            if (cell == nullptr ||
+                cell->bindings.boundary_evaluation_callsite_handle !=
+                    context.callsite_handle() ||
+                cell->bindings.committed_history_handle != history.handle ||
+                cell->bindings.boundary_evaluation == nullptr ||
+                cell->bindings.mission_result_output.slot_handle == 0U ||
+                cell->bindings.mission_result_output.writer_token.value ==
+                    0U) {
+                return {gnc::kernel::SessionError::ObjectTypeMismatch,
+                        context.component_handle(),
+                        "terminal evaluator Runtime Cell binding mismatch"};
+            }
+            const auto requested_history =
+                options.wrong_terminal_history_handle
+                    ? history.handle + 1U
+                    : cell->bindings.committed_history_handle;
+            gnc::kernel::SessionCommittedHistoryInfo info;
+            status = context.history().info(requested_history, info);
+            if (!status) return status;
+            if (info.history_handle != history.handle ||
+                info.history_depth != yyz::kCommittedMissionHistoryDepth ||
+                info.sample_count != yyz::kCommittedMissionHistoryDepth ||
+                info.member_count != history.ordered_members.size() ||
+                info.first_tick != 0 || info.last_tick != 2) {
+                return {gnc::kernel::SessionError::HistoryValidationFailed,
+                        history.handle,
+                        "terminal evaluator history is incomplete"};
+            }
+            if (options.fail_terminal_evaluator) {
+                return {gnc::kernel::SessionError::InvocationFailed,
+                        context.callsite_handle(),
+                        "injected terminal evaluator failure"};
+            }
+            yyz::CommittedMissionStateHistoryInput input;
+            for (std::size_t sample_index = 0U;
+                 sample_index < yyz::kCommittedMissionHistoryDepth;
+                 ++sample_index) {
+                const auto requested_sample =
+                    options.out_of_range_terminal_history_sample &&
+                            sample_index + 1U ==
+                                yyz::kCommittedMissionHistoryDepth
+                        ? yyz::kCommittedMissionHistoryDepth
+                        : sample_index;
+                const std::size_t rigid_member =
+                    options.reverse_terminal_history_members ? 1U : 0U;
+                const std::size_t mass_member =
+                    options.reverse_terminal_history_members ? 0U : 1U;
+                std::int64_t rigid_tick = -1;
+                gnc::kernel::SessionObjectIdentityView rigid_view;
+                status = context.history().read(
+                    history.handle, requested_sample, rigid_member,
+                    rigid_tick, rigid_view);
+                if (!status) return status;
+                std::int64_t mass_tick = -1;
+                gnc::kernel::SessionObjectIdentityView mass_view;
+                status = context.history().read(
+                    history.handle, sample_index, mass_member,
+                    mass_tick, mass_view);
+                if (!status) return status;
+                const auto& rigid_plan = history.ordered_members[0U];
+                const auto& mass_plan = history.ordered_members[1U];
+                const bool rigid_type_matches =
+                    rigid_view &&
+                    rigid_view.role ==
+                        SessionObjectRole::CommittedHistoryValue &&
+                    rigid_view.image_object_handle ==
+                        rigid_plan.committed_state_slot_handle &&
+                    rigid_view.size_bytes == sizeof(yyz::RigidState) &&
+                    rigid_view.alignment_bytes == alignof(yyz::RigidState) &&
+                    rigid_view.type_identity == &typeid(yyz::RigidState);
+                const bool mass_type_matches =
+                    mass_view &&
+                    mass_view.role ==
+                        SessionObjectRole::CommittedHistoryValue &&
+                    mass_view.image_object_handle ==
+                        mass_plan.committed_state_slot_handle &&
+                    mass_view.size_bytes == sizeof(yyz::MassState) &&
+                    mass_view.alignment_bytes == alignof(yyz::MassState) &&
+                    mass_view.type_identity == &typeid(yyz::MassState);
+                if (!rigid_type_matches || !mass_type_matches ||
+                    options.wrong_terminal_history_member_type ||
+                    rigid_tick != mass_tick ||
+                    rigid_tick != static_cast<std::int64_t>(sample_index)) {
+                    return {gnc::kernel::SessionError::ObjectTypeMismatch,
+                            history.handle,
+                            "terminal evaluator history member type or order mismatch"};
+                }
+                input.rigid_states[sample_index] =
+                    *static_cast<const yyz::RigidState*>(rigid_view.address);
+                input.mass_states[sample_index] =
+                    *static_cast<const yyz::MassState*>(mass_view.address);
+            }
+            auto output = cell->bindings.boundary_evaluation(
+                cell->definition, input);
+            if (!output.succeeded() || !output.has_value()) {
+                return {gnc::kernel::SessionError::InvocationFailed,
+                        context.callsite_handle(),
+                        "committed mission history evaluation failed"};
+            }
+            auto value = output.value();
+            if (options.invalid_terminal_output) {
+                value.final_time_seconds =
+                    (std::numeric_limits<double>::quiet_NaN)();
+            }
+            const bool valid_output =
+                (value.status == yyz::MissionResultStatus::Completed ||
+                 value.status == yyz::MissionResultStatus::Aborted) &&
+                value.initial_tick == info.first_tick &&
+                value.final_tick == info.last_tick &&
+                std::isfinite(value.final_time_seconds) &&
+                !value.termination.reason_code.empty() &&
+                value.termination.priority >= 0 &&
+                value.metrics.evaluated_sample_count == info.sample_count &&
+                std::isfinite(value.metrics.terminal.duration_seconds) &&
+                std::isfinite(value.metrics.terminal.downrange_meters) &&
+                std::isfinite(
+                    value.metrics.terminal.remaining_mass_kilograms) &&
+                value.terminal_boundary.rigid_context.sample_time.tick ==
+                    value.final_tick &&
+                value.terminal_boundary.mass_state.context.sample_time.tick ==
+                    value.final_tick;
+            if (!valid_output) {
+                return {gnc::kernel::SessionError::ObjectValidationFailed,
+                        context.callsite_handle(),
+                        "terminal evaluator output is invalid"};
+            }
+            if (options.omit_terminal_output) return {};
+            const auto token =
+                options.wrong_terminal_writer_token
+                    ? cell->bindings.mission_result_output.writer_token.value +
+                          1U
+                    : cell->bindings.mission_result_output.writer_token.value;
+            return write_value(
+                context,
+                cell->bindings.mission_result_output.slot_handle,
+                token, value);
         });
 }
 
@@ -3153,7 +3415,8 @@ void build_invocations(
         } else if (entry_is<
                        yyz::CommittedMissionResultRuntimeCellFactoryCall>(
                        image, factory)) {
-            build_evaluator_invocations(image, *component, probe, provider);
+            build_evaluator_invocations(image, *component, options, trace,
+                                        probe, provider);
         }
     }
 }
@@ -3322,6 +3585,63 @@ kernel::SessionResult read_committed_rigid_mass_for_qualification(
     result.inertia = matrix3(mass.inertia_about_center_of_mass.value);
     result.mass_sample_tick = mass.context.sample_time.tick;
     return {};
+}
+
+kernel::SessionResult read_mission_result_for_qualification(
+    const kernel::Session& session, const RefYyzSessionAdapter& adapter,
+    MissionResultProbe& result) noexcept {
+    result = {};
+    try {
+        kernel::SessionObjectIdentityView view;
+        auto status =
+            kernel::qualification::SessionAccess::read_committed_output(
+                session, adapter.mission_result_slot_handle, view);
+        if (!status) return status;
+        if (!view ||
+            view.role != kernel::SessionObjectRole::TerminalOutputValue ||
+            view.image_object_handle != adapter.mission_result_slot_handle ||
+            view.codec_entry_handle == 0U ||
+            view.size_bytes != sizeof(yyz::CommittedMissionResultOutput) ||
+            view.alignment_bytes !=
+                alignof(yyz::CommittedMissionResultOutput) ||
+            view.type_identity !=
+                &typeid(yyz::CommittedMissionResultOutput)) {
+            return {kernel::SessionError::ObjectTypeMismatch,
+                    adapter.mission_result_slot_handle,
+                    "mission result qualification type mismatch"};
+        }
+        const auto& value =
+            *static_cast<const yyz::CommittedMissionResultOutput*>(
+                view.address);
+        result.present = true;
+        result.completed =
+            value.status == yyz::MissionResultStatus::Completed;
+        result.initial_tick = value.initial_tick;
+        result.final_tick = value.final_tick;
+        result.final_time_seconds = value.final_time_seconds;
+        result.reason_code = value.termination.reason_code;
+        result.priority = value.termination.priority;
+        result.evaluated_sample_count =
+            value.metrics.evaluated_sample_count;
+        result.duration_seconds =
+            value.metrics.terminal.duration_seconds;
+        result.downrange_meters =
+            value.metrics.terminal.downrange_meters;
+        result.remaining_mass_kilograms =
+            value.metrics.terminal.remaining_mass_kilograms;
+        result.consumed_mass_kilograms =
+            value.metrics.terminal.consumed_mass_kilograms;
+        result.terminal_speed_meters_per_second =
+            value.metrics.terminal.speed_meters_per_second;
+        result.terminal_tick =
+            value.terminal_boundary.rigid_context.sample_time.tick;
+        return {};
+    } catch (...) {
+        result = {};
+        return {kernel::SessionError::InternalFailure,
+                adapter.mission_result_slot_handle,
+                "mission result qualification copy failed"};
+    }
 }
 
 } // namespace gnc::tests::ref_yyz

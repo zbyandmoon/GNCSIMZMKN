@@ -18,6 +18,8 @@ class SessionAccess;
 enum class SessionState : std::uint8_t {
     Created,
     Initialized,
+    Completed,
+    Failed,
     InitializationFailed,
 };
 
@@ -56,6 +58,9 @@ enum class SessionError : std::uint8_t {
     CandidateAuthorizationFailure,
     CandidateRearmFailed,
     CandidateValidationFailed,
+    HistoryAuthorizationFailure,
+    HistoryValidationFailed,
+    ObservationSealFailed,
     TransactionPrecommitFailed,
     InvocationFailed,
     InternalFailure,
@@ -111,6 +116,7 @@ enum class SessionObjectRole : std::uint8_t {
     CycleFrameValue,
     HeldIntervalValue,
     TerminalOutputValue,
+    CommittedHistoryValue,
 };
 
 struct SessionMaterializerIdentity {
@@ -202,6 +208,32 @@ class SessionFrameAccess {
         std::uint32_t slot_handle, std::uint32_t writer_token_handle,
         InProcessValueView value) noexcept = 0;
     [[nodiscard]] virtual bool frame_active(
+        std::uint64_t generation) const noexcept = 0;
+};
+
+struct SessionCommittedHistoryInfo {
+    std::uint32_t history_handle = 0U;
+    std::uint32_t history_depth = 0U;
+    std::size_t sample_count = 0U;
+    std::size_t member_count = 0U;
+    std::int64_t first_tick = 0;
+    std::int64_t last_tick = 0;
+};
+
+class SessionCommittedHistoryAccess {
+  public:
+    virtual ~SessionCommittedHistoryAccess() = default;
+    [[nodiscard]] virtual SessionResult history_info(
+        std::uint32_t callsite_handle, std::uint64_t generation,
+        std::uint32_t history_handle,
+        SessionCommittedHistoryInfo& result) const noexcept = 0;
+    [[nodiscard]] virtual SessionResult read_history_member(
+        std::uint32_t callsite_handle, std::uint64_t generation,
+        std::uint32_t history_handle, std::size_t sample_index,
+        std::size_t member_index, std::int64_t& sample_tick,
+        SessionObjectIdentityView& result) const noexcept = 0;
+    [[nodiscard]] virtual bool history_active(
+        std::uint32_t callsite_handle,
         std::uint64_t generation) const noexcept = 0;
 };
 
@@ -319,6 +351,29 @@ class SessionOutputWriterSet final {
     friend class Session;
 };
 
+class SessionCommittedHistoryView final {
+  public:
+    [[nodiscard]] SessionResult info(
+        std::uint32_t history_handle,
+        SessionCommittedHistoryInfo& result) const noexcept;
+    [[nodiscard]] SessionResult read(
+        std::uint32_t history_handle, std::size_t sample_index,
+        std::size_t member_index, std::int64_t& sample_tick,
+        SessionObjectIdentityView& result) const noexcept;
+    [[nodiscard]] bool active() const noexcept;
+
+  private:
+    SessionCommittedHistoryView(
+        const SessionCommittedHistoryAccess* access,
+        std::uint32_t callsite_handle,
+        std::uint64_t generation) noexcept;
+    const SessionCommittedHistoryAccess* access_ = nullptr;
+    std::uint32_t callsite_handle_ = 0U;
+    std::uint64_t generation_ = 0U;
+
+    friend class Session;
+};
+
 class SessionInvocationContext final {
   public:
     [[nodiscard]] std::uint32_t callsite_handle() const noexcept {
@@ -352,6 +407,10 @@ class SessionInvocationContext final {
     [[nodiscard]] const SessionOutputWriterSet& outputs() const noexcept {
         return outputs_;
     }
+    [[nodiscard]] const SessionCommittedHistoryView& history()
+        const noexcept {
+        return history_;
+    }
     [[nodiscard]] const SessionCandidateWriterSet& candidates()
         const noexcept {
         return candidates_;
@@ -365,7 +424,7 @@ class SessionInvocationContext final {
         contracts::DataQuality quality,
         SessionObjectIdentityView runtime_cell,
         SessionCommittedStateView committed, SessionInputView inputs,
-        SessionOutputWriterSet outputs,
+        SessionOutputWriterSet outputs, SessionCommittedHistoryView history,
         SessionCandidateWriterSet candidates) noexcept;
 
     std::uint32_t callsite_handle_ = 0U;
@@ -379,6 +438,7 @@ class SessionInvocationContext final {
     SessionCommittedStateView committed_;
     SessionInputView inputs_;
     SessionOutputWriterSet outputs_;
+    SessionCommittedHistoryView history_;
     SessionCandidateWriterSet candidates_;
 
     friend class Session;
@@ -535,6 +595,7 @@ struct SessionCommittedOutputInfo {
     double interval_start_seconds = 0.0;
     double interval_end_seconds = 0.0;
     contracts::DataQuality quality = contracts::DataQuality::Invalid;
+    bool terminal_result = false;
 };
 
 struct SessionBoundarySummary {
@@ -544,7 +605,37 @@ struct SessionBoundarySummary {
     std::vector<std::uint32_t> skipped_callsite_handles;
 };
 
-struct SessionStepSummary {
+struct SessionCandidateJournalEntry {
+    std::uint32_t slot_handle = 0U;
+    SessionCandidateProducerKind producer_kind =
+        SessionCandidateProducerKind::RuntimeCallsite;
+    std::uint32_t producer_handle = 0U;
+    std::uint32_t writer_token_handle = 0U;
+    std::uint64_t base_epoch = 0U;
+    std::uint64_t generation = 0U;
+    bool present = false;
+    bool valid = false;
+};
+
+struct SessionHistoryJournalEntry {
+    std::uint32_t history_handle = 0U;
+    std::int64_t staged_sample_tick = 0;
+    std::size_t prospective_sample_count = 0U;
+};
+
+struct SessionSealJournalEntry {
+    std::uint32_t slot_handle = 0U;
+    std::uint32_t codec_entry_handle = 0U;
+    std::uint64_t generation = 0U;
+    std::uint64_t sequence = 0U;
+    bool terminal_result = false;
+};
+
+struct SessionStepJournal {
+    std::uint32_t transaction_handle = 0U;
+    contracts::TransactionBranch branch =
+        contracts::TransactionBranch::Continue;
+    bool branch_selected = false;
     std::uint64_t generation = 0U;
     std::uint64_t base_epoch = 0U;
     std::uint64_t committed_epoch = 0U;
@@ -552,11 +643,22 @@ struct SessionStepSummary {
     std::int64_t committed_tick = 0;
     std::size_t output_write_count = 0U;
     bool committed = false;
+    bool history_staged = false;
+    bool observation_seal_staged = false;
+    bool result_seal_staged = false;
+    bool terminal_result_present = false;
+    bool prevalidated = false;
+    SessionResult primary_failure;
     std::vector<std::uint32_t> executed_callsite_handles;
     std::vector<std::uint32_t> skipped_callsite_handles;
     std::vector<std::uint32_t> integration_scope_handles;
     std::vector<std::uint32_t> candidate_slot_handles;
+    std::vector<SessionCandidateJournalEntry> candidates;
+    std::vector<SessionHistoryJournalEntry> histories;
+    std::vector<SessionSealJournalEntry> seals;
 };
+
+using SessionStepSummary = SessionStepJournal;
 
 class Session;
 struct SessionCreation;
@@ -575,11 +677,14 @@ class Session final {
     [[nodiscard]] SessionState state() const noexcept;
     [[nodiscard]] const contracts::ExecutionPlanImage& image() const noexcept;
     [[nodiscard]] SessionResult initialize() noexcept;
+    [[nodiscard]] SessionResult execute_step() noexcept;
     [[nodiscard]] SessionResult execute_continue_step() noexcept;
     [[nodiscard]] const SessionResult& last_result() const noexcept;
     [[nodiscard]] const SessionBoundarySummary& last_boundary_summary()
         const noexcept;
     [[nodiscard]] const SessionStepSummary& last_step_summary()
+        const noexcept;
+    [[nodiscard]] const SessionStepJournal& last_step_journal()
         const noexcept;
 
     [[nodiscard]] std::size_t preparation_count() const noexcept;
@@ -594,6 +699,8 @@ class Session final {
     [[nodiscard]] std::vector<SessionFrameSlotInfo> frame_slots() const;
     [[nodiscard]] std::vector<SessionCommittedOutputInfo> committed_outputs()
         const;
+    [[nodiscard]] std::vector<SessionCommittedHistoryInfo>
+    committed_histories() const;
     [[nodiscard]] std::uint64_t committed_epoch() const noexcept;
     [[nodiscard]] std::int64_t committed_tick() const noexcept;
     [[nodiscard]] bool frame_open() const noexcept;
@@ -610,6 +717,9 @@ class Session final {
     [[nodiscard]] SessionResult qualification_replace_candidate(
         std::uint32_t state_block_handle,
         InProcessValueView value) noexcept;
+    [[nodiscard]] SessionResult qualification_read_committed_output(
+        std::uint32_t slot_handle,
+        SessionObjectIdentityView& result) const noexcept;
     [[nodiscard]] SessionResult qualification_execute_opening_boundary()
         noexcept;
     std::unique_ptr<Impl> implementation_;

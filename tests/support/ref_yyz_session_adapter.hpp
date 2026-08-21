@@ -75,6 +75,22 @@ struct AdapterOptions {
     bool fail_first_candidate_rearm = false;
     bool request_undeclared_preparation = false;
     bool reverse_invocation_registration = false;
+    bool fail_terminal_evaluator = false;
+    bool omit_terminal_output = false;
+    bool wrong_terminal_writer_token = false;
+    bool invalid_terminal_output = false;
+    bool wrong_terminal_history_handle = false;
+    bool out_of_range_terminal_history_sample = false;
+    bool reverse_terminal_history_members = false;
+    bool wrong_terminal_history_member_type = false;
+    bool fail_terminal_result_seal_clone = false;
+    bool fail_terminal_final_precommit = false;
+    bool fail_cycle_output_seal_clone = false;
+    std::size_t fail_cycle_output_copy_ordinal =
+        static_cast<std::size_t>(-1);
+    std::size_t fail_state_copy_ordinal =
+        static_cast<std::size_t>(-1);
+    std::size_t extra_discarded_boundary_evaluations = 0U;
 };
 
 struct BoundaryContextProbe {
@@ -127,6 +143,10 @@ struct OpeningBoundaryProbe {
     bool controlled_preparation_written = false;
     bool held_form_written = false;
     bool terminal_evaluator_called = false;
+    std::size_t terminal_evaluator_calls = 0U;
+    std::size_t environment_query_calls = 0U;
+    std::size_t aerodynamic_query_calls = 0U;
+    std::size_t discarded_boundary_evaluations = 0U;
 };
 
 struct StepIntervalProbe {
@@ -155,6 +175,23 @@ struct CommittedRigidMassProbe {
     std::array<double, 3U> center_of_mass{};
     std::array<double, 9U> inertia{};
     std::int64_t mass_sample_tick = -1;
+};
+
+struct MissionResultProbe {
+    bool present = false;
+    bool completed = false;
+    std::int64_t initial_tick = -1;
+    std::int64_t final_tick = -1;
+    double final_time_seconds = 0.0;
+    std::string reason_code;
+    std::int64_t priority = 0;
+    std::size_t evaluated_sample_count = 0U;
+    double duration_seconds = 0.0;
+    double downrange_meters = 0.0;
+    double remaining_mass_kilograms = 0.0;
+    double consumed_mass_kilograms = 0.0;
+    double terminal_speed_meters_per_second = 0.0;
+    std::int64_t terminal_tick = -1;
 };
 
 struct CapturedFrameView {
@@ -226,5 +263,9 @@ struct NonTrivialObjectProbe {
 [[nodiscard]] kernel::SessionResult read_committed_rigid_mass_for_qualification(
     const kernel::Session& session, const RefYyzSessionAdapter& adapter,
     CommittedRigidMassProbe& result) noexcept;
+
+[[nodiscard]] kernel::SessionResult read_mission_result_for_qualification(
+    const kernel::Session& session, const RefYyzSessionAdapter& adapter,
+    MissionResultProbe& result) noexcept;
 
 } // namespace gnc::tests::ref_yyz

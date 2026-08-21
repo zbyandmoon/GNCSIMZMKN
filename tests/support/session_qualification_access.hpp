@@ -33,6 +33,13 @@ class SessionAccess final {
         return session.qualification_replace_candidate(state_block_handle,
                                                        value);
     }
+
+    [[nodiscard]] static SessionResult read_committed_output(
+        const Session& session, std::uint32_t slot_handle,
+        SessionObjectIdentityView& result) noexcept {
+        return session.qualification_read_committed_output(slot_handle,
+                                                           result);
+    }
 };
 
 } // namespace gnc::kernel::qualification
