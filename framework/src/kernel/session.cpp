@@ -3350,7 +3350,6 @@ struct Session::Impl final : SessionObjectAccess,
                 state != nullptr && reducer != nullptr &&
                 reducer_entry != nullptr && delivery != nullptr &&
                 writer != nullptr && candidate_count == 1U &&
-                component->profile == "ModeOwner" &&
                 component->occurrence_handle == occurrence->handle &&
                 state->owner_occurrence_handle == occurrence->handle &&
                 state->evolution == "InstantPatch" &&

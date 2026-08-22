@@ -63,25 +63,9 @@ template <typename Outcome>
     return result;
 }
 
-[[nodiscard]] gnc::model_sdk::StaticModelDescriptor& package_model(
-    Package& package, std::string_view model_id) {
-    const auto found = std::find_if(
-        package.models.begin(), package.models.end(),
-        [model_id](const auto& model) {
-            return model.definition.model_id == model_id;
-        });
-    require(found != package.models.end(),
-            "qualification package model is missing");
-    require(found->runtime_component.has_value(),
-            "qualification package model has no RuntimeComponent");
-    return *found;
-}
-
 [[nodiscard]] std::shared_ptr<const Image> link_package(
-    const Package& package) {
-    const auto source =
-        ref_yyz::make_multirate_held_output_qualification_source(
-            package);
+    const Package& package,
+    const compiler::CompleteStaticCompositionSource& source) {
     const auto implementation =
         yyz::describe_yyz_rigid_step_implementation(
             "build.ref-yyz.release", package);
@@ -143,10 +127,7 @@ template <typename Outcome>
 }
 
 void verify_compiler_contract() {
-    constexpr auto profile =
-        yyz::YyzRuntimeScheduleProfile::
-            MultirateHeldOutputQualification;
-    const auto package = yyz::describe_yyz_rigid_step_package(profile);
+    const auto package = yyz::describe_yyz_rigid_step_package();
     const auto source =
         ref_yyz::make_multirate_held_output_qualification_source(
             package);
@@ -234,30 +215,137 @@ void verify_compiler_contract() {
                 held.max_age_steps == 1U,
             "Image did not freeze exact HeldLatest storage authority");
 
-    auto current_cycle_package =
-        yyz::describe_yyz_rigid_step_package();
-    package_model(current_cycle_package,
-                  yyz::kAltitudePitchGuidanceModelIdentity)
-        .runtime_component->schedule.step_interval = 2U;
-    const auto invalid_source =
-        ref_yyz::make_complete_source(current_cycle_package);
+    auto invalid_source = source;
+    invalid_source.binding_temporal_overrides.front().temporal_relation =
+        gnc::model_sdk::TemporalRelation::CurrentCycle;
+    const auto controller_override = std::find_if(
+        invalid_source.occurrence_schedule_overrides.begin(),
+        invalid_source.occurrence_schedule_overrides.end(),
+        [&](const auto& value) {
+            return value.occurrence_id ==
+                   invalid_source.binding_temporal_overrides.front()
+                       .consumer_occurrence_id;
+        });
+    require(controller_override !=
+                invalid_source.occurrence_schedule_overrides.end(),
+            "controller source override is missing");
+    controller_override->max_input_age_steps = 0U;
     const auto invalid = compiler::compile_complete_execution_plan(
-        invalid_source, {current_cycle_package});
+        invalid_source, {package});
     require(!invalid.succeeded() &&
                 has_diagnostic(invalid.diagnostics,
                                compiler::CompleteDiagnosticCode::
                                    TemporalMismatch),
             "cross-rate CurrentCycle edge was accepted");
 
-    auto wider_age_package = package;
-    package_model(wider_age_package,
-                  yyz::kPitchMomentControllerModelIdentity)
-        .runtime_component->schedule.max_input_age_steps = 2U;
-    const auto wider_age_image = link_package(wider_age_package);
-    require(wider_age_image->fingerprint() != image->fingerprint() &&
-                wider_age_image->descriptor_semantic_hash() !=
-                    image->descriptor_semantic_hash(),
-            "HeldLatest max age did not affect descriptor/Image identity");
+    const auto rejects = [&](compiler::CompleteStaticCompositionSource candidate,
+                             compiler::CompleteDiagnosticCode code,
+                             std::string_view message) {
+        const auto outcome = compiler::compile_complete_execution_plan(
+            candidate, {package});
+        require(!outcome.succeeded() &&
+                    has_diagnostic(outcome.diagnostics, code),
+                message);
+    };
+    {
+        auto candidate = source;
+        candidate.occurrence_schedule_overrides.front().occurrence_id =
+            "occurrence.missing";
+        rejects(std::move(candidate),
+                compiler::CompleteDiagnosticCode::InvalidSource,
+                "schedule override accepted a missing occurrence");
+    }
+    {
+        auto candidate = source;
+        candidate.binding_temporal_overrides.front().provider_port_id =
+            "port.missing";
+        rejects(std::move(candidate),
+                compiler::CompleteDiagnosticCode::UnknownEndpoint,
+                "temporal override accepted a wrong provider port");
+    }
+    {
+        auto candidate = source;
+        candidate.binding_temporal_overrides.front().contract_id +=
+            ".wrong";
+        rejects(std::move(candidate),
+                compiler::CompleteDiagnosticCode::ContractMismatch,
+                "temporal override accepted a wrong contract");
+    }
+    {
+        auto candidate = source;
+        candidate.occurrence_schedule_overrides.front().step_interval = 0U;
+        rejects(std::move(candidate),
+                compiler::CompleteDiagnosticCode::InvalidSource,
+                "schedule override accepted a zero interval");
+    }
+    {
+        auto candidate = source;
+        candidate.occurrence_schedule_overrides.front().offset =
+            candidate.occurrence_schedule_overrides.front().step_interval;
+        rejects(std::move(candidate),
+                compiler::CompleteDiagnosticCode::InvalidSource,
+                "schedule override accepted a noncanonical offset");
+    }
+
+    auto wider_age_source = source;
+    const auto wider_age_override = std::find_if(
+        wider_age_source.occurrence_schedule_overrides.begin(),
+        wider_age_source.occurrence_schedule_overrides.end(),
+        [&](const auto& value) {
+            return value.occurrence_id ==
+                   wider_age_source.binding_temporal_overrides.front()
+                       .consumer_occurrence_id;
+        });
+    require(wider_age_override !=
+                wider_age_source.occurrence_schedule_overrides.end(),
+            "wider-age controller override is missing");
+    wider_age_override->max_input_age_steps = 2U;
+    const auto wider_age = compiler::compile_complete_execution_plan(
+        wider_age_source, {package});
+    require(!wider_age.succeeded() &&
+                has_diagnostic(
+                    wider_age.diagnostics,
+                    compiler::CompleteDiagnosticCode::TemporalMismatch),
+            "cadence-incompatible HeldLatest maximum age was accepted");
+
+    auto alternate_source = source;
+    const auto alternate_guidance = std::find_if(
+        alternate_source.occurrence_schedule_overrides.begin(),
+        alternate_source.occurrence_schedule_overrides.end(),
+        [&](const auto& value) {
+            return value.occurrence_id ==
+                   alternate_source.binding_temporal_overrides.front()
+                       .provider_occurrence_id;
+        });
+    const auto alternate_controller = std::find_if(
+        alternate_source.occurrence_schedule_overrides.begin(),
+        alternate_source.occurrence_schedule_overrides.end(),
+        [&](const auto& value) {
+            return value.occurrence_id ==
+                   alternate_source.binding_temporal_overrides.front()
+                       .consumer_occurrence_id;
+        });
+    require(alternate_guidance !=
+                alternate_source.occurrence_schedule_overrides.end() &&
+                alternate_controller !=
+                    alternate_source.occurrence_schedule_overrides.end(),
+            "alternate cadence overrides are missing");
+    alternate_guidance->step_interval = 3U;
+    alternate_controller->max_input_age_steps = 2U;
+    const auto alternate_compiled =
+        compiler::compile_complete_execution_plan(alternate_source,
+                                                   {package});
+    require(alternate_compiled.succeeded() &&
+                alternate_compiled.value->plan.source_semantic_hash !=
+                    compiled.value->plan.source_semantic_hash &&
+                alternate_compiled.value->plan.descriptor_semantic_hash !=
+                    compiled.value->plan.descriptor_semantic_hash &&
+                alternate_compiled.value->proofs.proof_index_hash !=
+                    compiled.value->proofs.proof_index_hash,
+            "source-owned cadence did not enter canonical/proof/descriptor identity");
+    const auto alternate_image = link_package(package, alternate_source);
+    require(alternate_image->fingerprint() != image->fingerprint(),
+            "source-owned cadence did not enter Image identity");
 
     const auto baseline = ref_yyz::compile_complete_image();
     require(baseline.succeeded() &&
@@ -503,6 +591,12 @@ void verify_tick_sequence(
                      controller_guidance_samples[1].fresh &&
                 bundle.adapter.opening_boundary->
                     controller_moments.size() == 2U &&
+                bundle.adapter.opening_boundary->
+                    controller_output_context_ticks ==
+                    std::vector<std::int64_t>({0, 1}) &&
+                bundle.adapter.opening_boundary->
+                    controller_guidance_source_ticks ==
+                    std::vector<std::int64_t>({0, 0}) &&
                 near(bundle.adapter.opening_boundary->
                          controller_moments[1],
                      expected_controller) &&
@@ -541,15 +635,22 @@ void verify_tick_sequence(
 }
 
 void verify_missing_and_expired_fail_closed() {
-    constexpr auto profile =
-        yyz::YyzRuntimeScheduleProfile::
-            MultirateHeldOutputQualification;
-    auto missing_package =
-        yyz::describe_yyz_rigid_step_package(profile);
-    package_model(missing_package,
-                  yyz::kAltitudePitchGuidanceModelIdentity)
-        .runtime_component->schedule.offset = 1U;
-    const auto missing_image = link_package(missing_package);
+    const auto package = yyz::describe_yyz_rigid_step_package();
+    auto missing_source =
+        ref_yyz::make_multirate_held_output_qualification_source(package);
+    const auto missing_guidance = std::find_if(
+        missing_source.occurrence_schedule_overrides.begin(),
+        missing_source.occurrence_schedule_overrides.end(),
+        [&](const auto& value) {
+            return value.occurrence_id ==
+                   missing_source.binding_temporal_overrides.front()
+                       .provider_occurrence_id;
+        });
+    require(missing_guidance !=
+                missing_source.occurrence_schedule_overrides.end(),
+            "missing-history guidance override is absent");
+    missing_guidance->offset = 1U;
+    const auto missing_image = link_package(package, missing_source);
     auto missing = initialize_session(
         missing_image, "run:held-missing");
     const auto missing_step = missing.session->execute_step();
@@ -564,12 +665,21 @@ void verify_missing_and_expired_fail_closed() {
                 missing.session->committed_outputs().empty(),
             "missing initial HeldLatest value did not fail closed");
 
-    auto expired_package =
-        yyz::describe_yyz_rigid_step_package(profile);
-    package_model(expired_package,
-                  yyz::kPitchMomentControllerModelIdentity)
-        .runtime_component->schedule.max_input_age_steps = 0U;
-    const auto expired_image = link_package(expired_package);
+    auto expired_source =
+        ref_yyz::make_multirate_held_output_qualification_source(package);
+    const auto expired_controller = std::find_if(
+        expired_source.occurrence_schedule_overrides.begin(),
+        expired_source.occurrence_schedule_overrides.end(),
+        [&](const auto& value) {
+            return value.occurrence_id ==
+                   expired_source.binding_temporal_overrides.front()
+                       .consumer_occurrence_id;
+        });
+    require(expired_controller !=
+                expired_source.occurrence_schedule_overrides.end(),
+            "expired-history controller override is absent");
+    expired_controller->max_input_age_steps = 0U;
+    const auto expired_image = link_package(package, expired_source);
     const auto expired_slot =
         expired_image->held_outputs().front().committed_slot_handle;
     auto expired = initialize_session(

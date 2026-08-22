@@ -1307,10 +1307,12 @@ void verify_guidance_control_actuation_definition_builders() {
         kPitchMomentControllerDefinitionBuilderIdentity,
         "controller builder accepted an incomplete config");
     const auto original_controller = PitchMomentControllerKernel::evaluate(
-        controller_definition, original_guidance.value());
+        controller_definition, sample_context(kBodyFrame),
+        original_guidance.value());
     const auto rebuilt_controller_output =
         PitchMomentControllerKernel::evaluate(
-            rebuilt_controller.value(), rebuilt_guidance_output.value());
+            rebuilt_controller.value(), sample_context(kBodyFrame),
+            rebuilt_guidance_output.value());
     require(original_controller.has_value() &&
                 rebuilt_controller_output.has_value() &&
                 rebuilt_controller_output.status() ==
@@ -1324,6 +1326,20 @@ void verify_guidance_control_actuation_definition_builders() {
                 rebuilt_controller_output.value().saturated ==
                     original_controller.value().saturated,
             "controller definition builder changed kernel output");
+
+    auto held_evaluation_context = sample_context(kBodyFrame);
+    held_evaluation_context.sample_time = SimulationInstant{4, 0.4};
+    const auto held_controller = PitchMomentControllerKernel::evaluate(
+        controller_definition, held_evaluation_context,
+        original_guidance.value());
+    require(held_controller.has_value() &&
+                held_controller.value().context.sample_time.tick == 4 &&
+                held_controller.value().context.sample_time.seconds == 0.4 &&
+                original_guidance.value()
+                        .source_observation.context.sample_time.tick == 0 &&
+                original_guidance.value()
+                        .source_observation.context.sample_time.seconds == 0.0,
+            "controller output time did not remain distinct from held guidance provenance");
 
     IdealBodyMomentActuatorDefinition actuator_definition;
     actuator_definition.model_id =
@@ -1370,6 +1386,19 @@ void verify_guidance_control_actuation_definition_builders() {
                         original_actuator.value()
                             .moment_about_center_of_mass.value),
             "actuator definition builder changed kernel output");
+
+    auto held_actuator_context = interval_context(kBodyFrame);
+    held_actuator_context.sample.sample_time = SimulationInstant{5, 0.5};
+    held_actuator_context.validity =
+        HalfOpenValidityInterval{SimulationInstant{5, 0.5},
+                                 SimulationInstant{6, 0.6}};
+    const auto held_actuator = IdealBodyMomentActuatorKernel::evaluate(
+        actuator_definition, held_actuator_context,
+        held_controller.value());
+    require(held_actuator.has_value() &&
+                held_controller.value().context.sample_time.tick == 4 &&
+                held_actuator.value().context.sample.sample_time.tick == 5,
+            "actuator rejected a legal one-tick-old controller output");
 }
 
 void verify_committed_history_evaluator() {

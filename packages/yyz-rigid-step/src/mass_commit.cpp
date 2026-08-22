@@ -544,11 +544,8 @@ void append_runtime_cell_factory_entry(
 } // namespace
 
 gnc::model_sdk::StaticPackageDescriptor
-describe_yyz_rigid_step_package(YyzRuntimeScheduleProfile profile) {
+describe_yyz_rigid_step_package() {
     auto package = detail::describe_yyz_rigid_step_base_package();
-    const bool multirate_qualification =
-        profile == YyzRuntimeScheduleProfile::
-                       MultirateHeldOutputQualification;
 
     const auto periodic_schedule = [] {
         gnc::model_sdk::StaticRuntimeScheduleDescriptor schedule;
@@ -906,9 +903,7 @@ describe_yyz_rigid_step_package(YyzRuntimeScheduleProfile profile) {
          gnc::model_sdk::StaticPortDirection::Output,
          gnc::model_sdk::BindingKind::SampledSignal,
          gnc::model_sdk::PortCardinality::OneOrMore,
-         multirate_qualification
-             ? gnc::model_sdk::TemporalRelation::HeldLatest
-             : gnc::model_sdk::TemporalRelation::CurrentCycle,
+         gnc::model_sdk::TemporalRelation::CurrentCycle,
          make_yyz_slot_codec_descriptor(
              kGuidanceOutputSlotCodecIdentity,
              kGuidanceOutputSlotCodecCallShapeIdentity,
@@ -935,10 +930,6 @@ describe_yyz_rigid_step_package(YyzRuntimeScheduleProfile profile) {
          gnc::model_sdk::StaticStateWriteKind::None, {},
          std::string(kAltitudePitchGuidanceCallShapeIdentity)}};
     runtime.schedule = periodic_schedule();
-    if (multirate_qualification) {
-        runtime.schedule.step_interval = 2U;
-        runtime.schedule.offset = 0U;
-    }
     runtime.lifecycle_capabilities = lifecycle;
     runtime.definition_builder_id = std::string(
         kAltitudePitchGuidanceDefinitionBuilderIdentity.id);
@@ -999,9 +990,7 @@ describe_yyz_rigid_step_package(YyzRuntimeScheduleProfile profile) {
          gnc::model_sdk::StaticPortDirection::Input,
          gnc::model_sdk::BindingKind::SampledSignal,
          gnc::model_sdk::PortCardinality::ExactlyOne,
-         multirate_qualification
-             ? gnc::model_sdk::TemporalRelation::HeldLatest
-             : gnc::model_sdk::TemporalRelation::CurrentCycle},
+         gnc::model_sdk::TemporalRelation::CurrentCycle},
         {"controller-output",
          std::string(kPitchMomentControllerOutputContractIdentity),
          gnc::model_sdk::StaticPortDirection::Output,
@@ -1034,9 +1023,6 @@ describe_yyz_rigid_step_package(YyzRuntimeScheduleProfile profile) {
          gnc::model_sdk::StaticStateWriteKind::None, {},
          std::string(kPitchMomentControllerCallShapeIdentity)}};
     controller_runtime.schedule = periodic_schedule();
-    if (multirate_qualification) {
-        controller_runtime.schedule.max_input_age_steps = 1U;
-    }
     controller_runtime.lifecycle_capabilities = lifecycle;
     controller_runtime.definition_builder_id = std::string(
         kPitchMomentControllerDefinitionBuilderIdentity.id);
@@ -1425,22 +1411,7 @@ describe_yyz_rigid_step_package(YyzRuntimeScheduleProfile profile) {
 
 gnc::model_sdk::StaticPackageImplementation
 describe_yyz_rigid_step_implementation(std::string build_fingerprint) {
-    return describe_yyz_rigid_step_implementation(
-        std::move(build_fingerprint),
-        YyzRuntimeScheduleProfile::ReferenceInterval1);
-}
-
-gnc::model_sdk::StaticPackageDescriptor
-describe_yyz_rigid_step_package() {
-    return describe_yyz_rigid_step_package(
-        YyzRuntimeScheduleProfile::ReferenceInterval1);
-}
-
-gnc::model_sdk::StaticPackageImplementation
-describe_yyz_rigid_step_implementation(
-    std::string build_fingerprint,
-    YyzRuntimeScheduleProfile profile) {
-    const auto package = describe_yyz_rigid_step_package(profile);
+    const auto package = describe_yyz_rigid_step_package();
     return describe_yyz_rigid_step_implementation(
         std::move(build_fingerprint), package);
 }
@@ -3400,6 +3371,7 @@ AltitudePitchGuidanceKernel::evaluate(
 NumericalOutcome<PitchMomentControllerOutput>
 PitchMomentControllerKernel::evaluate(
     const PitchMomentControllerDefinition& definition,
+    const SampleContext& evaluation_context,
     const AltitudePitchGuidanceOutput& guidance) {
     if (definition.model_id != kPitchMomentControllerModelIdentity ||
         definition.model_version.empty() || definition.body_frame.id.empty() ||
@@ -3426,10 +3398,23 @@ PitchMomentControllerKernel::evaluate(
             definition.configuration_revision ||
         source.quality != DataQuality::Valid ||
         source.sample_time.tick < 0 ||
-        !std::isfinite(source.sample_time.seconds)) {
+        !std::isfinite(source.sample_time.seconds) ||
+        evaluation_context.frame != definition.body_frame ||
+        evaluation_context.clock_domain != definition.clock_domain ||
+        evaluation_context.configuration_revision !=
+            definition.configuration_revision ||
+        evaluation_context.quality != DataQuality::Valid ||
+        evaluation_context.sample_time.tick < source.sample_time.tick ||
+        !std::isfinite(evaluation_context.sample_time.seconds) ||
+        (evaluation_context.sample_time.seconds <
+             source.sample_time.seconds &&
+         !near(evaluation_context.sample_time.seconds,
+               source.sample_time.seconds,
+               definition.numerical_policy))) {
         return mass_commit_failure<PitchMomentControllerOutput>(
             kPitchMomentControllerKernelIdentity,
-            NumericalStatus::DomainError, "guidance-context");
+            NumericalStatus::DomainError,
+            "guidance-or-evaluation-context");
     }
     if (!std::isfinite(guidance.measured_pitch_radians) ||
         !std::isfinite(guidance.measured_pitch_rate_radians_per_second) ||
@@ -3459,8 +3444,7 @@ PitchMomentControllerKernel::evaluate(
     }
 
     PitchMomentControllerOutput output;
-    output.context = source;
-    output.context.frame = definition.body_frame;
+    output.context = evaluation_context;
     output.pitch_error_radians = pitch_error;
     output.proportional_moment_newton_meters = proportional;
     output.rate_damping_moment_newton_meters = damping;
@@ -4124,7 +4108,13 @@ ControlledPropelledRigidMassStepKernel::evaluate(
                 guidance.evidence().flags);
     }
     const auto controller = PitchMomentControllerKernel::evaluate(
-        definition.controller, guidance.value());
+        definition.controller,
+        SampleContext{definition.controller.body_frame,
+                      observation.context.clock_domain,
+                      observation.context.sample_time,
+                      observation.context.configuration_revision,
+                      observation.context.quality},
+        guidance.value());
     if (!controller.has_value()) {
         return mass_commit_failure<
             ControlledPropelledRigidMassStepOutput>(

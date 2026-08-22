@@ -16,10 +16,6 @@ describe_yyz_rigid_step_implementation(std::string build_fingerprint);
 [[nodiscard]] gnc::model_sdk::StaticPackageImplementation
 describe_yyz_rigid_step_implementation(
     std::string build_fingerprint,
-    YyzRuntimeScheduleProfile profile);
-[[nodiscard]] gnc::model_sdk::StaticPackageImplementation
-describe_yyz_rigid_step_implementation(
-    std::string build_fingerprint,
     const gnc::model_sdk::StaticPackageDescriptor& package);
 
 inline constexpr std::string_view kScalarBurnMassContractIdentity =
@@ -705,6 +701,7 @@ class PitchMomentControllerKernel {
     [[nodiscard]] static gnc::foundation::NumericalOutcome<
         PitchMomentControllerOutput>
         evaluate(const PitchMomentControllerDefinition& definition,
+                 const gnc::contracts::SampleContext& evaluation_context,
                  const AltitudePitchGuidanceOutput& guidance);
 };
 
@@ -1138,6 +1135,7 @@ using AltitudePitchGuidanceCall =
 using PitchMomentControllerCall =
     gnc::foundation::NumericalOutcome<PitchMomentControllerOutput> (*)(
         const PitchMomentControllerDefinition&,
+        const gnc::contracts::SampleContext&,
         const AltitudePitchGuidanceOutput&);
 using IdealBodyMomentActuatorCall =
     gnc::foundation::NumericalOutcome<IdealBodyMomentActuatorOutput> (*)(

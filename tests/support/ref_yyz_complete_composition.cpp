@@ -686,18 +686,60 @@ make_multirate_held_output_qualification_source(
         "mission.qualification.yyz.multirate-held-output@1";
     source.plan_id =
         "plan.qualification.yyz.multirate-held-output";
+    const auto occurrence_for = [&](std::string_view model_id)
+        -> const CompleteSourceOccurrence& {
+        const auto found = std::find_if(
+            source.occurrences.begin(), source.occurrences.end(),
+            [&](const auto& occurrence) {
+                return occurrence.model_id == model_id;
+            });
+        require(found != source.occurrences.end(),
+                "multi-rate source model occurrence is missing");
+        return *found;
+    };
+    const auto& guidance = occurrence_for(
+        gnc::packages::yyz::kAltitudePitchGuidanceModelIdentity);
+    const auto& controller = occurrence_for(
+        gnc::packages::yyz::kPitchMomentControllerModelIdentity);
+    const auto binding = std::find_if(
+        source.bindings.begin(), source.bindings.end(),
+        [&](const auto& value) {
+            return value.provider_occurrence_id == guidance.occurrence_id &&
+                   value.provider_port_id == "guidance-output" &&
+                   value.consumer_occurrence_id ==
+                       controller.occurrence_id &&
+                   value.consumer_port_id == "guidance-output";
+        });
+    require(binding != source.bindings.end(),
+            "multi-rate guidance/controller binding is missing");
+    source.occurrence_schedule_overrides.push_back(
+        {guidance.occurrence_id, 2U, 0U, 0U,
+         ref("schedule-overrides/guidance")});
+    source.occurrence_schedule_overrides.push_back(
+        {controller.occurrence_id, 1U, 0U, 1U,
+         ref("schedule-overrides/controller")});
+    source.binding_temporal_overrides.push_back(
+        {binding->binding_id,
+         binding->provider_occurrence_id,
+         binding->provider_port_id,
+         binding->consumer_occurrence_id,
+         binding->consumer_port_id,
+         std::string(
+             gnc::packages::yyz::
+                 kAltitudePitchGuidanceOutputContractIdentity),
+         gnc::model_sdk::BindingKind::SampledSignal,
+         gnc::model_sdk::TemporalRelation::HeldLatest,
+         ref("temporal-overrides/guidance-to-controller")});
     return source;
 }
 
 gnc::compiler::CompleteOutcome<gnc::contracts::ExecutionPlanImage>
 compile_multirate_held_output_qualification_image() {
-    constexpr auto profile = gnc::packages::yyz::
-        YyzRuntimeScheduleProfile::MultirateHeldOutputQualification;
     const auto package =
-        gnc::packages::yyz::describe_yyz_rigid_step_package(profile);
+        gnc::packages::yyz::describe_yyz_rigid_step_package();
     const auto implementation =
         gnc::packages::yyz::describe_yyz_rigid_step_implementation(
-            "build.ref-yyz.release", profile);
+            "build.ref-yyz.release");
     const auto source =
         make_multirate_held_output_qualification_source(package);
     return gnc::compiler::compile_and_link_complete_execution_plan(

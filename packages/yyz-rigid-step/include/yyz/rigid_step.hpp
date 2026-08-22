@@ -977,15 +977,8 @@ describe_yyz_rigid_step_base_package() {
 
 // The complete package contribution is defined with the adjacent R1 product
 // kernels so callers keep one stable descriptor entry point.
-enum class YyzRuntimeScheduleProfile : std::uint8_t {
-    ReferenceInterval1,
-    MultirateHeldOutputQualification,
-};
-
 [[nodiscard]] gnc::model_sdk::StaticPackageDescriptor
 describe_yyz_rigid_step_package();
-[[nodiscard]] gnc::model_sdk::StaticPackageDescriptor
-describe_yyz_rigid_step_package(YyzRuntimeScheduleProfile profile);
 
 class PreparedRigidStepModel {
   public:

@@ -11,8 +11,9 @@ namespace gnc::tests::ref_yyz {
 make_complete_source(
     const gnc::model_sdk::StaticPackageDescriptor& package);
 
-// Uses the same package-owned REF-YYZ composition while assigning a distinct
-// qualification identity to the multi-rate HeldLatest schedule profile.
+// Uses the same stable package contribution while assigning a distinct
+// qualification identity and programmatic source-owned schedule/temporal
+// overrides to the multi-rate HeldLatest edge.
 [[nodiscard]] gnc::compiler::CompleteStaticCompositionSource
 make_multirate_held_output_qualification_source(
     const gnc::model_sdk::StaticPackageDescriptor& package);

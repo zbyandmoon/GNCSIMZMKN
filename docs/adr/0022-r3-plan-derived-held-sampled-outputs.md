@@ -24,7 +24,7 @@ The existing REF-YYZ Image and Session support current-cycle sampled values and 
 
 ## Executable evidence
 
-- `r3.kernel-multirate-held-output.probe` compiles and links the qualification profile through the ordinary product-definition path. It locates schedule, hold, slot, codec, reader/writer, maximum-age, proof, descriptor-hash, and fingerprint facts, while rejecting a cross-rate `CurrentCycle` edge.
+- `r3.kernel-multirate-held-output.probe` compiles and links exact programmatic source overrides over the stable product descriptor. It locates schedule, hold, slot, codec, reader/writer, maximum-age, proof, descriptor-hash, and fingerprint facts, while rejecting invalid references and a cross-rate `CurrentCycle` edge.
 - The probe observes fresh tick 0, held tick 1 with preserved tick/sequence/quality and age one, then fresh tick 2 replacement. The real controller consumes both forms and produces a checked formal moment command.
 - Direct failures cover missing and expired samples, store/injection clone, validation, later-call and final-precommit rollback, pre/postcommit cancellation, shared-provider Session isolation, reset, dispose, checkpoint/restore corruption, two-child continuation, and parent-cancel/child-continue isolation.
 - The interval-1 Image fingerprint remains `7d1fbe1fa09ca555420ed3cc14a05d1f2994c6501b17cd3991355520fc8e6f14`; existing REF-YYZ terminal, oracle, cancellation, reset, and branch-restore probes remain required regressions.

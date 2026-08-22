@@ -39,6 +39,9 @@ inline constexpr std::string_view kNoWorkspaceLayoutIdentity =
     "gnc.workspace.none@1";
 inline constexpr std::string_view kNumericalPolicyIdentity =
     "gnc.foundation.numerical-policy@1";
+inline constexpr std::string_view
+    kSourceScheduleTemporalOverrideEncodingDomain =
+        "gnc.complete-static-source.schedule-temporal-override@1";
 
 enum class CompleteDiagnosticCode : std::uint8_t {
     InvalidCatalog,
@@ -220,6 +223,34 @@ struct CompleteSourceBinding {
     SourceRef source;
 };
 
+// Optional programmatic source facts for one already selected package model.
+// They alter only the canonical copy owned by this compilation. The package
+// descriptor remains the stable interval-one product contribution.
+struct CompleteSourceOccurrenceScheduleOverride {
+    std::string occurrence_id;
+    std::uint32_t step_interval = 0U;
+    std::uint32_t offset = 0U;
+    std::uint32_t max_input_age_steps = 0U;
+    SourceRef source;
+};
+
+// A temporal override names the complete sampled edge it is allowed to
+// change. Repeating the endpoints, contract, and binding kind keeps this
+// narrow source extension fail-closed when package ports evolve.
+struct CompleteSourceBindingTemporalOverride {
+    std::string binding_id;
+    std::string provider_occurrence_id;
+    std::string provider_port_id;
+    std::string consumer_occurrence_id;
+    std::string consumer_port_id;
+    std::string contract_id;
+    gnc::model_sdk::BindingKind binding_kind =
+        gnc::model_sdk::BindingKind::Unspecified;
+    gnc::model_sdk::TemporalRelation temporal_relation =
+        gnc::model_sdk::TemporalRelation::NotApplicable;
+    SourceRef source;
+};
+
 struct CompleteSourceClock {
     std::string clock_id;
     double base_step_seconds = 0.0;
@@ -318,11 +349,20 @@ struct CompleteStaticCompositionSource {
     std::vector<CompleteSourceTransaction> transactions;
     std::vector<CompleteSourceEvaluatorHistory> evaluator_histories;
     std::vector<CompleteSourcePackageBuildLock> package_build_locks;
+    std::vector<CompleteSourceOccurrenceScheduleOverride>
+        occurrence_schedule_overrides;
+    std::vector<CompleteSourceBindingTemporalOverride>
+        binding_temporal_overrides;
 };
 
 struct CompleteCanonicalOccurrence {
     std::string occurrence_id;
     PackageLock package;
+    // Exact package descriptor used for implementation signatures. Source
+    // schedule/temporal overrides never mutate this copy.
+    gnc::model_sdk::StaticModelDescriptor implementation_descriptor;
+    // Canonical execution descriptor copied from the package and then
+    // optionally narrowed by source-owned schedule/temporal overrides.
     gnc::model_sdk::StaticModelDescriptor descriptor;
     std::string subject_entity_id;
     SourceRef subject_source;
@@ -337,6 +377,7 @@ struct CompleteCanonicalOccurrence {
         configuration_field_sources;
     std::vector<CanonicalAssetBinding> asset_bindings;
     SourceRef source;
+    std::optional<SourceRef> schedule_override_source;
 };
 
 // Additive IR. The established CanonicalMissionIr revision 2 and its bytes@2
@@ -356,6 +397,10 @@ struct CompleteCanonicalMissionIr {
     std::vector<CompleteSourceIntegrationScope> integration_scopes;
     std::vector<CompleteSourceTransaction> transactions;
     std::vector<CompleteSourceEvaluatorHistory> evaluator_histories;
+    std::vector<CompleteSourceOccurrenceScheduleOverride>
+        occurrence_schedule_overrides;
+    std::vector<CompleteSourceBindingTemporalOverride>
+        binding_temporal_overrides;
 };
 
 struct CompletePortPlan {
@@ -437,6 +482,10 @@ struct CompleteOccurrencePlan {
         configuration_field_sources;
     std::vector<CanonicalAssetBinding> asset_bindings;
     SourceRef source;
+    // Present only when source execution overrides require conformance to be
+    // checked against the untouched package implementation signature.
+    std::optional<gnc::model_sdk::StaticModelDescriptor>
+        implementation_descriptor;
 };
 
 struct CompleteBindingPlan {
@@ -1533,6 +1582,31 @@ inline void encode_config(semantic_hash_detail::Encoder& encoder,
     for (const auto& binding : ir.bindings) {
         encode_binding(binding);
     }
+    if (!ir.occurrence_schedule_overrides.empty() ||
+        !ir.binding_temporal_overrides.empty()) {
+        encoder.string(kSourceScheduleTemporalOverrideEncodingDomain);
+        encoder.collection(ir.occurrence_schedule_overrides.size());
+        for (const auto& override :
+             ir.occurrence_schedule_overrides) {
+            encoder.string(override.occurrence_id);
+            encoder.uint32(override.step_interval);
+            encoder.uint32(override.offset);
+            encoder.uint32(override.max_input_age_steps);
+        }
+        encoder.collection(ir.binding_temporal_overrides.size());
+        for (const auto& override : ir.binding_temporal_overrides) {
+            encoder.string(override.binding_id);
+            encoder.string(override.provider_occurrence_id);
+            encoder.string(override.provider_port_id);
+            encoder.string(override.consumer_occurrence_id);
+            encoder.string(override.consumer_port_id);
+            encoder.string(override.contract_id);
+            encoder.uint32(
+                static_cast<std::uint32_t>(override.binding_kind));
+            encoder.uint32(static_cast<std::uint32_t>(
+                override.temporal_relation));
+        }
+    }
     encoder.collection(ir.invocation_bindings.size());
     for (const auto& binding : ir.invocation_bindings) {
         encoder.string(binding.invocation_id);
@@ -1828,12 +1902,13 @@ lower_complete_static_source(
         }
         ir.occurrences.push_back(
             {occurrence.occurrence_id, locked_package->second, descriptor,
+             descriptor,
              occurrence.subject_entity_id, occurrence.subject_source,
              occurrence.scope, occurrence.scope_source,
              occurrence.placement, occurrence.placement_source,
              std::move(config), occurrence.configuration_source,
              std::move(canonical_configuration_sources),
-             std::move(assets), occurrence.source});
+             std::move(assets), occurrence.source, std::nullopt});
     }
 
     for (const auto& [key, package] : build_locks) {
@@ -1925,6 +2000,269 @@ lower_complete_static_source(
         [](const auto& value) -> const std::string& {
             return value.binding_id;
         });
+    ir.occurrence_schedule_overrides = canonicalize_by_id(
+        source.occurrence_schedule_overrides,
+        [](const auto& value) -> const std::string& {
+            return value.occurrence_id;
+        });
+    std::set<std::string> schedule_override_occurrences;
+    const auto tick_span = static_cast<std::uint64_t>(
+        ir.clock.terminal_tick - ir.clock.initial_tick);
+    for (const auto& override : ir.occurrence_schedule_overrides) {
+        auto occurrence = std::find_if(
+            ir.occurrences.begin(), ir.occurrences.end(),
+            [&](const auto& value) {
+                return value.occurrence_id == override.occurrence_id;
+            });
+        const bool unique = !override.occurrence_id.empty() &&
+                            schedule_override_occurrences
+                                .insert(override.occurrence_id)
+                                .second;
+        const bool exact_periodic_component =
+            occurrence != ir.occurrences.end() &&
+            occurrence->descriptor.runtime_component.has_value() &&
+            occurrence->descriptor.runtime_component->schedule.trigger ==
+                gnc::model_sdk::StaticScheduleTrigger::EveryBoundary;
+        if (!unique || !valid_source_ref(override.source) ||
+            !exact_periodic_component || override.step_interval == 0U ||
+            override.offset >= override.step_interval ||
+            static_cast<std::uint64_t>(override.offset) > tick_span) {
+            diagnostic(
+                outcome.diagnostics, CompleteDiagnosticCode::InvalidSource,
+                override.source, override.occurrence_id,
+                "schedule override must resolve one periodic package RuntimeComponent and declare a nonzero interval with an in-grid canonical offset");
+            continue;
+        }
+        auto& schedule =
+            occurrence->descriptor.runtime_component->schedule;
+        schedule.step_interval = override.step_interval;
+        schedule.offset = override.offset;
+        schedule.max_input_age_steps = override.max_input_age_steps;
+        occurrence->schedule_override_source = override.source;
+    }
+
+    ir.binding_temporal_overrides = canonicalize_by_id(
+        source.binding_temporal_overrides,
+        [](const auto& value) -> const std::string& {
+            return value.binding_id;
+        });
+    std::set<std::string> temporal_override_bindings;
+    for (const auto& override : ir.binding_temporal_overrides) {
+        auto binding = std::find_if(
+            ir.bindings.begin(), ir.bindings.end(), [&](const auto& value) {
+                return value.binding_id == override.binding_id;
+            });
+        auto provider = std::find_if(
+            ir.occurrences.begin(), ir.occurrences.end(),
+            [&](const auto& value) {
+                return value.occurrence_id ==
+                       override.provider_occurrence_id;
+            });
+        auto consumer = std::find_if(
+            ir.occurrences.begin(), ir.occurrences.end(),
+            [&](const auto& value) {
+                return value.occurrence_id ==
+                       override.consumer_occurrence_id;
+            });
+        auto provider_port =
+            provider == ir.occurrences.end()
+                ? std::vector<gnc::model_sdk::StaticPortDescriptor>::iterator{}
+                : std::find_if(
+                      provider->descriptor.ports.begin(),
+                      provider->descriptor.ports.end(),
+                      [&](const auto& port) {
+                          return port.port_id == override.provider_port_id;
+                      });
+        auto consumer_port =
+            consumer == ir.occurrences.end()
+                ? std::vector<gnc::model_sdk::StaticPortDescriptor>::iterator{}
+                : std::find_if(
+                      consumer->descriptor.ports.begin(),
+                      consumer->descriptor.ports.end(),
+                      [&](const auto& port) {
+                          return port.port_id == override.consumer_port_id;
+                      });
+        const bool unique = !override.binding_id.empty() &&
+                            temporal_override_bindings
+                                .insert(override.binding_id)
+                                .second;
+        const bool exact_binding =
+            binding != ir.bindings.end() &&
+            binding->provider_occurrence_id ==
+                override.provider_occurrence_id &&
+            binding->provider_port_id == override.provider_port_id &&
+            binding->consumer_occurrence_id ==
+                override.consumer_occurrence_id &&
+            binding->consumer_port_id == override.consumer_port_id;
+        const bool exact_ports =
+            provider != ir.occurrences.end() &&
+            consumer != ir.occurrences.end() &&
+            provider_port != provider->descriptor.ports.end() &&
+            consumer_port != consumer->descriptor.ports.end() &&
+            provider_port->direction ==
+                gnc::model_sdk::StaticPortDirection::Output &&
+            consumer_port->direction ==
+                gnc::model_sdk::StaticPortDirection::Input &&
+            provider_port->contract_id == override.contract_id &&
+            consumer_port->contract_id == override.contract_id &&
+            provider_port->binding_kind == override.binding_kind &&
+            consumer_port->binding_kind == override.binding_kind &&
+            override.binding_kind ==
+                gnc::model_sdk::BindingKind::SampledSignal;
+        const bool supported_relation =
+            override.temporal_relation ==
+                gnc::model_sdk::TemporalRelation::CurrentCycle ||
+            override.temporal_relation ==
+                gnc::model_sdk::TemporalRelation::HeldLatest;
+        const auto provider_endpoint_count =
+            static_cast<std::size_t>(std::count_if(
+                ir.bindings.begin(), ir.bindings.end(),
+                [&](const auto& value) {
+                    return value.provider_occurrence_id ==
+                               override.provider_occurrence_id &&
+                           value.provider_port_id ==
+                               override.provider_port_id;
+                }));
+        const auto consumer_endpoint_count =
+            static_cast<std::size_t>(std::count_if(
+                ir.bindings.begin(), ir.bindings.end(),
+                [&](const auto& value) {
+                    return value.consumer_occurrence_id ==
+                               override.consumer_occurrence_id &&
+                           value.consumer_port_id ==
+                               override.consumer_port_id;
+                }));
+        const bool zoh_compatible =
+            override.temporal_relation !=
+                gnc::model_sdk::TemporalRelation::HeldLatest ||
+            (provider != ir.occurrences.end() &&
+             consumer != ir.occurrences.end() &&
+             provider->descriptor.runtime_component.has_value() &&
+             consumer->descriptor.runtime_component.has_value() &&
+             provider->descriptor.runtime_component->schedule.output_hold ==
+                 gnc::model_sdk::HoldPolicy::ZeroOrderHold);
+        if (!unique || !valid_source_ref(override.source) ||
+            !exact_binding || !exact_ports || !supported_relation ||
+            !zoh_compatible || provider_endpoint_count != 1U ||
+            consumer_endpoint_count != 1U) {
+            diagnostic(
+                outcome.diagnostics,
+                !exact_binding || provider == ir.occurrences.end() ||
+                        consumer == ir.occurrences.end()
+                    ? CompleteDiagnosticCode::UnknownEndpoint
+                    : (!exact_ports
+                           ? CompleteDiagnosticCode::ContractMismatch
+                           : CompleteDiagnosticCode::TemporalMismatch),
+                override.source, override.binding_id,
+                "temporal override must name one exact sampled package edge and a supported CurrentCycle or zero-order HeldLatest relation");
+            continue;
+        }
+        provider_port->temporal_relation = override.temporal_relation;
+        consumer_port->temporal_relation = override.temporal_relation;
+        binding->source = override.source;
+    }
+
+    // A HeldLatest consumer's declared maximum age may narrow, but may not
+    // widen beyond, the oldest sample reachable on its authored cadence.
+    // Initial consumers that precede the first provider sample remain a
+    // runtime missing-history case.
+    for (const auto& override : ir.binding_temporal_overrides) {
+        if (override.temporal_relation !=
+            gnc::model_sdk::TemporalRelation::HeldLatest) {
+            continue;
+        }
+        const auto provider = std::find_if(
+            ir.occurrences.begin(), ir.occurrences.end(),
+            [&](const auto& value) {
+                return value.occurrence_id ==
+                       override.provider_occurrence_id;
+            });
+        const auto consumer = std::find_if(
+            ir.occurrences.begin(), ir.occurrences.end(),
+            [&](const auto& value) {
+                return value.occurrence_id ==
+                       override.consumer_occurrence_id;
+            });
+        if (provider == ir.occurrences.end() ||
+            consumer == ir.occurrences.end() ||
+            !provider->descriptor.runtime_component.has_value() ||
+            !consumer->descriptor.runtime_component.has_value() ||
+            tick_span > 1000000U) {
+            diagnostic(outcome.diagnostics,
+                       CompleteDiagnosticCode::TemporalMismatch,
+                       override.source, override.binding_id,
+                       "HeldLatest cadence cannot be proven on the selected finite clock grid");
+            continue;
+        }
+        const auto& producer_schedule =
+            provider->descriptor.runtime_component->schedule;
+        const auto& consumer_schedule =
+            consumer->descriptor.runtime_component->schedule;
+        const auto scheduled = [](const auto& schedule,
+                                  std::int64_t tick) noexcept {
+            return schedule.trigger ==
+                       gnc::model_sdk::StaticScheduleTrigger::EveryBoundary &&
+                   schedule.step_interval != 0U &&
+                   tick >= static_cast<std::int64_t>(schedule.offset) &&
+                   (tick - static_cast<std::int64_t>(schedule.offset)) %
+                           static_cast<std::int64_t>(
+                               schedule.step_interval) ==
+                       0;
+        };
+        std::optional<std::int64_t> latest_producer_tick;
+        std::uint64_t required_max_age = 0U;
+        bool matched_consumer = false;
+        for (std::int64_t tick = ir.clock.initial_tick;; ++tick) {
+            if (scheduled(producer_schedule, tick)) {
+                latest_producer_tick = tick;
+            }
+            if (scheduled(consumer_schedule, tick) &&
+                latest_producer_tick.has_value()) {
+                matched_consumer = true;
+                required_max_age = (std::max)(
+                    required_max_age,
+                    static_cast<std::uint64_t>(
+                        tick - *latest_producer_tick));
+            }
+            if (tick == ir.clock.terminal_tick) break;
+        }
+        if (!matched_consumer ||
+            required_max_age >
+                (std::numeric_limits<std::uint32_t>::max)() ||
+            consumer_schedule.max_input_age_steps > required_max_age) {
+            diagnostic(
+                outcome.diagnostics,
+                CompleteDiagnosticCode::TemporalMismatch,
+                override.source, override.binding_id,
+                "HeldLatest maximum age cannot exceed the oldest sample reachable on the producer and consumer cadences");
+        }
+    }
+    for (const auto& occurrence : ir.occurrences) {
+        if (!occurrence.schedule_override_source.has_value() ||
+            !occurrence.descriptor.runtime_component.has_value()) {
+            continue;
+        }
+        const auto& runtime = *occurrence.descriptor.runtime_component;
+        const bool has_held_input = std::any_of(
+            occurrence.descriptor.ports.begin(),
+            occurrence.descriptor.ports.end(), [](const auto& port) {
+                return port.direction ==
+                           gnc::model_sdk::StaticPortDirection::Input &&
+                       port.binding_kind ==
+                           gnc::model_sdk::BindingKind::SampledSignal &&
+                       port.temporal_relation ==
+                           gnc::model_sdk::TemporalRelation::HeldLatest;
+            });
+        if (runtime.schedule.max_input_age_steps != 0U &&
+            !has_held_input) {
+            diagnostic(
+                outcome.diagnostics,
+                CompleteDiagnosticCode::TemporalMismatch,
+                *occurrence.schedule_override_source,
+                occurrence.occurrence_id,
+                "a nonzero schedule override maximum age requires one exact HeldLatest sampled input");
+        }
+    }
     ir.invocation_bindings = canonicalize_by_id(
         source.invocation_bindings,
         [](const auto& value) -> const std::string& {
@@ -2103,11 +2441,22 @@ inline void add_entry_requirement(
 inline void lower_occurrences(LoweringContext& context) {
     std::map<std::string, PackageLock> used_packages;
     for (const auto& occurrence : context.ir.occurrences) {
+        const auto& implementation_descriptor =
+            occurrence.implementation_descriptor;
         context.occurrences.emplace(occurrence.occurrence_id, &occurrence);
         used_packages.emplace(
             exact_key(occurrence.package.package_id,
                       occurrence.package.package_version),
             occurrence.package);
+        const bool temporal_override = std::any_of(
+            occurrence.descriptor.ports.begin(),
+            occurrence.descriptor.ports.end(), [&](const auto& port) {
+                const auto* implementation_port = find_port(
+                    occurrence.implementation_descriptor, port.port_id);
+                return implementation_port == nullptr ||
+                       implementation_port->temporal_relation !=
+                           port.temporal_relation;
+            });
         context.plan.occurrences.push_back(
             {occurrence_element(occurrence.occurrence_id),
              occurrence.occurrence_id, occurrence.package,
@@ -2119,7 +2468,12 @@ inline void lower_occurrences(LoweringContext& context) {
              occurrence.scope_source, occurrence.placement_source,
              occurrence.configuration, occurrence.configuration_source,
              occurrence.configuration_field_sources,
-             occurrence.asset_bindings, occurrence.source});
+             occurrence.asset_bindings, occurrence.source,
+             occurrence.schedule_override_source.has_value() ||
+                     temporal_override
+                 ? std::optional<gnc::model_sdk::StaticModelDescriptor>{
+                       occurrence.implementation_descriptor}
+                 : std::nullopt});
         auto ports = occurrence.descriptor.ports;
         std::sort(ports.begin(), ports.end(), [](const auto& lhs,
                                                  const auto& rhs) {
@@ -2148,6 +2502,17 @@ inline void lower_occurrences(LoweringContext& context) {
                         "stored RuntimeComponent output requires one package-owned slot codec");
                 } else {
                     const auto& codec = *port.slot_codec;
+                    const auto* implementation_port = find_port(
+                        implementation_descriptor, port.port_id);
+                    if (implementation_port == nullptr) {
+                        diagnostic(
+                            context.diagnostics,
+                            CompleteDiagnosticCode::InvalidCatalog,
+                            occurrence.source,
+                            occurrence.occurrence_id + "." + port.port_id,
+                            "canonical port is absent from the exact package implementation descriptor");
+                        continue;
+                    }
                     codec_requirement = entry_requirement_id(
                         occurrence.occurrence_id,
                         "slot-codec/" + port.port_id, codec.entry_id);
@@ -2157,7 +2522,8 @@ inline void lower_occurrences(LoweringContext& context) {
                         codec.entry_id, codec.entry_version,
                         gnc::model_sdk::StaticEntryKind::SlotCodec,
                         gnc::model_sdk::canonical_slot_codec_signature(
-                            occurrence.descriptor, port),
+                            implementation_descriptor,
+                            *implementation_port),
                         codec.call_shape_id, {},
                         std::string(kNoWorkspaceLayoutIdentity),
                         occurrence.source);
@@ -2201,7 +2567,8 @@ inline void lower_occurrences(LoweringContext& context) {
                 descriptor.preparation_algorithm_id,
                 descriptor.preparation_algorithm_version,
                 gnc::model_sdk::StaticEntryKind::Prepare,
-                gnc::model_sdk::canonical_prepare_signature(descriptor),
+                gnc::model_sdk::canonical_prepare_signature(
+                    implementation_descriptor),
                 descriptor.preparation_call_shape_id, {},
                 std::string(kNoWorkspaceLayoutIdentity), occurrence.source);
             PreparationInputPlan preparation;
@@ -2254,7 +2621,8 @@ inline void lower_occurrences(LoweringContext& context) {
                 context, occurrence, requirement_id, query.query_entry_id,
                 query.query_entry_version,
                 gnc::model_sdk::StaticEntryKind::PureQuery,
-                gnc::model_sdk::canonical_query_signature(descriptor),
+                gnc::model_sdk::canonical_query_signature(
+                    implementation_descriptor),
                 query.query_call_shape_id, {},
                 std::string(kNoWorkspaceLayoutIdentity), occurrence.source);
             context.query_indices.emplace(
@@ -2290,7 +2658,8 @@ inline void lower_occurrences(LoweringContext& context) {
                 context, occurrence, requirement_id,
                 closure.closure_entry_id, closure.closure_entry_version,
                 gnc::model_sdk::StaticEntryKind::Closure,
-                gnc::model_sdk::canonical_closure_signature(descriptor),
+                gnc::model_sdk::canonical_closure_signature(
+                    implementation_descriptor),
                 closure.closure_call_shape_id, {},
                 std::string(kNoWorkspaceLayoutIdentity), occurrence.source);
             context.closure_indices.emplace(
@@ -2316,7 +2685,7 @@ inline void lower_occurrences(LoweringContext& context) {
             runtime.definition_builder_version,
             gnc::model_sdk::StaticEntryKind::DefinitionBuilder,
             gnc::model_sdk::canonical_definition_builder_signature(
-                descriptor),
+                implementation_descriptor),
             runtime.definition_builder_call_shape_id, {},
             std::string(kNoWorkspaceLayoutIdentity), occurrence.source);
         const auto runtime_cell_factory_requirement = entry_requirement_id(
@@ -2328,7 +2697,7 @@ inline void lower_occurrences(LoweringContext& context) {
             runtime.runtime_cell_factory_version,
             gnc::model_sdk::StaticEntryKind::RuntimeCellFactory,
             gnc::model_sdk::canonical_runtime_cell_factory_signature(
-                descriptor),
+                implementation_descriptor),
             runtime.runtime_cell_factory_call_shape_id, {},
             std::string(kNoWorkspaceLayoutIdentity), occurrence.source);
         const auto tick_span = static_cast<std::uint64_t>(
@@ -2364,7 +2733,8 @@ inline void lower_occurrences(LoweringContext& context) {
         component.profile = runtime.profile;
         component.schedule = runtime.schedule;
         component.lifecycle_capabilities = runtime.lifecycle_capabilities;
-        component.source = occurrence.source;
+        component.source = occurrence.schedule_override_source.value_or(
+            occurrence.source);
         if (runtime.resource_plan_id.empty() ||
             runtime.resource_workspace_requirement !=
                 gnc::model_sdk::StaticWorkspaceRequirement::None) {
@@ -2400,7 +2770,7 @@ inline void lower_occurrences(LoweringContext& context) {
                     owner.codec.entry_id, owner.codec.entry_version,
                     gnc::model_sdk::StaticEntryKind::StateCodec,
                     gnc::model_sdk::canonical_state_codec_signature(
-                        descriptor),
+                        implementation_descriptor),
                     owner.codec.call_shape_id, state_layout,
                     std::string(kNoWorkspaceLayoutIdentity),
                     occurrence.source);
@@ -2441,7 +2811,8 @@ inline void lower_occurrences(LoweringContext& context) {
                 owner.initial_state_builder_id,
                 owner.initial_state_builder_version,
                 gnc::model_sdk::StaticEntryKind::InitialState,
-                gnc::model_sdk::canonical_initial_state_signature(descriptor),
+                gnc::model_sdk::canonical_initial_state_signature(
+                    implementation_descriptor),
                 owner.initial_state_builder_call_shape_id, state_layout,
                 std::string(kNoWorkspaceLayoutIdentity), occurrence.source);
             context.state_indices.emplace(
@@ -2564,7 +2935,7 @@ inline void lower_occurrences(LoweringContext& context) {
                 context, occurrence, link_requirement, entry.entry_id,
                 entry.entry_version, entry_kind(entry.obligation),
                 gnc::model_sdk::canonical_runtime_entry_signature(
-                    descriptor, entry),
+                    implementation_descriptor, entry),
                 entry.call_shape_id,
                 entry.state_read !=
                             gnc::model_sdk::StaticStateReadKind::None ||
@@ -2600,7 +2971,7 @@ inline void lower_occurrences(LoweringContext& context) {
                     codec.entry_id, codec.entry_version,
                     gnc::model_sdk::StaticEntryKind::SlotCodec,
                     gnc::model_sdk::canonical_result_slot_codec_signature(
-                        descriptor, entry),
+                        implementation_descriptor, entry),
                     codec.call_shape_id, {},
                     std::string(kNoWorkspaceLayoutIdentity),
                     occurrence.source);
@@ -6154,20 +6525,24 @@ namespace complete_plan_detail {
         if (entry_requirement != plan.entry_requirements.end() &&
             occurrence != plan.occurrences.end()) {
             gnc::model_sdk::StaticModelDescriptor model;
-            model.definition = {occurrence->model_id,
-                                occurrence->model_version,
-                                occurrence->execution_form};
-            model.placement = occurrence->placement;
-            model.configuration.schema_id =
-                occurrence->canonical_configuration.schema_id;
-            model.configuration.schema_version =
-                occurrence->canonical_configuration.schema_version;
-            for (const auto& port : plan.ports) {
-                if (port.occurrence_id == callsite.occurrence_id) {
-                    model.ports.push_back(
-                        {port.port_id, port.contract_id, port.direction,
-                         port.binding_kind, port.cardinality,
-                         port.temporal_relation});
+            if (occurrence->implementation_descriptor.has_value()) {
+                model = *occurrence->implementation_descriptor;
+            } else {
+                model.definition = {occurrence->model_id,
+                                    occurrence->model_version,
+                                    occurrence->execution_form};
+                model.placement = occurrence->placement;
+                model.configuration.schema_id =
+                    occurrence->canonical_configuration.schema_id;
+                model.configuration.schema_version =
+                    occurrence->canonical_configuration.schema_version;
+                for (const auto& port : plan.ports) {
+                    if (port.occurrence_id == callsite.occurrence_id) {
+                        model.ports.push_back(
+                            {port.port_id, port.contract_id, port.direction,
+                             port.binding_kind, port.cardinality,
+                             port.temporal_relation});
+                    }
                 }
             }
             gnc::model_sdk::StaticRuntimeComponentDescriptor runtime;
@@ -7945,6 +8320,9 @@ namespace complete_plan_detail {
                lhs.build_fingerprint == rhs.build_fingerprint;
     };
     const auto model_for = [&](const CompleteOccurrencePlan& occurrence) {
+        if (occurrence.implementation_descriptor.has_value()) {
+            return *occurrence.implementation_descriptor;
+        }
         gnc::model_sdk::StaticModelDescriptor model;
         model.definition = {occurrence.model_id, occurrence.model_version,
                             occurrence.execution_form};

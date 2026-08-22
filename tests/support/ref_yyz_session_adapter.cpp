@@ -3156,7 +3156,12 @@ void build_controller_invocations(
                     result);
             if (guidance == nullptr) return result;
             const auto output = cell->bindings.boundary_evaluation(
-                cell->definition, *guidance);
+                cell->definition,
+                sample_context(
+                    context, cell->definition.body_frame,
+                    cell->definition.clock_domain,
+                    cell->definition.configuration_revision),
+                *guidance);
             if (!output.succeeded() || !output.has_value()) {
                 return {gnc::kernel::SessionError::InvocationFailed,
                         context.callsite_handle(),
@@ -3171,6 +3176,10 @@ void build_controller_invocations(
                 cell->definition.moment_command_limit_newton_meters;
             probe->controller_saturated = value.saturated;
             probe->controller_output_ticks.push_back(context.tick());
+            probe->controller_output_context_ticks.push_back(
+                value.context.sample_time.tick);
+            probe->controller_guidance_source_ticks.push_back(
+                guidance->source_observation.context.sample_time.tick);
             probe->controller_moments.push_back(
                 value.moment_command_newton_meters);
             probe->contexts.push_back(context_probe(

@@ -141,6 +141,8 @@ struct OpeningBoundaryProbe {
     double controller_limit = 0.0;
     bool controller_saturated = false;
     std::vector<std::int64_t> controller_output_ticks;
+    std::vector<std::int64_t> controller_output_context_ticks;
+    std::vector<std::int64_t> controller_guidance_source_ticks;
     std::vector<double> controller_moments;
     std::vector<InputSampleProbe> controller_guidance_samples;
     std::array<double, 3U> actuator_moment{};

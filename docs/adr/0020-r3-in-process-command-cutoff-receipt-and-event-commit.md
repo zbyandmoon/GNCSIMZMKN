@@ -1,6 +1,6 @@
 # ADR-0020: R3 in-process command cutoff, receipt and event commit
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-22
 - Owner: Repository owner
 - Related tasks: R3-SCH-001, R3-TXN-001, R3-LIF-001
