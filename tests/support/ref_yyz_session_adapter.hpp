@@ -223,9 +223,16 @@ struct MissionResultProbe {
     std::size_t evaluated_sample_count = 0U;
     double duration_seconds = 0.0;
     double downrange_meters = 0.0;
+    double vertical_displacement_meters = 0.0;
     double remaining_mass_kilograms = 0.0;
     double consumed_mass_kilograms = 0.0;
     double terminal_speed_meters_per_second = 0.0;
+    double peak_speed_meters_per_second = 0.0;
+    std::int64_t peak_speed_tick = -1;
+    double maximum_downrange_meters = 0.0;
+    std::int64_t maximum_downrange_tick = -1;
+    double minimum_remaining_mass_kilograms = 0.0;
+    std::int64_t minimum_remaining_mass_tick = -1;
     std::int64_t terminal_tick = -1;
 };
 

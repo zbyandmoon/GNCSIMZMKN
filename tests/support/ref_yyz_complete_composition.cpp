@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -837,6 +838,43 @@ make_00a_target_rate_source(
         source, gnc::packages::yyz::kPitchMomentControllerModelIdentity);
     const auto& actuator = occurrence_for(
         source, gnc::packages::yyz::kIdealBodyMomentActuatorModelIdentity);
+    auto& evaluator = occurrence_for(
+        source,
+        gnc::packages::yyz::kCommittedMissionResultModelIdentity);
+
+    // This conformance source retains the package's fixed three-boundary
+    // terminal window. Disable predicates that need the run opening boundary,
+    // then use an absolute mass sentinel derived from the finite target grid.
+    // With the fixture's 100 kg opening mass and 0.005 kg/tick burn, the
+    // midpoint between the last two boundaries first becomes true at the
+    // requested terminal tick.
+    const double terminal_mass_threshold =
+        100.0 - 0.005 * static_cast<double>(terminal_tick) + 0.0025;
+    std::size_t configured_predicates = 0U;
+    for (auto& field : evaluator.configuration.fields) {
+        if (field.field_id == "predicates.0.threshold") {
+            field.value = terminal_mass_threshold;
+            ++configured_predicates;
+        } else if (field.field_id == "predicates.1.threshold" ||
+                   field.field_id == "predicates.2.threshold") {
+            field.value = (std::numeric_limits<double>::max)();
+            ++configured_predicates;
+        }
+    }
+    require(configured_predicates == 3U,
+            "target evaluator predicate configuration is incomplete");
+    std::size_t configured_predicate_sources = 0U;
+    for (auto& provenance : evaluator.configuration_field_sources) {
+        if (provenance.field_id == "predicates.0.threshold" ||
+            provenance.field_id == "predicates.1.threshold" ||
+            provenance.field_id == "predicates.2.threshold") {
+            provenance.source = ref(
+                "target-rate/evaluator/" + provenance.field_id);
+            ++configured_predicate_sources;
+        }
+    }
+    require(configured_predicate_sources == 3U,
+            "target evaluator predicate provenance is incomplete");
 
     source.occurrence_schedule_overrides = {
         {navigation.occurrence_id, 1U, 0U, 0U,

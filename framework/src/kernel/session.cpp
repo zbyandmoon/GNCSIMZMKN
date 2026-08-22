@@ -5043,6 +5043,9 @@ struct Session::Impl final : SessionObjectAccess,
             EvaluatorHistoryStore staged;
             staged.plan = persistent.plan;
             staged.samples.reserve(persistent.plan->history_depth);
+            // The Image depth is the exact evaluator-callable window. Once it
+            // is full, retention remains rolling and carries no implicit
+            // run-wide aggregation semantics.
             const std::size_t first_retained_sample =
                 persistent.samples.size() ==
                         persistent.plan->history_depth

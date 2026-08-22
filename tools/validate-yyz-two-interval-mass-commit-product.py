@@ -80,6 +80,7 @@ MISSION_RESULT_DIRECT_CHECKS = {
     "mission-result-committed-sample-metrics",
     "mission-result-inclusive-priority-decision",
     "mission-result-terminal-committed-boundary",
+    "mission-result-earliest-committed-boundary",
     "mission-result-three-invalid-input-rejections",
 }
 

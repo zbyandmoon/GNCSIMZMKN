@@ -9,7 +9,7 @@
 
 ## Context
 
-The interval-1 REF-YYZ graph and the 2:1 held-output qualification establish the generic Compiler, Image and Session path, but they do not select the complete 00A cadence. Architecture volume 15 §4 uses 10 Hz as an illustrative schedule while 00A requires a 100 Hz base and leaves the navigation, guidance, controller, actuator and observation rates to a product decision. A real target-conformance chain needs one explicit choice without changing stable package descriptors or introducing a source parser, scheduler service, observation sink or R4 artifact contract.
+The interval-1 REF-YYZ graph and the 2:1 held-output qualification establish the generic Compiler, Image and Session path, but they do not carry the complete 00A cadence. The 00A walkthrough explicitly specifies a 100 Hz base, 100 Hz navigation, 20 Hz guidance, 50 Hz controller, 100 Hz actuator and 25 Hz observation schedule. These frequencies lower to base/navigation/guidance/controller/actuator/observation intervals `1/1/5/2/1/4`, all at zero offset. Architecture volume 15 §4 uses a 10 Hz guidance schedule only as an illustrative example. This ADR freezes the authoritative 00A target-conformance cadence, HeldLatest freshness and programmatic source-lowering scope without changing stable package descriptors or introducing a source parser, scheduler service, observation sink or science verdict.
 
 ## Decision
 
@@ -33,7 +33,10 @@ The interval-1 REF-YYZ graph and the 2:1 held-output qualification establish the
 
 - `r3.kernel-multirate-held-output.probe` verifies the optional source override path on the real guidance-to-controller binding, including changed source/descriptor/proof/Image identities, exact validation failures and preservation of the interval-1 fingerprint.
 - `r3.kernel-yyz-target-rate.probe` compiles the production navigation→guidance→controller→actuator chain with exact 1/5/2/1 intervals, an observation interval of 4, zero offsets and HeldLatest ages 4/1. It verifies Source→Plan→Proof→Image observation identity, a tick-31 short run with complete cadence/provenance sequences, controlled-versus-zero-controller distinction, bit-deterministic replay and two-Session isolation.
-- Two independent 3000-tick executions reach terminal tick 3000 with identical state, history and mission result. All comparable frozen RunOutcome fields are identical; the caller-owned RunIds deliberately differ. The observed mission result is `Aborted`, reason `remaining-mass-floor`, priority 300 and remaining mass `85 kg`. The probe emits `target_conformance science_verdict_pending`; this runtime result carries no scientific-equivalence verdict.
+- Two independent 3000-tick executions must both return `Completed`, leave both Sessions in `Completed`, reach terminal tick 3000 and freeze completed RunOutcomes. Any earlier `Failed` is a conformance failure with error, committed tick and detail. All comparable state, rolling-window result and RunOutcome fields are identical; the caller-owned RunIds deliberately differ.
+- The package evaluator retains its accepted earliest-committed-boundary rule. A direct product regression triggers `downrange-goal` at tick 1, then makes tick 2 miss that predicate while meeting a later higher-priority mass condition; the result remains bound to tick 1.
+- The target Image retains the package-declared rolling history depth of three. Its terminal `CommittedMissionResultOutput` therefore covers ticks 2998–3000 only: approximately 0.02 s and 0.01 kg consumed, with displacement and extrema scoped to that same window. The target source disables duration/downrange predicates that require the run opening boundary and uses a finite-grid-derived absolute mass sentinel that first becomes true at tick 3000. This output is terminal-window evidence; a run-wide mission result remains undelivered.
+- The probe emits `target_conformance science_verdict_pending`. It does not establish scientific equivalence, the 680 kg canonical 00A scenario or an R3 gate verdict.
 
 ## Alternatives considered
 

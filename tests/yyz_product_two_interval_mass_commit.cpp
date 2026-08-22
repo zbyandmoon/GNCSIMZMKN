@@ -1161,6 +1161,46 @@ struct MissionResultProbeBundle {
             "mission summary or terminal committed identity differs");
     checks.emplace_back("mission-result-terminal-committed-boundary");
 
+    CommittedMissionResultDefinition earliest_definition = definition;
+    earliest_definition.predicates[1].threshold = 10.0;
+    CommittedMissionResultInput earliest_input = input;
+    const double opening_downrange =
+        earliest_input.committed_samples[0]
+            .rigid_state.position.value(0);
+    earliest_input.committed_samples[1]
+        .rigid_state.position.value(0) = opening_downrange + 25.0;
+    earliest_input.committed_samples[2]
+        .rigid_state.position.value(0) = opening_downrange + 10.0;
+    earliest_input.committed_samples[2].mass_state.mass_kilograms =
+        99.8;
+    const auto earliest_outcome =
+        CommittedMissionResultKernel::evaluate(
+            earliest_definition, earliest_input);
+    const auto& earliest = require_value(
+        earliest_outcome,
+        "earliest committed terminal boundary evaluation failed");
+    require(earliest.status == MissionResultStatus::Completed &&
+                earliest.initial_tick == 0 && earliest.final_tick == 1 &&
+                earliest.metrics.evaluated_sample_count == 2U &&
+                near(earliest.metrics.terminal.duration_seconds, 0.1) &&
+                near(earliest.metrics.terminal.downrange_meters, 25.0) &&
+                earliest.termination.action == MissionAction::Complete &&
+                earliest.termination.reason_code == "downrange-goal" &&
+                earliest.termination.priority == 200 &&
+                near(earliest.termination.trigger_time_seconds, 0.1) &&
+                earliest.terminal_boundary.rigid_context.sample_time.tick ==
+                    1 &&
+                earliest.terminal_predicates[0].met &&
+                earliest_input.committed_samples[2]
+                        .rigid_state.position.value(0) -
+                        opening_downrange <
+                    earliest_definition.predicates[0].threshold &&
+                earliest_input.committed_samples[2]
+                        .mass_state.mass_kilograms <=
+                    earliest_definition.predicates[2].threshold,
+            "a later boundary replaced the earliest committed termination");
+    checks.emplace_back("mission-result-earliest-committed-boundary");
+
     CommittedMissionResultDefinition no_terminal = definition;
     no_terminal.predicates[0].threshold = 1000.0;
     no_terminal.predicates[1].threshold = 10.0;

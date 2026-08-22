@@ -4787,9 +4787,7 @@ CommittedMissionResultKernel::evaluate(
                 selected = &predicate;
             }
         }
-        const bool is_latest_committed_sample =
-            sample_index + 1U == input.committed_samples.size();
-        if (selected != nullptr && is_latest_committed_sample) {
+        if (selected != nullptr) {
             CommittedMissionResultOutput output;
             output.status = selected->action == MissionAction::Complete
                                 ? MissionResultStatus::Completed
@@ -4810,7 +4808,7 @@ CommittedMissionResultKernel::evaluate(
             output.terminal_boundary = sample;
             NumericalEvidence evidence = mass_commit_evidence(
                 kCommittedMissionResultKernelIdentity,
-                "latest-terminal-committed-sample", validation_flags);
+                "first-terminal-committed-sample", validation_flags);
             evidence.evaluations = validation_evaluations +
                                    summary.evaluated_sample_count *
                                        definition.predicates.size();

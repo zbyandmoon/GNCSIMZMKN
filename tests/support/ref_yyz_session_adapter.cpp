@@ -4040,12 +4040,25 @@ kernel::SessionResult read_mission_result_for_qualification(
             value.metrics.terminal.duration_seconds;
         result.downrange_meters =
             value.metrics.terminal.downrange_meters;
+        result.vertical_displacement_meters =
+            value.metrics.terminal.vertical_displacement_meters;
         result.remaining_mass_kilograms =
             value.metrics.terminal.remaining_mass_kilograms;
         result.consumed_mass_kilograms =
             value.metrics.terminal.consumed_mass_kilograms;
         result.terminal_speed_meters_per_second =
             value.metrics.terminal.speed_meters_per_second;
+        result.peak_speed_meters_per_second =
+            value.metrics.peak_speed_meters_per_second;
+        result.peak_speed_tick = value.metrics.peak_speed_tick;
+        result.maximum_downrange_meters =
+            value.metrics.maximum_downrange_meters;
+        result.maximum_downrange_tick =
+            value.metrics.maximum_downrange_tick;
+        result.minimum_remaining_mass_kilograms =
+            value.metrics.minimum_remaining_mass_kilograms;
+        result.minimum_remaining_mass_tick =
+            value.metrics.minimum_remaining_mass_tick;
         result.terminal_tick =
             value.terminal_boundary.rigid_context.sample_time.tick;
         return {};

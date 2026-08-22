@@ -1086,14 +1086,17 @@ struct MissionMetricSummary {
     std::int64_t minimum_remaining_mass_tick = 0;
 };
 
+// The result covers exactly this chronological committed window. It is a
+// run-wide mission result only when the supplied window starts at the run's
+// opening boundary and ends at its terminal boundary.
 struct CommittedMissionResultInput {
     std::array<CommittedRigidMassBoundary, kCommittedMissionHistoryDepth>
         committed_samples;
 };
 
-// R3 supplies chronological committed histories for the two state layouts in
-// the evaluator history plan. This adapter is the package-owned, non-science
-// assembly boundary into the existing mission-result kernel.
+// R3 supplies one fixed-depth chronological committed window for the two state
+// layouts in the evaluator history plan. This adapter is the package-owned,
+// non-science assembly boundary into the existing mission-result kernel.
 struct CommittedMissionStateHistoryInput {
     std::array<RigidState, kCommittedMissionHistoryDepth> rigid_states;
     std::array<MassState, kCommittedMissionHistoryDepth> mass_states;

@@ -112,12 +112,24 @@ template <std::size_t Size>
            lhs.evaluated_sample_count == rhs.evaluated_sample_count &&
            exact_double(lhs.duration_seconds, rhs.duration_seconds) &&
            exact_double(lhs.downrange_meters, rhs.downrange_meters) &&
+           exact_double(lhs.vertical_displacement_meters,
+                        rhs.vertical_displacement_meters) &&
            exact_double(lhs.remaining_mass_kilograms,
                         rhs.remaining_mass_kilograms) &&
            exact_double(lhs.consumed_mass_kilograms,
                         rhs.consumed_mass_kilograms) &&
            exact_double(lhs.terminal_speed_meters_per_second,
                         rhs.terminal_speed_meters_per_second) &&
+           exact_double(lhs.peak_speed_meters_per_second,
+                        rhs.peak_speed_meters_per_second) &&
+           lhs.peak_speed_tick == rhs.peak_speed_tick &&
+           exact_double(lhs.maximum_downrange_meters,
+                        rhs.maximum_downrange_meters) &&
+           lhs.maximum_downrange_tick == rhs.maximum_downrange_tick &&
+           exact_double(lhs.minimum_remaining_mass_kilograms,
+                        rhs.minimum_remaining_mass_kilograms) &&
+           lhs.minimum_remaining_mass_tick ==
+               rhs.minimum_remaining_mass_tick &&
            lhs.terminal_tick == rhs.terminal_tick;
 }
 
@@ -406,8 +418,9 @@ struct SessionBundle {
 }
 
 [[nodiscard]] SessionBundle initialize_session(
-    const std::shared_ptr<const Image>& image, std::string run_id) {
-    auto adapter = ref_yyz::make_session_adapter(*image);
+    const std::shared_ptr<const Image>& image, std::string run_id,
+    ref_yyz::AdapterOptions options = {}) {
+    auto adapter = ref_yyz::make_session_adapter(*image, options);
     require(static_cast<bool>(adapter), adapter.error);
     auto creation = kernel::create_session(image, adapter.provider);
     require(static_cast<bool>(creation), "Session creation failed");
@@ -652,84 +665,208 @@ struct LongRunCapture {
     kernel::RunDriveOutcome drive;
     CommittedRigidMassProbe state;
     std::vector<CommittedHistorySampleProbe> history;
-    MissionResultProbe mission;
+    MissionResultProbe terminal_window;
     kernel::RunOutcome outcome;
 };
 
 [[nodiscard]] LongRunCapture run_long(
-    const std::shared_ptr<const Image>& image, std::string run_id) {
-    auto bundle = initialize_session(image, std::move(run_id));
+    const std::shared_ptr<const Image>& image, std::string run_id,
+    ref_yyz::AdapterOptions options = {}) {
+    auto bundle = initialize_session(
+        image, std::move(run_id), std::move(options));
     const auto drive = bundle.session->run_to_terminal();
     const auto state = committed_state(bundle);
     const auto history = committed_history(bundle);
-    const auto mission =
+    const auto terminal_window =
         drive.status == kernel::RunDriveStatus::Completed
             ? mission_result(bundle)
             : MissionResultProbe{};
     require(bundle.session->run_outcome() != nullptr,
             "long run outcome is missing");
     const auto outcome = *bundle.session->run_outcome();
-    return {std::move(bundle), drive, state, history, mission,
+    return {std::move(bundle), drive, state, history, terminal_window,
             outcome};
+}
+
+void require_completed_long_run(const LongRunCapture& capture,
+                                std::string_view label) {
+    if (capture.drive.status != kernel::RunDriveStatus::Completed ||
+        capture.bundle.session->state() !=
+            kernel::SessionState::Completed) {
+        throw std::runtime_error(
+            std::string(label) +
+            " 3000-tick target run did not complete: error=" +
+            std::string(kernel::to_string(capture.drive.result.error)) +
+            " committed_tick=" +
+            std::to_string(capture.bundle.session->committed_tick()) +
+            " detail=" + std::string(capture.drive.result.detail));
+    }
+    require(capture.bundle.session->committed_tick() == 3000 &&
+                capture.outcome.final_status ==
+                    kernel::RunFinalStatus::Completed &&
+                capture.outcome.validity ==
+                    contracts::EvidenceValidity::Valid &&
+                capture.outcome.final_tick == 3000 &&
+                capture.outcome.terminal_branch_committed &&
+                capture.outcome.mission_result_available,
+            "completed target run has an incomplete RunOutcome");
+}
+
+[[nodiscard]] double speed_of(
+    const CommittedHistorySampleProbe& sample) noexcept {
+    const auto& velocity = sample.state.velocity;
+    return std::sqrt(velocity[0U] * velocity[0U] +
+                     velocity[1U] * velocity[1U] +
+                     velocity[2U] * velocity[2U]);
+}
+
+void verify_terminal_window_result(const LongRunCapture& capture) {
+    require(capture.history.size() ==
+                yyz::kCommittedMissionHistoryDepth &&
+                capture.history[0U].tick == 2998 &&
+                capture.history[1U].tick == 2999 &&
+                capture.history[2U].tick == 3000 &&
+                exactly_same(capture.state,
+                             capture.history.back().state),
+            "3000-tick evaluator history is not the terminal window");
+
+    const auto& opening = capture.history.front();
+    double peak_speed = speed_of(opening);
+    std::int64_t peak_speed_tick = opening.tick;
+    double maximum_downrange = 0.0;
+    std::int64_t maximum_downrange_tick = opening.tick;
+    double minimum_mass = opening.state.mass_kilograms;
+    std::int64_t minimum_mass_tick = opening.tick;
+    for (const auto& sample : capture.history) {
+        const double speed = speed_of(sample);
+        const double downrange =
+            sample.state.position[0U] - opening.state.position[0U];
+        if (speed > peak_speed) {
+            peak_speed = speed;
+            peak_speed_tick = sample.tick;
+        }
+        if (downrange > maximum_downrange) {
+            maximum_downrange = downrange;
+            maximum_downrange_tick = sample.tick;
+        }
+        if (sample.state.mass_kilograms < minimum_mass) {
+            minimum_mass = sample.state.mass_kilograms;
+            minimum_mass_tick = sample.tick;
+        }
+    }
+    const auto& closing = capture.history.back();
+    const double expected_downrange =
+        closing.state.position[0U] - opening.state.position[0U];
+    const double expected_vertical_displacement =
+        closing.state.position[2U] - opening.state.position[2U];
+    const double expected_consumed_mass =
+        opening.state.mass_kilograms - closing.state.mass_kilograms;
+    const auto& result = capture.terminal_window;
+    require(result.present && !result.completed &&
+                result.initial_tick == 2998 && result.final_tick == 3000 &&
+                std::abs(result.final_time_seconds - 30.0) <= 1.0e-12 &&
+                result.reason_code == "remaining-mass-floor" &&
+                result.priority == 300 &&
+                result.evaluated_sample_count == 3U &&
+                std::abs(result.duration_seconds - 0.02) <= 1.0e-12 &&
+                std::abs(result.downrange_meters - expected_downrange) <=
+                    1.0e-12 &&
+                std::abs(result.vertical_displacement_meters -
+                         expected_vertical_displacement) <= 1.0e-12 &&
+                std::abs(result.remaining_mass_kilograms - 85.0) <=
+                    1.0e-9 &&
+                std::abs(result.consumed_mass_kilograms -
+                         expected_consumed_mass) <= 1.0e-12 &&
+                std::abs(result.consumed_mass_kilograms - 0.01) <=
+                    1.0e-9 &&
+                std::abs(result.terminal_speed_meters_per_second -
+                         speed_of(closing)) <= 1.0e-12 &&
+                std::abs(result.peak_speed_meters_per_second - peak_speed) <=
+                    1.0e-12 &&
+                result.peak_speed_tick == peak_speed_tick &&
+                std::abs(result.maximum_downrange_meters -
+                         maximum_downrange) <= 1.0e-12 &&
+                result.maximum_downrange_tick == maximum_downrange_tick &&
+                std::abs(result.minimum_remaining_mass_kilograms -
+                         minimum_mass) <= 1.0e-12 &&
+                result.minimum_remaining_mass_tick == minimum_mass_tick &&
+                result.terminal_tick == 3000,
+            "terminal rolling-window result claims inconsistent coverage");
+}
+
+[[nodiscard]] LongRunCapture intentional_early_failure(
+    const std::shared_ptr<const Image>& image) {
+    ref_yyz::AdapterOptions options;
+    options.failure = {ref_yyz::FailurePhase::Boundary, 0U};
+    return run_long(image, "run:00a-long-intentional-failure",
+                    std::move(options));
+}
+
+void verify_early_failure_is_rejected(
+    const std::shared_ptr<const Image>& image) {
+    const auto failed = intentional_early_failure(image);
+    require(failed.drive.status == kernel::RunDriveStatus::Failed &&
+                failed.bundle.session->state() ==
+                    kernel::SessionState::Failed &&
+                failed.bundle.session->committed_tick() < 3000,
+            "intentional early-failure fixture did not fail early");
+    try {
+        require_completed_long_run(failed, "intentional");
+    } catch (const std::runtime_error& error) {
+        const std::string detail = error.what();
+        require(detail.find("error=") != std::string::npos &&
+                    detail.find("committed_tick=") != std::string::npos &&
+                    detail.find("detail=") != std::string::npos,
+                "early-failure rejection omitted required diagnostics");
+        return;
+    }
+    throw std::runtime_error(
+        "target conformance accepted an intentional early failure");
 }
 
 void verify_long_target_run() {
     const auto image = target_image(3000);
     auto first = run_long(image, "run:00a-long-first");
     auto second = run_long(image, "run:00a-long-second");
-    require(first.drive.status == second.drive.status &&
-                first.drive.result.error == second.drive.result.error &&
+    require_completed_long_run(first, "first");
+    require_completed_long_run(second, "second");
+    require(first.drive.result.error == second.drive.result.error &&
                 first.drive.result.image_handle ==
                     second.drive.result.image_handle &&
                 first.drive.result.detail == second.drive.result.detail &&
-                first.bundle.session->state() ==
-                    second.bundle.session->state() &&
-                first.bundle.session->committed_tick() ==
-                    second.bundle.session->committed_tick() &&
                 first.bundle.session->committed_epoch() ==
                     second.bundle.session->committed_epoch() &&
                 exactly_same(first.state, second.state) &&
                 exactly_same(first.history, second.history) &&
-                exactly_same(first.mission, second.mission) &&
+                exactly_same(first.terminal_window,
+                             second.terminal_window) &&
                 exactly_same(first.outcome, second.outcome),
-            "3000-tick target result was not deterministic");
+            "two completed 3000-tick target runs were not deterministic");
+    verify_terminal_window_result(first);
+    verify_terminal_window_result(second);
+    verify_early_failure_is_rejected(image);
 
-    if (first.drive.status == kernel::RunDriveStatus::Completed) {
-        require(first.bundle.session->state() ==
-                    kernel::SessionState::Completed &&
-                    first.outcome.final_tick == 3000 &&
-                    first.outcome.terminal_branch_committed &&
-                    first.outcome.mission_result_available &&
-                    first.mission.present && !first.mission.completed &&
-                    first.mission.final_tick == 3000 &&
-                    first.mission.reason_code == "remaining-mass-floor" &&
-                    first.mission.priority == 300 &&
-                    first.mission.evaluated_sample_count == 3U &&
-                    std::abs(
-                        first.mission.remaining_mass_kilograms - 85.0) <=
-                        1.0e-9,
-                "completed 3000-tick target result changed");
-        std::cout <<
-            "target_conformance science_verdict_pending long_run=completed"
-            " terminal_tick=" << first.mission.final_tick <<
-            " mission_status=aborted reason=" <<
-            first.mission.reason_code << " remaining_mass_kg=" <<
-            first.mission.remaining_mass_kilograms << '\n';
-    } else {
-        require(first.drive.status == kernel::RunDriveStatus::Failed &&
-                    first.bundle.session->state() ==
-                        kernel::SessionState::Failed &&
-                    first.outcome.final_status ==
-                        kernel::RunFinalStatus::Failed &&
-                    first.bundle.session->committed_tick() < 3000,
-                "long-run failure was not a frozen numerical failure");
-        std::cout <<
-            "target_conformance science_verdict_pending long_run="
-            "numerical_failure committed_tick=" <<
-            first.bundle.session->committed_tick() << " error=" <<
-            kernel::to_string(first.drive.result.error) << " detail=" <<
-            first.drive.result.detail << '\n';
-    }
+    std::cout <<
+        "target_conformance science_verdict_pending long_run=completed"
+        " terminal_tick=3000 terminal_window_ticks=2998..3000"
+        " window_duration_s=" << first.terminal_window.duration_seconds <<
+        " window_downrange_m=" <<
+        first.terminal_window.downrange_meters <<
+        " window_vertical_displacement_m=" <<
+        first.terminal_window.vertical_displacement_meters <<
+        " window_consumed_mass_kg=" <<
+        first.terminal_window.consumed_mass_kilograms <<
+        " final_mass_kg=" <<
+        first.terminal_window.remaining_mass_kilograms <<
+        " window_peak_speed_mps=" <<
+        first.terminal_window.peak_speed_meters_per_second << '@' <<
+        first.terminal_window.peak_speed_tick <<
+        " window_max_downrange_m=" <<
+        first.terminal_window.maximum_downrange_meters << '@' <<
+        first.terminal_window.maximum_downrange_tick <<
+        " window_min_mass_kg=" <<
+        first.terminal_window.minimum_remaining_mass_kilograms << '@' <<
+        first.terminal_window.minimum_remaining_mass_tick << '\n';
 }
 
 void run() {
@@ -742,15 +879,37 @@ void run() {
     verify_long_target_run();
 }
 
+void run_intentional_early_failure_exit_probe() {
+    const auto image = target_image(3000);
+    const auto failed = intentional_early_failure(image);
+    require(failed.drive.status == kernel::RunDriveStatus::Failed &&
+                failed.bundle.session->committed_tick() < 3000,
+            "intentional early-failure exit fixture did not fail early");
+    require_completed_long_run(failed, "intentional");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 2 || std::string_view(argv[1]) != "--self-check") {
+    const bool self_check =
+        argc == 2 && std::string_view(argv[1]) == "--self-check";
+    const bool early_failure_exit =
+        argc == 2 &&
+        std::string_view(argv[1]) == "--intentional-early-failure";
+    if (!self_check && !early_failure_exit) {
         std::cerr <<
-            "usage: gnc_kernel_yyz_target_rate_probe --self-check\n";
+            "usage: gnc_kernel_yyz_target_rate_probe "
+            "--self-check|--intentional-early-failure\n";
         return 2;
     }
     try {
+        if (early_failure_exit) {
+            run_intentional_early_failure_exit_probe();
+            std::cerr <<
+                "R3 YYZ 00A target-rate conformance: FAIL: "
+                "intentional early failure was accepted\n";
+            return 1;
+        }
         run();
         std::cout <<
             "R3 YYZ 00A target-rate conformance: PASS "
