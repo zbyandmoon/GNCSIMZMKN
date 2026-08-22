@@ -4,6 +4,7 @@
 #include "support/session_qualification_access.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdint>
 #include <iostream>
 #include <memory>
@@ -15,6 +16,51 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+namespace command_allocation_fault {
+
+thread_local std::int64_t fail_after = -1;
+
+void arm(std::int64_t allocations_before_failure) noexcept {
+    fail_after = allocations_before_failure;
+}
+
+void disarm() noexcept { fail_after = -1; }
+
+[[nodiscard]] bool should_fail() noexcept {
+    if (fail_after < 0) {
+        return false;
+    }
+    if (fail_after == 0) {
+        fail_after = -1;
+        return true;
+    }
+    --fail_after;
+    return false;
+}
+
+} // namespace command_allocation_fault
+
+void* operator new(std::size_t size) {
+    if (command_allocation_fault::should_fail()) {
+        throw std::bad_alloc();
+    }
+    if (auto* result = std::malloc(size == 0U ? 1U : size)) {
+        return result;
+    }
+    throw std::bad_alloc();
+}
+
+void* operator new[](std::size_t size) { return ::operator new(size); }
+
+void operator delete(void* address) noexcept { std::free(address); }
+void operator delete[](void* address) noexcept { std::free(address); }
+void operator delete(void* address, std::size_t) noexcept {
+    std::free(address);
+}
+void operator delete[](void* address, std::size_t) noexcept {
+    std::free(address);
+}
 
 namespace {
 
@@ -384,14 +430,16 @@ template <auto Callable>
     return implementation;
 }
 
-[[nodiscard]] compiler::CompleteStaticCompositionSource mode_owner_source() {
+[[nodiscard]] compiler::CompleteStaticCompositionSource mode_owner_source(
+    std::int64_t terminal_tick = 2) {
     compiler::CompleteStaticCompositionSource source;
     source.source_version =
         std::string(compiler::kCompleteStaticCompositionSourceVersion);
     source.mission_id = "mission.qualification.mode-owner@1";
     source.plan_id = "plan.qualification.mode-owner";
     source.mission_source = source_ref("/mission");
-    source.clock = {"clock.qualification.mode-owner@1", 0.25, 0, 2,
+    source.clock = {"clock.qualification.mode-owner@1", 0.25, 0,
+                    terminal_tick,
                     source_ref("/clock")};
     source.entities.push_back(
         {std::string(kEntityId),
@@ -475,10 +523,11 @@ struct CompiledFixture {
     contracts::ExecutionPlanImage image;
 };
 
-[[nodiscard]] CompiledFixture compile_fixture(bool resettable = true) {
+[[nodiscard]] CompiledFixture compile_fixture(
+    bool resettable = true, std::int64_t terminal_tick = 2) {
     auto package = mode_owner_package(resettable);
     auto implementation = mode_owner_implementation(package);
-    auto source = mode_owner_source();
+    auto source = mode_owner_source(terminal_tick);
     const auto base_outcome =
         compiler::compile_complete_execution_plan(source, {package});
     require(base_outcome.succeeded(),
@@ -503,6 +552,7 @@ struct RuntimeControl {
     std::size_t reducer_failures_remaining = 0U;
     std::size_t consumer_failures_remaining = 0U;
     std::size_t invalid_candidates_remaining = 0U;
+    std::size_t invalid_decisions_remaining = 0U;
     std::size_t omitted_projections_remaining = 0U;
     std::size_t observation_seal_clone_failures_remaining = 0U;
     std::size_t cancel_in_reducer_remaining = 0U;
@@ -753,6 +803,12 @@ class ReductionEntry final : public kernel::SessionCommandReducerEntry {
                     "ModeOwner reducer committed-state type mismatch"};
         }
         const auto& prior = *static_cast<const ModeState*>(committed.address);
+        if (control_->invalid_decisions_remaining != 0U) {
+            --control_->invalid_decisions_remaining;
+            result.decision =
+                static_cast<kernel::CommandApplicationDecision>(255U);
+            return {};
+        }
         if (command.decision == RequestedDecision::Reject) {
             result.decision = kernel::CommandApplicationDecision::Rejected;
             result.application_code = 200U;
@@ -851,8 +907,8 @@ class ModeOwnerProvider final : public kernel::SessionMaterializationProvider {
         require(image.runtime_components().size() == 1U &&
                     image.state_blocks().size() == 1U &&
                     image.initial_bindings().size() == 1U &&
-                    image.command_routes().size() == 1U &&
-                    image.event_deliveries().size() == 1U,
+                    !image.command_routes().empty() &&
+                    !image.event_deliveries().empty(),
                 "ModeOwner Image cardinality differs from fixture contract");
         const auto& component = image.runtime_components().front();
         const auto& state = image.state_blocks().front();
@@ -1153,6 +1209,66 @@ void verify_compiler_and_image_contracts(const CompiledFixture& fixture) {
                     compiler::CompleteDiagnosticCode::InvalidCommandRoute),
             "multiple command reducers for one target owner passed route lowering");
 
+    {
+        auto unknown_transaction = fixture.extended_plan;
+        unknown_transaction.command_routes.front().transaction_id =
+            "transaction.missing";
+        std::vector<compiler::CompleteDiagnostic> diagnostics;
+        require(!compiler::complete_plan_detail::
+                     validate_command_event_routes(unknown_transaction,
+                                                   diagnostics) &&
+                    has_complete_diagnostic(
+                        diagnostics,
+                        compiler::CompleteDiagnosticCode::
+                            InvalidCommandRoute),
+                "unknown command transaction passed descriptor validation");
+    }
+
+    {
+        auto cross_transaction = fixture.extended_plan;
+        const auto consumer = std::find_if(
+            cross_transaction.runtime_callsites.begin(),
+            cross_transaction.runtime_callsites.end(),
+            [](const auto& callsite) {
+                return callsite.obligation ==
+                       contracts::ExecutionObligation::EventConsumption;
+            });
+        require(consumer != cross_transaction.runtime_callsites.end(),
+                "qualification plan lacks an event consumer callsite");
+        auto foreign_consumer = *consumer;
+        foreign_consumer.callsite_id += ".foreign";
+        foreign_consumer.plan_element_id += ".foreign";
+        foreign_consumer.occurrence_id += ".foreign";
+        cross_transaction.runtime_callsites.push_back(foreign_consumer);
+
+        auto foreign_component =
+            cross_transaction.runtime_components.front();
+        foreign_component.plan_element_id += ".foreign";
+        foreign_component.occurrence_id = foreign_consumer.occurrence_id;
+        foreign_component.callsite_ids = {foreign_consumer.callsite_id};
+        auto foreign_transaction = cross_transaction.transactions.front();
+        foreign_transaction.plan_element_id += ".foreign";
+        foreign_transaction.transaction_id += ".foreign";
+        foreign_component.transaction_ids = {
+            foreign_transaction.transaction_id};
+        cross_transaction.runtime_components.push_back(
+            std::move(foreign_component));
+        cross_transaction.transactions.push_back(
+            std::move(foreign_transaction));
+        cross_transaction.event_deliveries.front().consumer_callsite_id =
+            foreign_consumer.callsite_id;
+
+        std::vector<compiler::CompleteDiagnostic> diagnostics;
+        require(!compiler::complete_plan_detail::
+                     validate_command_event_routes(cross_transaction,
+                                                   diagnostics) &&
+                    has_complete_diagnostic(
+                        diagnostics,
+                        compiler::CompleteDiagnosticCode::
+                            InvalidEventDelivery),
+                "cross-transaction event consumer passed descriptor validation");
+    }
+
     auto implementation = fixture.implementation;
     const auto reducer = std::find_if(
         implementation.entries.begin(), implementation.entries.end(),
@@ -1244,6 +1360,59 @@ void verify_compiler_and_image_contracts(const CompiledFixture& fixture) {
                 wrong_order_initialized.result.error ==
                     kernel::SessionError::InvalidImageStructure,
             "wrong event delivery order entered an initialized Session");
+
+    auto unknown_transaction = fixture.image.data();
+    unknown_transaction.command_routes.front().transaction_handle +=
+        100000U;
+    unknown_transaction.image_fingerprint =
+        compiler::complete_plan_detail::image_fingerprint(
+            unknown_transaction);
+    auto unknown_transaction_image =
+        std::make_shared<const contracts::ExecutionPlanImage>(
+            contracts::ExecutionPlanImage::freeze(
+                std::move(unknown_transaction)));
+    auto unknown_transaction_provider =
+        std::make_shared<ModeOwnerProvider>(*unknown_transaction_image);
+    auto unknown_transaction_creation = kernel::create_session(
+        unknown_transaction_image, unknown_transaction_provider);
+    require(unknown_transaction_creation &&
+                !unknown_transaction_creation.session->initialize(
+                    {kernel::RunId("run.unknown-transaction"),
+                     kernel::exact_run_binding(
+                         *unknown_transaction_image)}) &&
+                unknown_transaction_creation.session->last_result().error ==
+                    kernel::SessionError::InvalidImageStructure,
+            "unknown numeric command transaction entered an initialized Session");
+
+    auto second_route = fixture.image.data();
+    auto extra_route = second_route.command_routes.front();
+    auto extra_delivery = second_route.event_deliveries.front();
+    extra_route.handle += 100000U;
+    extra_route.plan_element_id += ".second";
+    extra_delivery.handle += 100000U;
+    extra_delivery.plan_element_id += ".second";
+    extra_delivery.stable_order = 1U;
+    extra_route.event_delivery_handle = extra_delivery.handle;
+    extra_delivery.producer_command_route_handle = extra_route.handle;
+    second_route.command_routes.push_back(std::move(extra_route));
+    second_route.event_deliveries.push_back(std::move(extra_delivery));
+    second_route.image_fingerprint =
+        compiler::complete_plan_detail::image_fingerprint(second_route);
+    auto second_route_image =
+        std::make_shared<const contracts::ExecutionPlanImage>(
+            contracts::ExecutionPlanImage::freeze(
+                std::move(second_route)));
+    auto second_route_provider =
+        std::make_shared<ModeOwnerProvider>(*second_route_image);
+    auto second_route_creation = kernel::create_session(
+        second_route_image, second_route_provider);
+    require(second_route_creation &&
+                !second_route_creation.session->initialize(
+                    {kernel::RunId("run.second-route"),
+                     kernel::exact_run_binding(*second_route_image)}) &&
+                second_route_creation.session->last_result().error ==
+                    kernel::SessionError::InvalidImageStructure,
+            "a second numeric command route entered an initialized Session");
 }
 
 void verify_submission_and_idempotency(
@@ -1604,6 +1773,13 @@ void verify_failure_rollback_and_retry(
         },
         kernel::RuntimeDiagnosticStage::Precommit,
         "candidate precommit failure leaked staged state, receipt, event, or queue consumption");
+    run_failure_case(
+        "run.unknown-decision",
+        [](ModeOwnerProvider& provider) {
+            provider.control.invalid_decisions_remaining = 1U;
+        },
+        kernel::RuntimeDiagnosticStage::CommandReduction,
+        "unknown reducer decision reached receipt, event, state, or queue publication");
 
     {
         auto live = initialize_session(image, "run.maintenance-rollback");
@@ -1640,6 +1816,111 @@ void verify_failure_rollback_and_retry(
                     live.session->committed_events().size() == 1U,
                 "retry did not atomically commit one supersession and one application");
     }
+
+    {
+        auto live = initialize_session(image, "run.projection-failure");
+        require(static_cast<bool>(live.session->submit_command(
+                    command_request(live, "projection-fatal", Mode::Active))),
+                "projection-failure command was not queued");
+        const auto before_epoch = live.session->committed_epoch();
+        const auto before_tick = live.session->committed_tick();
+        const auto before_outputs = live.session->committed_outputs();
+        const auto before_histories = live.session->committed_histories();
+        live.provider->control.omitted_projections_remaining = 1U;
+        const auto failed = live.session->execute_step();
+        const auto* frozen = live.session->run_outcome();
+        require(failed.status == kernel::StepStatus::Failed &&
+                    failed.result.error ==
+                        kernel::SessionError::FrameSlotAbsent &&
+                    failed.primary_diagnostic.has_value() &&
+                    failed.primary_diagnostic->stage ==
+                        kernel::RuntimeDiagnosticStage::BoundaryInvocation &&
+                    live.session->state() == kernel::SessionState::Failed &&
+                    live.session->committed_epoch() == before_epoch &&
+                    live.session->committed_tick() == before_tick &&
+                    committed_mode(live).revision == 0U &&
+                    live.session->committed_outputs().size() ==
+                        before_outputs.size() &&
+                    live.session->committed_histories().size() ==
+                        before_histories.size() &&
+                    live.session->pending_command_count() == 1U &&
+                    kernel::qualification::SessionAccess::
+                            command_queue_storage_count(*live.session) ==
+                        1U &&
+                    live.session->command_application_receipts().empty() &&
+                    live.session->committed_events().empty() &&
+                    frozen != nullptr &&
+                    frozen->final_status ==
+                        kernel::RunFinalStatus::Failed &&
+                    frozen->validity ==
+                        contracts::EvidenceValidity::Invalid,
+                "projection failure with a due command did not freeze the run at its committed boundary");
+        const auto retry = live.session->execute_step();
+        require(retry.status == kernel::StepStatus::Failed &&
+                    retry.result.error ==
+                        kernel::SessionError::InvalidLifecycleTransition &&
+                    live.session->run_outcome() == frozen &&
+                    live.session->pending_command_count() == 1U,
+                "fatal projection failure allowed a same-Session command retry");
+    }
+}
+
+void verify_queue_storage_compaction(
+    const contracts::ExecutionPlanImage& image) {
+    auto live = initialize_session(image, "run.queue-compaction");
+    const auto accepted_count =
+        static_cast<std::size_t>(kQueueCapacity) + 3U;
+    for (std::size_t index = 0U; index < accepted_count; ++index) {
+        const auto accepted = live.session->submit_command(command_request(
+            live, "compact-" + std::to_string(index), Mode::Standby,
+            RequestedDecision::Reject,
+            live.session->committed_tick(), std::nullopt,
+            "compact-" + std::to_string(index)));
+        require(accepted &&
+                    kernel::qualification::SessionAccess::
+                            command_queue_storage_count(*live.session) <=
+                        kQueueCapacity,
+                "active command storage exceeded route capacity before commit");
+        const auto step = live.session->execute_step();
+        require(step.status == kernel::StepStatus::Committed &&
+                    live.session->pending_command_count() == 0U &&
+                    kernel::qualification::SessionAccess::
+                            command_queue_storage_count(*live.session) ==
+                        0U,
+                "consumed command tombstone remained in active queue storage");
+    }
+    require(live.session->command_submission_outcomes().size() ==
+                accepted_count &&
+                live.session->command_application_receipts().size() ==
+                    accepted_count &&
+                accepted_count > kQueueCapacity,
+            "continuous submit/commit did not exceed cumulative route capacity");
+}
+
+void verify_step_allocation_failure_is_structured(
+    const contracts::ExecutionPlanImage& image) {
+    auto live = initialize_session(image, "run.step-allocation");
+    require(static_cast<bool>(live.session->submit_command(
+                command_request(live, "allocation", Mode::Active))),
+            "allocation-failure command was not queued");
+    const auto before_epoch = live.session->committed_epoch();
+    const auto before_tick = live.session->committed_tick();
+    command_allocation_fault::arm(0);
+    const auto failed = live.session->execute_step();
+    command_allocation_fault::disarm();
+    require(failed.status == kernel::StepStatus::Failed &&
+                failed.result.error == kernel::SessionError::AllocationFailure &&
+                failed.primary_diagnostic.has_value() &&
+                failed.primary_diagnostic->code ==
+                    kernel::RuntimeDiagnosticCode::AllocationFailed &&
+                live.session->state() == kernel::SessionState::Failed &&
+                live.session->committed_epoch() == before_epoch &&
+                live.session->committed_tick() == before_tick &&
+                committed_mode(live).revision == 0U &&
+                live.session->pending_command_count() == 1U &&
+                kernel::qualification::SessionAccess::
+                        command_queue_storage_count(*live.session) == 1U,
+            "step allocation failure escaped structured handling or changed the committed boundary");
 }
 
 void verify_cancellation_boundaries(
@@ -1794,15 +2075,18 @@ void verify_reset_isolation_and_dispose(
 std::size_t run_self_check() {
     const auto resettable = compile_fixture(true);
     const auto non_resettable = compile_fixture(false);
+    const auto long_running = compile_fixture(true, 12);
     verify_compiler_and_image_contracts(resettable);
     verify_submission_and_idempotency(resettable.image);
     verify_atomic_application(resettable.image);
     verify_transaction_cutoff(resettable.image);
     verify_decisions_and_queue_maintenance(resettable.image);
     verify_failure_rollback_and_retry(resettable.image);
+    verify_queue_storage_compaction(long_running.image);
+    verify_step_allocation_failure_is_structured(resettable.image);
     verify_cancellation_boundaries(resettable.image);
     verify_reset_isolation_and_dispose(resettable, non_resettable);
-    return 8U;
+    return 10U;
 }
 
 } // namespace

@@ -5353,11 +5353,14 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
             });
     };
 
-    if (plan.command_routes.empty() != plan.event_deliveries.empty() ||
-        plan.command_routes.size() != plan.event_deliveries.size()) {
+    if (plan.command_routes.empty() && plan.event_deliveries.empty()) {
+        return true;
+    }
+    if (plan.command_routes.size() != 1U ||
+        plan.event_deliveries.size() != 1U) {
         diagnostic(diagnostics, CompleteDiagnosticCode::InvalidCommandRoute,
                    {}, plan.plan_id,
-                   "command routes and event deliveries must have one-to-one cardinality");
+                   "the current command/event slice requires exactly one route and one delivery");
         return false;
     }
     std::set<std::string> route_ids;
@@ -5481,6 +5484,10 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
             });
         const auto producer = find_callsite(delivery.producer_callsite_id);
         const auto consumer = find_callsite(delivery.consumer_callsite_id);
+        const auto consumer_component =
+            consumer == plan.runtime_callsites.end()
+                ? plan.runtime_components.end()
+                : find_component(consumer->occurrence_id);
         const bool unique_id =
             delivery_ids.insert(delivery.event_delivery_id).second;
         const bool unique_element =
@@ -5500,6 +5507,8 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
                      route != plan.command_routes.end() &&
                      producer != plan.runtime_callsites.end() &&
                      consumer != plan.runtime_callsites.end() &&
+                     consumer_component !=
+                         plan.runtime_components.end() &&
                      !delivery.event_schema_id.empty();
         if (route != plan.command_routes.end()) {
             valid = valid &&
@@ -5533,6 +5542,14 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
                     consumer->output_slot_ids.empty() &&
                     static_cast<std::uint32_t>(consumer->phase) >
                         static_cast<std::uint32_t>(producer->phase);
+        }
+        if (route != plan.command_routes.end() &&
+            consumer_component != plan.runtime_components.end()) {
+            valid = valid &&
+                    std::count(
+                        consumer_component->transaction_ids.begin(),
+                        consumer_component->transaction_ids.end(),
+                        route->transaction_id) == 1;
         }
         if (!valid) {
             diagnostic(
@@ -5608,11 +5625,11 @@ compile_command_event_routes(
                    "command/event lowering requires one canonical unextended complete plan");
         return outcome;
     }
-    if (route_specs.empty()) {
+    if (route_specs.size() != 1U) {
         diagnostic(outcome.diagnostics,
                    CompleteDiagnosticCode::InvalidCommandRoute, {},
                    plan.plan_id,
-                   "command/event lowering requires at least one route specification");
+                   "the current command/event lowering requires exactly one route specification");
         return outcome;
     }
 

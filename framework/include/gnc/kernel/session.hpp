@@ -1483,6 +1483,8 @@ class Session final {
         SessionObjectIdentityView& result) const noexcept;
     [[nodiscard]] SessionResult qualification_execute_opening_boundary()
         noexcept;
+    [[nodiscard]] std::size_t
+    qualification_command_queue_storage_count() const noexcept;
     std::unique_ptr<Impl> implementation_;
 
     friend class qualification::SessionAccess;

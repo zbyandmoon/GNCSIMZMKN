@@ -2359,13 +2359,11 @@ struct Session::Impl final : SessionObjectAccess,
         if (routes.empty() && deliveries.empty()) {
             return {};
         }
-        if (routes.empty() || routes.size() != deliveries.size()) {
+        if (routes.size() != 1U || deliveries.size() != 1U) {
             return failure(
                 SessionError::InvalidImageStructure, 0U,
-                "command route and event delivery cardinality is invalid");
+                "the current Session slice requires exactly one command route and event delivery");
         }
-        std::vector<std::uint32_t> targeted_components;
-        targeted_components.reserve(routes.size());
         for (const auto& route : routes) {
             const auto* transaction = find_handle(
                 image->transactions(), route.transaction_handle);
@@ -2437,12 +2435,12 @@ struct Session::Impl final : SessionObjectAccess,
                     contracts::PlanImageEntryKind::CommandReduction &&
                 reducer->request_contract_id == route.payload_schema_id &&
                 !route.payload_schema_id.empty() &&
-                reducer->input_slot_handles ==
-                    std::vector<std::uint32_t>{
-                        state->committed_slot_handle} &&
-                reducer->output_slot_handles ==
-                    std::vector<std::uint32_t>{
-                        state->candidate_slot_handle} &&
+                reducer->input_slot_handles.size() == 1U &&
+                reducer->input_slot_handles.front() ==
+                    state->committed_slot_handle &&
+                reducer->output_slot_handles.size() == 1U &&
+                reducer->output_slot_handles.front() ==
+                    state->candidate_slot_handle &&
                 writer->slot_handle == state->candidate_slot_handle &&
                 writer->owner_kind ==
                     contracts::PlanImageWriterOwnerKind::RuntimeCallsite &&
@@ -2476,12 +2474,6 @@ struct Session::Impl final : SessionObjectAccess,
                     SessionError::InvalidImageStructure, route.handle,
                     "command route, reducer, target, authority, or typed adapter is invalid");
             }
-            targeted_components.push_back(component->handle);
-        }
-        if (!unique_nonzero_handles(targeted_components)) {
-            return failure(
-                SessionError::InvalidImageStructure, 0U,
-                "command routes assign multiple reducers to one target owner");
         }
 
         for (std::size_t index = 0U; index < deliveries.size(); ++index) {
@@ -2537,6 +2529,10 @@ struct Session::Impl final : SessionObjectAccess,
                 delivery.delivery ==
                     contracts::EventDeliveryPoint::LaterPhaseSameTick &&
                 delivery.stable_order == index &&
+                std::count(
+                    consumer_component->transaction_handles.begin(),
+                    consumer_component->transaction_handles.end(),
+                    route->transaction_handle) == 1 &&
                 reducer_adapter != nullptr && consumer_adapter != nullptr &&
                 reducer_identity.event_type_identity != nullptr &&
                 reducer_identity.event_type_identity ==
@@ -3635,6 +3631,17 @@ struct Session::Impl final : SessionObjectAccess,
             if (!result) {
                 return result;
             }
+            if (reduction.decision !=
+                    CommandApplicationDecision::Applied &&
+                reduction.decision !=
+                    CommandApplicationDecision::Rejected &&
+                reduction.decision !=
+                    CommandApplicationDecision::Deferred) {
+                return failure(
+                    SessionError::TransactionPrecommitFailed,
+                    route->handle,
+                    "command reducer returned an unknown application decision");
+            }
             step_summary.executed_callsite_handles.push_back(
                 reducer_callsite->handle);
             auto* candidate = candidate_for_slot(
@@ -4006,15 +4013,17 @@ struct Session::Impl final : SessionObjectAccess,
                 transaction.handle,
                 "command receipt staging is incomplete at precommit");
         }
-        auto selected_indices = command_stage.selected_queue_indices;
-        std::sort(selected_indices.begin(), selected_indices.end());
-        if (std::adjacent_find(selected_indices.begin(),
-                               selected_indices.end()) !=
-            selected_indices.end()) {
-            return failure(
-                SessionError::TransactionPrecommitFailed,
-                transaction.handle,
-                "selected command queue membership is not canonical");
+        for (std::size_t index = 0U;
+             index < command_stage.selected_queue_indices.size(); ++index) {
+            for (std::size_t prior = 0U; prior < index; ++prior) {
+                if (command_stage.selected_queue_indices[index] ==
+                    command_stage.selected_queue_indices[prior]) {
+                    return failure(
+                        SessionError::TransactionPrecommitFailed,
+                        transaction.handle,
+                        "selected command queue membership is not canonical");
+                }
+            }
         }
         std::size_t applied_count = 0U;
         std::size_t expected_consumed = 0U;
@@ -4066,6 +4075,49 @@ struct Session::Impl final : SessionObjectAccess,
                 CommandApplicationDecision::Applied) {
                 ++applied_count;
                 ++expected_consumed;
+                const auto* state = find_handle(
+                    image->state_blocks(),
+                    route->target_state_block_handle);
+                const auto* candidate =
+                    state == nullptr
+                        ? nullptr
+                        : candidate_for_slot(
+                              state->candidate_slot_handle);
+                const auto member = std::find_if(
+                    transaction.candidates.begin(),
+                    transaction.candidates.end(),
+                    [&](const auto& value) {
+                        return state != nullptr &&
+                               value.candidate_state_slot_handle ==
+                                   state->candidate_slot_handle &&
+                               value.commit_class ==
+                                   contracts::StateCommitClass::InstantPatch;
+                    });
+                if (state == nullptr || candidate == nullptr ||
+                    member == transaction.candidates.end() ||
+                    !candidate->candidate_present ||
+                    candidate->candidate_generation !=
+                        cycle_frame.generation ||
+                    candidate->candidate_base_epoch != committed_epoch ||
+                    candidate->candidate_producer_handle !=
+                        member->producer_handle ||
+                    candidate->candidate_writer_token_handle !=
+                        member->writer_token_handle ||
+                    candidate->materializer == nullptr ||
+                    !candidate->materializer->operations()
+                         .supports_nofail_swap()) {
+                    return failure(
+                        SessionError::TransactionPrecommitFailed,
+                        route->handle,
+                        "applied command candidate metadata is incomplete at precommit");
+                }
+                if (!candidate->materializer->operations().validate(
+                        candidate->address)) {
+                    return failure(
+                        SessionError::CandidateValidationFailed,
+                        state->candidate_slot_handle,
+                        "applied command candidate validation failed at precommit");
+                }
                 const auto* delivery = event_delivery(
                     route->event_delivery_handle);
                 const auto event_count = static_cast<std::size_t>(
@@ -4118,26 +4170,74 @@ struct Session::Impl final : SessionObjectAccess,
                 transaction.handle,
                 "command event or queue-consumption staging is incomplete");
         }
-        auto consumed = command_stage.consumed_queue_indices;
-        std::sort(consumed.begin(), consumed.end());
-        if (std::adjacent_find(consumed.begin(), consumed.end()) !=
-            consumed.end()) {
+        for (std::size_t index = 0U;
+             index < command_stage.consumed_queue_indices.size(); ++index) {
+            const auto queue_index =
+                command_stage.consumed_queue_indices[index];
+            if (queue_index >= command_stage.queue.size()) {
+                return failure(
+                    SessionError::TransactionPrecommitFailed,
+                    transaction.handle,
+                    "command queue consumption is outside the staged queue");
+            }
+            for (std::size_t prior = 0U; prior < index; ++prior) {
+                if (queue_index ==
+                    command_stage.consumed_queue_indices[prior]) {
+                    return failure(
+                        SessionError::TransactionPrecommitFailed,
+                        transaction.handle,
+                        "command queue consumption is duplicated");
+                }
+            }
+        }
+        return {};
+    }
+
+    [[nodiscard]] SessionResult compact_command_queue_for_commit(
+        const contracts::PlanImageTransaction& transaction) {
+        if (!command_stage.active) {
             return failure(
                 SessionError::TransactionPrecommitFailed,
                 transaction.handle,
-                "command queue consumption is duplicated");
+                "command queue compaction requires active staging");
         }
+        std::vector<QueuedCommand> compacted;
+        compacted.reserve(command_stage.queue.size());
+        for (std::size_t index = 0U; index < command_stage.queue.size();
+             ++index) {
+            const bool consumed_by_application =
+                std::find(command_stage.consumed_queue_indices.begin(),
+                          command_stage.consumed_queue_indices.end(),
+                          index) !=
+                command_stage.consumed_queue_indices.end();
+            if (command_stage.queue[index].consumed ||
+                consumed_by_application) {
+                continue;
+            }
+            compacted.push_back(std::move(command_stage.queue[index]));
+        }
+        for (const auto& route : image->command_routes()) {
+            const auto active_count = static_cast<std::size_t>(
+                std::count_if(
+                    compacted.begin(), compacted.end(),
+                    [&](const auto& command) {
+                        return command.request.route_handle == route.handle;
+                    }));
+            if (active_count > route.queue_capacity) {
+                return failure(
+                    SessionError::TransactionPrecommitFailed,
+                    route.handle,
+                    "compacted command queue exceeds its route capacity");
+            }
+        }
+        command_stage.queue.swap(compacted);
+        command_stage.consumed_queue_indices.clear();
         return {};
     }
 
     [[nodiscard]] SessionResult validate_precommit(
         const contracts::PlanImageTransaction& transaction,
         const contracts::PlanImageTransactionBranch& branch) {
-        auto command_result = validate_command_precommit(
-            transaction, branch);
-        if (!command_result) {
-            return command_result;
-        }
         if (!step_summary.history_staged ||
             staged_evaluator_histories.size() !=
                 evaluator_histories.size()) {
@@ -4284,10 +4384,6 @@ struct Session::Impl final : SessionObjectAccess,
             command_stage.maintenance_receipts);
         command_ledger_sequence =
             command_stage.ledger_sequence_after_commit;
-        for (const auto queue_index :
-             command_stage.consumed_queue_indices) {
-            command_stage.queue[queue_index].consumed = true;
-        }
         command_queue.swap(command_stage.queue);
         // Finish the no-fail publication and its cancellation mirror under one
         // lock. A concurrent caller therefore observes either the prior
@@ -4346,9 +4442,10 @@ struct Session::Impl final : SessionObjectAccess,
 
     [[nodiscard]] StepOutcome fail_execution(
         SessionError error, std::uint32_t handle,
-        std::string_view detail) noexcept {
+        std::string_view detail,
+        bool allow_command_retry = false) noexcept {
         const bool retryable_command_rollback =
-            command_stage.active &&
+            allow_command_retry && command_stage.active &&
             !command_stage.selected_queue_indices.empty();
         const auto result = failure(error, handle, detail);
         step_summary.primary_failure = result;
@@ -4396,13 +4493,15 @@ struct Session::Impl final : SessionObjectAccess,
 
     [[nodiscard]] StepOutcome fail_execution(
         SessionResult result, std::uint32_t fallback_handle,
-        std::string_view fallback_detail) noexcept {
+        std::string_view fallback_detail,
+        bool allow_command_retry = false) noexcept {
         return fail_execution(
             result.error == SessionError::None ? SessionError::InternalFailure
                                                : result.error,
             result.image_handle == 0U ? fallback_handle
                                       : result.image_handle,
-            result.detail.empty() ? fallback_detail : result.detail);
+            result.detail.empty() ? fallback_detail : result.detail,
+            allow_command_retry);
     }
 
     void unwind() noexcept {
@@ -5828,6 +5927,7 @@ StepOutcome Session::execute_step() noexcept {
     impl.step_summary.candidates.clear();
     impl.step_summary.histories.clear();
     impl.step_summary.seals.clear();
+    bool allow_command_retry_on_exception = false;
     try {
         if (impl.cancellation_requested_at(
                 transaction.handle,
@@ -5881,17 +5981,19 @@ StepOutcome Session::execute_step() noexcept {
             return impl.cancel_execution_precommit();
         }
 
+        allow_command_retry_on_exception = true;
         result = impl.execute_due_commands(
             transaction, *branch, cancellation_observed);
         if (!result) {
             return impl.fail_execution(
                 result, transaction.handle,
-                "command reduction or event consumption failed");
+                "command reduction or event consumption failed", true);
         }
         if (cancellation_observed) {
             return impl.cancel_execution_precommit();
         }
 
+        allow_command_retry_on_exception = false;
         if (branch_kind == contracts::TransactionBranch::Continue) {
             impl.current_diagnostic_stage =
                 RuntimeDiagnosticStage::CandidateProduction;
@@ -6026,17 +6128,37 @@ StepOutcome Session::execute_step() noexcept {
 
         impl.current_diagnostic_stage =
             RuntimeDiagnosticStage::ObservationSeal;
+        allow_command_retry_on_exception = true;
         result = impl.stage_seals(*branch);
         if (!result) {
             return impl.fail_execution(result, transaction.handle,
-                                       "observation seal staging failed");
+                                       "observation seal staging failed",
+                                       true);
         }
         impl.current_diagnostic_stage = RuntimeDiagnosticStage::Precommit;
+        result = impl.validate_command_precommit(transaction, *branch);
+        if (!result) {
+            return impl.fail_execution(
+                result, transaction.handle,
+                "command transaction prevalidation failed", true);
+        }
+        allow_command_retry_on_exception = false;
         result = impl.validate_precommit(transaction, *branch);
         if (!result) {
-            return impl.fail_execution(result, transaction.handle,
-                                       "transaction prevalidation failed");
+            const bool observation_retry =
+                result.error == SessionError::ObservationSealFailed;
+            return impl.fail_execution(
+                result, transaction.handle,
+                "transaction prevalidation failed", observation_retry);
         }
+        allow_command_retry_on_exception = true;
+        result = impl.compact_command_queue_for_commit(transaction);
+        if (!result) {
+            return impl.fail_execution(
+                result, transaction.handle,
+                "command queue compaction failed", true);
+        }
+        allow_command_retry_on_exception = false;
         if (impl.cancellation_requested_at(
                 transaction.handle,
                 contracts::PlanImageCancellationSafePointKind::
@@ -6072,11 +6194,13 @@ StepOutcome Session::execute_step() noexcept {
     } catch (const std::bad_alloc&) {
         return impl.fail_execution(SessionError::AllocationFailure,
                                    transaction.handle,
-                                   "step transaction allocation failed");
+                                   "step transaction allocation failed",
+                                   allow_command_retry_on_exception);
     } catch (...) {
         return impl.fail_execution(SessionError::InternalFailure,
                                    transaction.handle,
-                                   "step transaction failed unexpectedly");
+                                   "step transaction failed unexpectedly",
+                                   allow_command_retry_on_exception);
     }
 }
 
@@ -6399,6 +6523,11 @@ std::uint64_t Session::committed_step_count() const noexcept {
 
 bool Session::frame_open() const noexcept {
     return implementation_->cycle_frame.open;
+}
+
+std::size_t Session::qualification_command_queue_storage_count()
+    const noexcept {
+    return implementation_->command_queue.size();
 }
 
 std::uint64_t Session::command_ledger_sequence() const noexcept {

@@ -40,6 +40,11 @@ class SessionAccess final {
         return session.qualification_read_committed_output(slot_handle,
                                                            result);
     }
+
+    [[nodiscard]] static std::size_t command_queue_storage_count(
+        const Session& session) noexcept {
+        return session.qualification_command_queue_storage_count();
+    }
 };
 
 } // namespace gnc::kernel::qualification
