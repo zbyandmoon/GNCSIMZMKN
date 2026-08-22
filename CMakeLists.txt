@@ -261,6 +261,21 @@ if(GNC_BUILD_TESTS)
     endif()
     gnc_enable_warnings(gnc_kernel_step_transaction_probe)
 
+    # R3 multi-rate sampled edge: package-owned HeldLatest publication.
+    add_executable(
+        gnc_kernel_multirate_held_output_probe
+        tests/kernel_multirate_held_output.cpp
+        tests/support/ref_yyz_complete_composition.cpp
+        tests/support/ref_yyz_session_adapter.cpp)
+    target_link_libraries(
+        gnc_kernel_multirate_held_output_probe
+        PRIVATE compiler kernel_session yyz_rigid_step)
+    if(MSVC)
+        target_compile_options(
+            gnc_kernel_multirate_held_output_probe PRIVATE /bigobj)
+    endif()
+    gnc_enable_warnings(gnc_kernel_multirate_held_output_probe)
+
     # R3 bounded command/event slice over a qualification-only ModeOwner.
     add_executable(
         gnc_kernel_command_event_probe
@@ -512,6 +527,9 @@ if(GNC_BUILD_TESTS)
     add_test(
         NAME r3.kernel-step-transaction.probe
         COMMAND gnc_kernel_step_transaction_probe --self-check)
+    add_test(
+        NAME r3.kernel-multirate-held-output.probe
+        COMMAND gnc_kernel_multirate_held_output_probe --self-check)
     add_test(
         NAME r3.kernel-command-event.probe
         COMMAND gnc_kernel_command_event_probe --self-check)

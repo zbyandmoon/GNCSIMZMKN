@@ -190,6 +190,9 @@ template <typename Value>
     if (slot.kind == contracts::PlanImageSlotKind::HeldIntervalValue) {
         return SessionObjectRole::HeldIntervalValue;
     }
+    if (slot.kind == contracts::PlanImageSlotKind::CommittedOutputValue) {
+        return SessionObjectRole::CommittedOutputValue;
+    }
     if (slot.storage_class == contracts::SlotStorageClass::TerminalResult) {
         return SessionObjectRole::TerminalOutputValue;
     }
@@ -212,6 +215,10 @@ template <typename Value>
     if (slot.kind == Kind::HeldIntervalValue) {
         return slot.storage_class == Storage::IntegrationHeld &&
                slot.hold_policy == Hold::HoldInterval;
+    }
+    if (slot.kind == Kind::CommittedOutputValue) {
+        return slot.storage_class == Storage::CommittedOutput &&
+               slot.hold_policy == Hold::HeldLatest;
     }
     return (slot.storage_class == Storage::CycleFrame &&
             slot.hold_policy == Hold::CurrentBoundary) ||
@@ -336,6 +343,14 @@ template <typename Value>
         return RuntimeDiagnosticCode::RestoreCloneFailed;
     case SessionError::RestorePrecommitFailed:
         return RuntimeDiagnosticCode::RestorePrecommitFailed;
+    case SessionError::HeldOutputMissing:
+        return RuntimeDiagnosticCode::HeldOutputMissing;
+    case SessionError::HeldOutputExpired:
+        return RuntimeDiagnosticCode::HeldOutputExpired;
+    case SessionError::HeldOutputCloneFailed:
+        return RuntimeDiagnosticCode::HeldOutputCloneFailed;
+    case SessionError::HeldOutputValidationFailed:
+        return RuntimeDiagnosticCode::HeldOutputValidationFailed;
     }
     return RuntimeDiagnosticCode::InternalFailure;
 }
@@ -400,6 +415,14 @@ template <typename Value>
         return "run.restore.clone_failed";
     case RuntimeDiagnosticCode::RestorePrecommitFailed:
         return "run.restore.precommit_failed";
+    case RuntimeDiagnosticCode::HeldOutputMissing:
+        return "run.held_output.missing";
+    case RuntimeDiagnosticCode::HeldOutputExpired:
+        return "run.held_output.expired";
+    case RuntimeDiagnosticCode::HeldOutputCloneFailed:
+        return "run.held_output.clone_failed";
+    case RuntimeDiagnosticCode::HeldOutputValidationFailed:
+        return "run.held_output.validation_failed";
     }
     return "run.internal.failure";
 }
@@ -462,6 +485,18 @@ struct CheckpointSealedBoundary {
     std::vector<CheckpointStoredValue> outputs;
 };
 
+struct CheckpointHeldOutput {
+    std::uint32_t held_output_handle = 0U;
+    std::uint32_t binding_handle = 0U;
+    std::uint32_t source_slot_handle = 0U;
+    std::uint32_t committed_slot_handle = 0U;
+    std::uint32_t producer_callsite_handle = 0U;
+    std::vector<std::uint32_t> consumer_callsite_handles;
+    std::uint32_t max_age_steps = 0U;
+    bool present = false;
+    CheckpointStoredValue value;
+};
+
 } // namespace
 
 struct SessionCheckpoint::Impl {
@@ -477,6 +512,7 @@ struct SessionCheckpoint::Impl {
     std::uint64_t frame_sequence = 0U;
     std::vector<CheckpointStateBlock> states;
     std::vector<CheckpointHistoryStore> histories;
+    std::vector<CheckpointHeldOutput> held_outputs;
     CheckpointSealedBoundary sealed_boundary;
 };
 
@@ -531,6 +567,47 @@ void SessionCheckpoint::qualification_mutate(
     case 6U:
         if (!implementation->states.empty()) {
             implementation->states.front().value.invariant_valid = false;
+        }
+        break;
+    case 7U:
+        if (!implementation->held_outputs.empty()) {
+            flip_first(
+                implementation->held_outputs.front().value.layout_identity);
+        }
+        break;
+    case 8U:
+        if (!implementation->held_outputs.empty()) {
+            ++implementation->held_outputs.front().value.codec_entry_handle;
+        }
+        break;
+    case 9U:
+        if (!implementation->held_outputs.empty()) {
+            implementation->held_outputs.front().value.type_identity =
+                nullptr;
+        }
+        break;
+    case 10U:
+        if (!implementation->held_outputs.empty()) {
+            implementation->held_outputs.front().value.quality =
+                contracts::DataQuality::Invalid;
+        }
+        break;
+    case 11U:
+        if (!implementation->held_outputs.empty()) {
+            ++implementation->held_outputs.front()
+                  .producer_callsite_handle;
+        }
+        break;
+    case 12U:
+        if (!implementation->held_outputs.empty()) {
+            implementation->held_outputs.pop_back();
+        }
+        break;
+    case 13U:
+        try {
+            CheckpointHeldOutput extra;
+            implementation->held_outputs.push_back(std::move(extra));
+        } catch (...) {
         }
         break;
     default:
@@ -622,6 +699,12 @@ std::string_view to_string(SessionError error) noexcept {
     case SessionError::RestoreCloneFailed: return "RestoreCloneFailed";
     case SessionError::RestorePrecommitFailed:
         return "RestorePrecommitFailed";
+    case SessionError::HeldOutputMissing: return "HeldOutputMissing";
+    case SessionError::HeldOutputExpired: return "HeldOutputExpired";
+    case SessionError::HeldOutputCloneFailed:
+        return "HeldOutputCloneFailed";
+    case SessionError::HeldOutputValidationFailed:
+        return "HeldOutputValidationFailed";
     }
     return "InternalFailure";
 }
@@ -685,6 +768,14 @@ std::string_view to_string(RuntimeDiagnosticCode code) noexcept {
         return "GNC-RUN-RSTO-0003";
     case RuntimeDiagnosticCode::RestorePrecommitFailed:
         return "GNC-RUN-RSTO-0004";
+    case RuntimeDiagnosticCode::HeldOutputMissing:
+        return "GNC-RUN-HLD-0001";
+    case RuntimeDiagnosticCode::HeldOutputExpired:
+        return "GNC-RUN-HLD-0002";
+    case RuntimeDiagnosticCode::HeldOutputCloneFailed:
+        return "GNC-RUN-HLD-0003";
+    case RuntimeDiagnosticCode::HeldOutputValidationFailed:
+        return "GNC-RUN-HLD-0004";
     }
     return "GNC-RUN-INT-0001";
 }
@@ -730,6 +821,10 @@ std::string_view to_string(RuntimeDiagnosticStage stage) noexcept {
         return "RestoreState";
     case RuntimeDiagnosticStage::RestorePrecommit:
         return "RestorePrecommit";
+    case RuntimeDiagnosticStage::HeldOutputInjection:
+        return "HeldOutputInjection";
+    case RuntimeDiagnosticStage::HeldOutputCommit:
+        return "HeldOutputCommit";
     }
     return "Lifecycle";
 }
@@ -771,6 +866,19 @@ SessionResult SessionInputView::read(
                 "input view is unavailable"};
     }
     return access_->read_input(
+        static_cast<std::uint8_t>(authority_kind_), authority_handle_,
+        generation_, slot_handle, result);
+}
+
+SessionResult SessionInputView::sample_info(
+    std::uint32_t slot_handle,
+    SessionFrameAccess::SampleInfo& result) const noexcept {
+    result = {};
+    if (access_ == nullptr) {
+        return {SessionError::StaleFrameView, slot_handle,
+                "input view is unavailable"};
+    }
+    return access_->input_sample_info(
         static_cast<std::uint8_t>(authority_kind_), authority_handle_,
         generation_, slot_handle, result);
 }
@@ -1114,6 +1222,10 @@ struct Session::Impl final : SessionObjectAccess,
         std::vector<StateObject> blocks;
     };
 
+    struct CommittedOutputStore {
+        std::vector<StoredValue> outputs;
+    };
+
     struct CycleFrame {
         std::vector<FrameSlot> slots;
         std::vector<std::size_t> construction_order;
@@ -1197,6 +1309,8 @@ struct Session::Impl final : SessionObjectAccess,
     SessionRuntimeBindings runtime_bindings;
     CommittedStateStore committed_state_store;
     TransactionCandidateStore candidate_state_store;
+    CommittedOutputStore committed_output_store;
+    CommittedOutputStore staged_committed_output_store;
     CycleFrame cycle_frame;
     std::vector<EvaluatorHistoryStore> evaluator_histories;
     std::vector<EvaluatorHistoryStore> staged_evaluator_histories;
@@ -1216,6 +1330,7 @@ struct Session::Impl final : SessionObjectAccess,
     std::vector<CommittedEvent> committed_events;
     CommandTransactionStage command_stage;
     std::uint8_t checkpoint_clone_fault = 0U;
+    std::uint8_t held_output_fault = 0U;
     bool restore_precommit_failure = false;
 
     // request_cancel() only touches this synchronized mirror. Every other
@@ -2035,7 +2150,9 @@ struct Session::Impl final : SessionObjectAccess,
             checkpoint.identity.committed_tick > image->clock().terminal_tick ||
             checkpoint.states.size() != image->state_blocks().size() ||
             checkpoint.histories.size() !=
-                image->evaluator_histories().size()) {
+                image->evaluator_histories().size() ||
+            checkpoint.held_outputs.size() !=
+                image->held_outputs().size()) {
             return failure(error, 0U,
                            "checkpoint Image, binding, boundary, or store shape mismatch");
         }
@@ -2144,6 +2261,71 @@ struct Session::Impl final : SessionObjectAccess,
                         role_for_slot(*slot), 0U, error);
                     if (!result) return result;
                 }
+            }
+        }
+
+        for (std::size_t held_index = 0U;
+             held_index < checkpoint.held_outputs.size(); ++held_index) {
+            const auto& held_snapshot =
+                checkpoint.held_outputs[held_index];
+            if (std::any_of(
+                    checkpoint.held_outputs.begin(),
+                    checkpoint.held_outputs.begin() +
+                        static_cast<std::ptrdiff_t>(held_index),
+                    [&](const auto& prior) {
+                        return prior.held_output_handle ==
+                                   held_snapshot.held_output_handle ||
+                               prior.committed_slot_handle ==
+                                   held_snapshot.committed_slot_handle;
+                    })) {
+                return failure(error,
+                               held_snapshot.held_output_handle,
+                               "checkpoint HeldLatest store is duplicated");
+            }
+            const auto* plan = find_handle(
+                image->held_outputs(),
+                held_snapshot.held_output_handle);
+            const auto* slot =
+                plan == nullptr
+                    ? nullptr
+                    : find_handle(image->slots(),
+                                  plan->committed_slot_handle);
+            const auto* materializer =
+                slot == nullptr ? nullptr : provider->slot(slot->handle);
+            if (plan == nullptr || slot == nullptr ||
+                materializer == nullptr ||
+                held_snapshot.binding_handle != plan->binding_handle ||
+                held_snapshot.source_slot_handle !=
+                    plan->source_slot_handle ||
+                held_snapshot.committed_slot_handle !=
+                    plan->committed_slot_handle ||
+                held_snapshot.producer_callsite_handle !=
+                    plan->producer_callsite_handle ||
+                held_snapshot.consumer_callsite_handles !=
+                    plan->consumer_callsite_handles ||
+                held_snapshot.max_age_steps != plan->max_age_steps) {
+                return failure(error,
+                               held_snapshot.held_output_handle,
+                               "checkpoint HeldLatest authority mismatch");
+            }
+            if (!held_snapshot.present) {
+                if (held_snapshot.value.object != nullptr ||
+                    held_snapshot.value.slot_handle != 0U) {
+                    return failure(error, plan->handle,
+                                   "checkpoint absent HeldLatest value carries payload metadata");
+                }
+                continue;
+            }
+            const auto value_result = validate_checkpoint_value(
+                held_snapshot.value, *slot, *materializer,
+                SessionObjectRole::CommittedOutputValue, 0U, error);
+            if (!value_result) return value_result;
+            if (held_snapshot.value.quality !=
+                    contracts::DataQuality::Valid ||
+                held_snapshot.value.sample_tick >
+                    checkpoint.identity.committed_tick) {
+                return failure(error, plan->committed_slot_handle,
+                               "checkpoint HeldLatest sample metadata is invalid");
             }
         }
 
@@ -2600,6 +2782,146 @@ struct Session::Impl final : SessionObjectAccess,
                     return failure(SessionError::StorageOverlap, other.handle,
                                    "slot storage ranges overlap");
                 }
+            }
+        }
+        return {};
+    }
+
+    [[nodiscard]] SessionResult validate_held_outputs() noexcept {
+        const auto committed_slot_count = static_cast<std::size_t>(
+            std::count_if(
+                image->slots().begin(), image->slots().end(),
+                [](const auto& slot) {
+                    return slot.kind == contracts::PlanImageSlotKind::
+                                            CommittedOutputValue;
+                }));
+        if (committed_slot_count != image->held_outputs().size()) {
+            return failure(SessionError::InvalidImageStructure, 0U,
+                           "HeldLatest committed-slot membership is incomplete");
+        }
+        for (std::size_t index = 0U;
+             index < image->held_outputs().size(); ++index) {
+            const auto& held = image->held_outputs()[index];
+            const auto* binding = find_handle(image->bindings(),
+                                              held.binding_handle);
+            const auto* source = find_handle(image->slots(),
+                                             held.source_slot_handle);
+            const auto* committed = find_handle(
+                image->slots(), held.committed_slot_handle);
+            const auto* producer = find_handle(
+                image->callsites(), held.producer_callsite_handle);
+            const auto* writer =
+                committed == nullptr
+                    ? nullptr
+                    : find_handle(image->writer_tokens(),
+                                  committed->writer_token_handle);
+            const auto* provider_port =
+                binding == nullptr
+                    ? nullptr
+                    : find_handle(image->ports(),
+                                  binding->provider_port_handle);
+            const auto* consumer_port =
+                binding == nullptr
+                    ? nullptr
+                    : find_handle(image->ports(),
+                                  binding->consumer_port_handle);
+            const auto* provider_component =
+                producer == nullptr
+                    ? nullptr
+                    : component_for_callsite(producer->handle);
+            const auto* consumer_component =
+                consumer_port == nullptr
+                    ? nullptr
+                    : find_handle(
+                          image->runtime_components(),
+                          owner_component_for_occurrence(
+                              consumer_port->occurrence_handle));
+            if (binding == nullptr || source == nullptr ||
+                committed == nullptr || producer == nullptr ||
+                writer == nullptr || provider_port == nullptr ||
+                consumer_port == nullptr || provider_component == nullptr ||
+                consumer_component == nullptr ||
+                binding->provider_slot_handle != source->handle ||
+                source->kind != contracts::PlanImageSlotKind::PortValue ||
+                source->port_handle != provider_port->handle ||
+                source->owner_occurrence_handle !=
+                    provider_port->occurrence_handle ||
+                committed->owner_occurrence_handle !=
+                    source->owner_occurrence_handle ||
+                source->storage_class !=
+                    contracts::SlotStorageClass::CycleFrame ||
+                source->hold_policy !=
+                    contracts::SlotHoldPolicy::CurrentBoundary ||
+                committed->kind != contracts::PlanImageSlotKind::
+                                       CommittedOutputValue ||
+                committed->storage_class !=
+                    contracts::SlotStorageClass::CommittedOutput ||
+                committed->hold_policy !=
+                    contracts::SlotHoldPolicy::HeldLatest ||
+                source->contract_id != committed->contract_id ||
+                source->layout_id != committed->layout_id ||
+                source->size_bytes != committed->size_bytes ||
+                source->alignment_bytes != committed->alignment_bytes ||
+                source->codec_entry_handle !=
+                    committed->codec_entry_handle ||
+                provider_port->temporal_relation != "HeldLatest" ||
+                consumer_port->temporal_relation != "HeldLatest" ||
+                producer->occurrence_handle !=
+                    provider_port->occurrence_handle ||
+                consumer_component->occurrence_handle !=
+                    consumer_port->occurrence_handle ||
+                provider_component->output_hold != "ZeroOrderHold" ||
+                consumer_component->max_input_age_steps !=
+                    held.max_age_steps ||
+                writer->owner_kind !=
+                    contracts::PlanImageWriterOwnerKind::
+                        CommittedOutputCoordinator ||
+                writer->owner_handle != producer->handle ||
+                std::find(producer->output_slot_handles.begin(),
+                          producer->output_slot_handles.end(),
+                          source->handle) ==
+                    producer->output_slot_handles.end() ||
+                held.consumer_callsite_handles.empty() ||
+                !std::is_sorted(held.consumer_callsite_handles.begin(),
+                                held.consumer_callsite_handles.end()) ||
+                std::adjacent_find(
+                    held.consumer_callsite_handles.begin(),
+                    held.consumer_callsite_handles.end()) !=
+                    held.consumer_callsite_handles.end() ||
+                committed->reader_handles !=
+                    held.consumer_callsite_handles) {
+                return failure(SessionError::InvalidImageStructure,
+                               held.handle,
+                               "HeldLatest source/store/writer contract is invalid");
+            }
+            for (const auto reader_handle :
+                 held.consumer_callsite_handles) {
+                const auto* reader = find_handle(image->callsites(),
+                                                 reader_handle);
+                if (reader == nullptr ||
+                    reader->occurrence_handle !=
+                        consumer_component->occurrence_handle ||
+                    std::find(reader->input_slot_handles.begin(),
+                              reader->input_slot_handles.end(),
+                              source->handle) ==
+                        reader->input_slot_handles.end()) {
+                    return failure(SessionError::InvalidImageStructure,
+                                   held.handle,
+                                   "HeldLatest reader authority is invalid");
+                }
+            }
+            if (std::any_of(
+                    image->held_outputs().begin(),
+                    image->held_outputs().begin() +
+                        static_cast<std::ptrdiff_t>(index),
+                    [&](const auto& prior) {
+                        return prior.binding_handle == held.binding_handle ||
+                               prior.committed_slot_handle ==
+                                   held.committed_slot_handle;
+                    })) {
+                return failure(SessionError::InvalidImageStructure,
+                               held.handle,
+                               "HeldLatest authority is duplicated");
             }
         }
         return {};
@@ -3508,18 +3830,20 @@ struct Session::Impl final : SessionObjectAccess,
             !unique_nonzero_handles(image->invocations()) ||
             !unique_nonzero_handles(image->regions()) ||
             !unique_nonzero_handles(image->dag_nodes()) ||
-             !unique_nonzero_handles(image->integration_scopes()) ||
-             !unique_nonzero_handles(image->transactions()) ||
-             !unique_nonzero_handles(image->command_routes()) ||
-             !unique_nonzero_handles(image->event_deliveries()) ||
-             !unique_nonzero_handles(
-                 image->cancellation_policy().safe_points) ||
+            !unique_nonzero_handles(image->integration_scopes()) ||
+            !unique_nonzero_handles(image->transactions()) ||
+            !unique_nonzero_handles(image->held_outputs()) ||
+            !unique_nonzero_handles(image->command_routes()) ||
+            !unique_nonzero_handles(image->event_deliveries()) ||
+            !unique_nonzero_handles(
+                image->cancellation_policy().safe_points) ||
             !unique_nonzero_handles(image->evaluator_histories())) {
             return failure(SessionError::InvalidImageHandle, 0U,
                            "Image contains a duplicate or zero handle");
         }
         auto result = validate_lifecycle();
         if (result) result = validate_storage();
+        if (result) result = validate_held_outputs();
         if (result) result = validate_states();
         if (result) result = validate_histories();
         if (result) result = validate_transactions();
@@ -3536,6 +3860,9 @@ struct Session::Impl final : SessionObjectAccess,
         runtime_bindings.cells.reserve(image->runtime_components().size());
         committed_state_store.blocks.reserve(image->state_blocks().size());
         candidate_state_store.blocks.reserve(image->state_blocks().size());
+        committed_output_store.outputs.reserve(image->held_outputs().size());
+        staged_committed_output_store.outputs.reserve(
+            image->held_outputs().size());
         cycle_frame.slots.reserve(image->slots().size());
         cycle_frame.construction_order.reserve(image->slots().size());
         evaluator_histories.reserve(image->evaluator_histories().size());
@@ -3634,6 +3961,10 @@ struct Session::Impl final : SessionObjectAccess,
     [[nodiscard]] SessionResult prepare_frame_slots() noexcept {
         for (const auto& slot : image->slots()) {
             if (state_for_slot(slot.handle) != nullptr) {
+                continue;
+            }
+            if (slot.storage_class ==
+                contracts::SlotStorageClass::CommittedOutput) {
                 continue;
             }
             auto* persistent_address = slot_address(slot);
@@ -4024,10 +4355,57 @@ struct Session::Impl final : SessionObjectAccess,
         return {};
     }
 
+    [[nodiscard]] SessionResult stage_restore_held_outputs(
+        const SessionCheckpoint::Impl& checkpoint,
+        std::vector<StoredValue>& values) {
+        values.reserve(image->held_outputs().size());
+        for (const auto& plan : image->held_outputs()) {
+            const auto snapshot = std::find_if(
+                checkpoint.held_outputs.begin(),
+                checkpoint.held_outputs.end(),
+                [&](const auto& candidate) {
+                    return candidate.held_output_handle == plan.handle;
+                });
+            if (snapshot == checkpoint.held_outputs.end()) {
+                return failure(SessionError::RestoreCloneFailed,
+                               plan.handle,
+                               "restore HeldLatest snapshot is missing");
+            }
+            if (!snapshot->present) continue;
+            const auto* slot = find_handle(
+                image->slots(), plan.committed_slot_handle);
+            const auto* materializer =
+                slot == nullptr ? nullptr : provider->slot(slot->handle);
+            if (slot == nullptr || materializer == nullptr ||
+                snapshot->value.object == nullptr) {
+                return failure(
+                    SessionError::RestoreCloneFailed,
+                    plan.committed_slot_handle,
+                    "restore HeldLatest materializer or payload is unavailable");
+            }
+            StoredValue restored;
+            const auto result = clone_stored_value(
+                *slot, *materializer, snapshot->value.object.get(),
+                snapshot->value.generation,
+                snapshot->value.sequence,
+                snapshot->value.sample_tick,
+                snapshot->value.sample_time_seconds,
+                snapshot->value.interval_start_seconds,
+                snapshot->value.interval_end_seconds,
+                snapshot->value.quality, restored,
+                SessionError::RestoreCloneFailed,
+                "restore HeldLatest clone failed");
+            if (!result) return result;
+            values.push_back(std::move(restored));
+        }
+        return {};
+    }
+
     [[nodiscard]] SessionResult validate_restore_precommit(
         const SessionCheckpoint::Impl& checkpoint,
         const std::vector<ResetStateReplacement>& replacements,
         const std::vector<EvaluatorHistoryStore>& histories,
+        const std::vector<StoredValue>& held_values,
         const SealedBoundaryStore& seal) noexcept {
         if (restore_precommit_failure || state != SessionState::Created ||
             cycle_frame.open || active_transaction_handle != 0U ||
@@ -4043,6 +4421,11 @@ struct Session::Impl final : SessionObjectAccess,
                 committed_state_store.blocks.size() ||
             replacements.size() != committed_state_store.blocks.size() ||
             histories.size() != image->evaluator_histories().size() ||
+            held_values.size() != static_cast<std::size_t>(
+                std::count_if(
+                    checkpoint.held_outputs.begin(),
+                    checkpoint.held_outputs.end(),
+                    [](const auto& value) { return value.present; })) ||
             seal.outputs.size() !=
                 checkpoint.sealed_boundary.outputs.size()) {
             return failure(SessionError::RestorePrecommitFailed, 0U,
@@ -4065,6 +4448,19 @@ struct Session::Impl final : SessionObjectAccess,
                                    ? 0U
                                    : committed.block->handle,
                                "restore state lacks a no-fail commit operation");
+            }
+        }
+        for (const auto& value : held_values) {
+            if (value.slot == nullptr || value.materializer == nullptr ||
+                value.address == nullptr ||
+                value.slot->kind != contracts::PlanImageSlotKind::
+                                        CommittedOutputValue ||
+                value.quality != contracts::DataQuality::Valid ||
+                !value.materializer->operations().validate(value.address)) {
+                return failure(SessionError::RestorePrecommitFailed,
+                               value.slot == nullptr ? 0U
+                                                     : value.slot->handle,
+                               "restore HeldLatest value is invalid at precommit");
             }
         }
         return {};
@@ -4716,6 +5112,25 @@ struct Session::Impl final : SessionObjectAccess,
         return {};
     }
 
+    [[nodiscard]] bool valid_observation_sample_tick(
+        std::uint32_t slot_handle,
+        std::int64_t sample_tick) const noexcept {
+        if (sample_tick == committed_tick) return true;
+        if (sample_tick > committed_tick) return false;
+        const auto held = std::find_if(
+            image->held_outputs().begin(), image->held_outputs().end(),
+            [slot_handle](const auto& value) {
+                return value.source_slot_handle == slot_handle;
+            });
+        if (held == image->held_outputs().end()) return false;
+        const auto* producer = component_for_callsite(
+            held->producer_callsite_handle);
+        const auto age = static_cast<std::uint64_t>(
+            committed_tick - sample_tick);
+        return producer != nullptr && !scheduled_now(*producer) &&
+               age <= held->max_age_steps;
+    }
+
     [[nodiscard]] SessionResult stage_seals(
         const contracts::PlanImageTransactionBranch& branch) {
         staged_sealed_boundary.outputs.clear();
@@ -4755,7 +5170,8 @@ struct Session::Impl final : SessionObjectAccess,
                                    slot_handle,
                                    "sealed output generation is stale");
                 }
-                if (frame->sample_tick != committed_tick) {
+                if (!valid_observation_sample_tick(
+                        slot_handle, frame->sample_tick)) {
                     return failure(SessionError::ObservationSealFailed,
                                    slot_handle,
                                    "sealed output tick is stale");
@@ -5089,7 +5505,9 @@ struct Session::Impl final : SessionObjectAccess,
             if (output.slot == nullptr || output.materializer == nullptr ||
                 output.address == nullptr ||
                 output.generation != cycle_frame.generation ||
-                output.sample_tick != committed_tick ||
+                !valid_observation_sample_tick(
+                    output.slot == nullptr ? 0U : output.slot->handle,
+                    output.sample_tick) ||
                 output.quality != contracts::DataQuality::Valid ||
                 !output.materializer->operations().validate(
                     output.address)) {
@@ -5202,6 +5620,18 @@ struct Session::Impl final : SessionObjectAccess,
             candidate->materializer->operations().nofail_swap(
                 committed->address, candidate->address);
         }
+        for (auto& staged :
+             staged_committed_output_store.outputs) {
+            auto* committed = staged.slot == nullptr
+                                  ? nullptr
+                                  : committed_output(staged.slot->handle);
+            if (committed == nullptr) {
+                committed_output_store.outputs.push_back(
+                    std::move(staged));
+            } else {
+                std::swap(*committed, staged);
+            }
+        }
         command_application_receipts.swap(
             command_stage.application_receipts);
         committed_events.swap(command_stage.committed_events);
@@ -5259,6 +5689,7 @@ struct Session::Impl final : SessionObjectAccess,
             candidate.candidate_writer_token_handle = 0U;
         }
         staged_evaluator_histories.clear();
+        staged_committed_output_store.outputs.clear();
         staged_sealed_boundary.outputs.clear();
         staged_sealed_boundary.committed_epoch = 0U;
         staged_sealed_boundary.committed_tick = 0;
@@ -5336,6 +5767,8 @@ struct Session::Impl final : SessionObjectAccess,
         clear_command_control();
         staged_sealed_boundary.outputs.clear();
         sealed_boundary.outputs.clear();
+        staged_committed_output_store.outputs.clear();
+        committed_output_store.outputs.clear();
         staged_evaluator_histories.clear();
         evaluator_histories.clear();
         for (auto found = candidate_state_store.blocks.rbegin();
@@ -5459,6 +5892,282 @@ struct Session::Impl final : SessionObjectAccess,
         return found == cycle_frame.slots.end() ? nullptr : &*found;
     }
 
+    [[nodiscard]] StoredValue* committed_output(
+        std::uint32_t committed_slot_handle) noexcept {
+        const auto found = std::find_if(
+            committed_output_store.outputs.begin(),
+            committed_output_store.outputs.end(),
+            [committed_slot_handle](const auto& value) {
+                return value.slot != nullptr &&
+                       value.slot->handle == committed_slot_handle;
+            });
+        return found == committed_output_store.outputs.end()
+                   ? nullptr
+                   : &*found;
+    }
+
+    [[nodiscard]] const StoredValue* committed_output(
+        std::uint32_t committed_slot_handle) const noexcept {
+        const auto found = std::find_if(
+            committed_output_store.outputs.begin(),
+            committed_output_store.outputs.end(),
+            [committed_slot_handle](const auto& value) {
+                return value.slot != nullptr &&
+                       value.slot->handle == committed_slot_handle;
+            });
+        return found == committed_output_store.outputs.end()
+                   ? nullptr
+                   : &*found;
+    }
+
+    [[nodiscard]] SessionResult validate_held_age(
+        const contracts::PlanImageHeldOutput& held,
+        const StoredValue& value) noexcept {
+        if (value.sample_tick > committed_tick ||
+            value.quality != contracts::DataQuality::Valid ||
+            value.slot == nullptr || value.materializer == nullptr ||
+            value.address == nullptr ||
+            value.slot->handle != held.committed_slot_handle ||
+            !value.materializer->operations().validate(value.address)) {
+            return failure(SessionError::HeldOutputValidationFailed,
+                           held.committed_slot_handle,
+                           "committed HeldLatest value metadata is invalid");
+        }
+        const auto age = static_cast<std::uint64_t>(
+            committed_tick - value.sample_tick);
+        if (age > held.max_age_steps) {
+            return failure(SessionError::HeldOutputExpired,
+                           held.committed_slot_handle,
+                           "committed HeldLatest value exceeds max age");
+        }
+        return {};
+    }
+
+    [[nodiscard]] SessionResult inject_held_inputs(
+        std::uint32_t consumer_callsite_handle) noexcept {
+        for (const auto& held : image->held_outputs()) {
+            if (std::find(held.consumer_callsite_handles.begin(),
+                          held.consumer_callsite_handles.end(),
+                          consumer_callsite_handle) ==
+                held.consumer_callsite_handles.end()) {
+                continue;
+            }
+            auto* frame = frame_slot(held.source_slot_handle);
+            const auto* producer_component = component_for_callsite(
+                held.producer_callsite_handle);
+            if (frame == nullptr || producer_component == nullptr) {
+                return failure(SessionError::InvalidImageStructure,
+                               held.handle,
+                               "HeldLatest runtime mapping disappeared");
+            }
+            if (frame->present &&
+                frame->generation == cycle_frame.generation) {
+                if (frame->sample_tick > committed_tick ||
+                    frame->quality != contracts::DataQuality::Valid) {
+                    return failure(
+                        SessionError::HeldOutputValidationFailed,
+                        held.source_slot_handle,
+                        "HeldLatest frame metadata is invalid");
+                }
+                const auto age = static_cast<std::uint64_t>(
+                    committed_tick - frame->sample_tick);
+                if (age > held.max_age_steps) {
+                    return failure(SessionError::HeldOutputExpired,
+                                   held.source_slot_handle,
+                                   "HeldLatest frame value exceeds max age");
+                }
+                continue;
+            }
+            if (scheduled_now(*producer_component)) {
+                return failure(
+                    SessionError::HeldOutputMissing,
+                    held.source_slot_handle,
+                    "scheduled HeldLatest producer published no fresh value");
+            }
+            const auto* value = committed_output(
+                held.committed_slot_handle);
+            if (value == nullptr) {
+                return failure(SessionError::HeldOutputMissing,
+                               held.committed_slot_handle,
+                               "HeldLatest store has no committed sample");
+            }
+            auto result = validate_held_age(held, *value);
+            if (!result) return result;
+            if (std::exchange(held_output_fault,
+                              held_output_fault == 2U
+                                  ? std::uint8_t{0U}
+                                  : held_output_fault) == 2U) {
+                return failure(SessionError::HeldOutputCloneFailed,
+                               held.source_slot_handle,
+                               "qualification HeldLatest injection clone failure");
+            }
+            const auto source_layout =
+                value->materializer->operations().layout();
+            const auto frame_layout =
+                frame->materializer->operations().layout();
+            if (source_layout.type_identity != frame_layout.type_identity ||
+                source_layout.size_bytes != frame_layout.size_bytes ||
+                source_layout.alignment_bytes !=
+                    frame_layout.alignment_bytes ||
+                source_layout.layout_identity !=
+                    frame_layout.layout_identity ||
+                source_layout.codec_entry_handle !=
+                    frame_layout.codec_entry_handle ||
+                !frame->materializer->operations().copy_construct(
+                    value->address, frame->address)) {
+                return failure(SessionError::HeldOutputCloneFailed,
+                               held.source_slot_handle,
+                               "HeldLatest frame injection clone failed");
+            }
+            ConstructedObject guard(
+                frame->address, frame->materializer->operations());
+            if (!frame->materializer->operations().validate(
+                    frame->address)) {
+                return failure(
+                    SessionError::HeldOutputValidationFailed,
+                    held.source_slot_handle,
+                    "HeldLatest injected value failed validation");
+            }
+            cycle_frame.construction_order.push_back(
+                static_cast<std::size_t>(
+                    frame - cycle_frame.slots.data()));
+            frame->present = true;
+            frame->generation = cycle_frame.generation;
+            frame->sequence = value->sequence;
+            frame->sample_tick = value->sample_tick;
+            frame->sample_time_seconds = value->sample_time_seconds;
+            frame->interval_start_seconds =
+                value->interval_start_seconds;
+            frame->interval_end_seconds = value->interval_end_seconds;
+            frame->quality = value->quality;
+            guard.release();
+        }
+        return {};
+    }
+
+    [[nodiscard]] SessionResult stage_held_outputs(
+        std::uint32_t producer_callsite_handle) noexcept {
+        for (const auto& held : image->held_outputs()) {
+            if (held.producer_callsite_handle !=
+                producer_callsite_handle) {
+                continue;
+            }
+            const auto* frame = frame_slot(held.source_slot_handle);
+            const auto* target = find_handle(image->slots(),
+                                             held.committed_slot_handle);
+            const auto* materializer =
+                target == nullptr ? nullptr
+                                  : provider->slot(target->handle);
+            if (frame == nullptr || !frame->present ||
+                frame->generation != cycle_frame.generation ||
+                frame->sample_tick != committed_tick ||
+                frame->quality != contracts::DataQuality::Valid ||
+                target == nullptr || materializer == nullptr) {
+                return failure(SessionError::HeldOutputValidationFailed,
+                               held.handle,
+                               "fresh HeldLatest output metadata is incomplete");
+            }
+            if (std::exchange(held_output_fault,
+                              held_output_fault == 1U
+                                  ? std::uint8_t{0U}
+                                  : held_output_fault) == 1U) {
+                return failure(SessionError::HeldOutputCloneFailed,
+                               target->handle,
+                               "qualification HeldLatest store clone failure");
+            }
+            StoredValue staged;
+            auto result = clone_stored_value(
+                *target, *materializer, frame->address,
+                frame->generation, frame->sequence,
+                frame->sample_tick, frame->sample_time_seconds,
+                frame->interval_start_seconds,
+                frame->interval_end_seconds, frame->quality, staged,
+                SessionError::HeldOutputCloneFailed,
+                "HeldLatest committed-store clone failed");
+            if (!result) return result;
+            const auto existing = std::find_if(
+                staged_committed_output_store.outputs.begin(),
+                staged_committed_output_store.outputs.end(),
+                [&](const auto& value) {
+                    return value.slot != nullptr &&
+                           value.slot->handle == target->handle;
+                });
+            if (existing !=
+                staged_committed_output_store.outputs.end()) {
+                *existing = std::move(staged);
+            } else {
+                if (staged_committed_output_store.outputs.size() >=
+                    image->held_outputs().size()) {
+                    return failure(
+                        SessionError::HeldOutputValidationFailed,
+                        target->handle,
+                        "HeldLatest staged-store capacity is invalid");
+                }
+                staged_committed_output_store.outputs.push_back(
+                    std::move(staged));
+            }
+        }
+        return {};
+    }
+
+    [[nodiscard]] SessionResult validate_held_output_precommit() noexcept {
+        if (committed_output_store.outputs.capacity() <
+                image->held_outputs().size() ||
+            committed_output_store.outputs.size() >
+                image->held_outputs().size() ||
+            staged_committed_output_store.outputs.size() >
+                image->held_outputs().size()) {
+            return failure(SessionError::TransactionPrecommitFailed, 0U,
+                           "HeldLatest store capacity is invalid");
+        }
+        if (std::exchange(held_output_fault,
+                          held_output_fault == 4U
+                              ? std::uint8_t{0U}
+                              : held_output_fault) == 4U) {
+            return failure(SessionError::TransactionPrecommitFailed, 0U,
+                           "qualification HeldLatest precommit failure");
+        }
+        const bool validation_fault =
+            std::exchange(held_output_fault,
+                          held_output_fault == 3U
+                              ? std::uint8_t{0U}
+                              : held_output_fault) == 3U;
+        for (const auto& held : image->held_outputs()) {
+            const auto* producer_component = component_for_callsite(
+                held.producer_callsite_handle);
+            const bool fresh_expected =
+                producer_component != nullptr &&
+                scheduled_now(*producer_component);
+            const auto staged = std::find_if(
+                staged_committed_output_store.outputs.begin(),
+                staged_committed_output_store.outputs.end(),
+                [&](const auto& value) {
+                    return value.slot != nullptr &&
+                           value.slot->handle ==
+                               held.committed_slot_handle;
+                });
+            if (fresh_expected !=
+                    (staged != staged_committed_output_store.outputs.end())) {
+                return failure(SessionError::HeldOutputValidationFailed,
+                               held.handle,
+                               "HeldLatest staged publication set is incomplete");
+            }
+            if (staged != staged_committed_output_store.outputs.end() &&
+                (validation_fault || staged->materializer == nullptr ||
+                 staged->address == nullptr ||
+                 staged->generation != cycle_frame.generation ||
+                 staged->sample_tick != committed_tick ||
+                 staged->quality != contracts::DataQuality::Valid ||
+                 !staged->materializer->operations().validate(
+                     staged->address))) {
+                return failure(SessionError::HeldOutputValidationFailed,
+                               held.committed_slot_handle,
+                               "HeldLatest staged value failed precommit validation");
+            }
+        }
+        return {};
+    }
+
     [[nodiscard]] SessionResult validate_callsite_outputs(
         const contracts::PlanImageCallsite& callsite) noexcept {
         const auto require_present = [this, &callsite](
@@ -5561,6 +6270,37 @@ struct Session::Impl final : SessionObjectAccess,
                   stored->slot->handle,
                   0U,
                   stored->slot->codec_entry_handle};
+        return {};
+    }
+
+    [[nodiscard]] SessionResult input_sample_info(
+        std::uint8_t authority_kind, std::uint32_t authority_handle,
+        std::uint64_t generation, std::uint32_t slot_handle,
+        SessionFrameAccess::SampleInfo& result) const noexcept override {
+        result = {};
+        SessionObjectIdentityView ignored;
+        const auto status = read_input(authority_kind, authority_handle,
+                                       generation, slot_handle, ignored);
+        if (!status) return status;
+        const auto* stored = frame_slot(slot_handle);
+        if (stored == nullptr || committed_tick < stored->sample_tick) {
+            return {SessionError::HeldOutputValidationFailed, slot_handle,
+                    "input sample tick is ahead of the current boundary"};
+        }
+        const auto age = static_cast<std::uint64_t>(
+            committed_tick - stored->sample_tick);
+        if (age > (std::numeric_limits<std::uint32_t>::max)()) {
+            return {SessionError::HeldOutputExpired, slot_handle,
+                    "input sample age exceeds the supported range"};
+        }
+        result = {stored->sequence,
+                  stored->sample_tick,
+                  static_cast<std::uint32_t>(age),
+                  stored->sample_time_seconds,
+                  stored->interval_start_seconds,
+                  stored->interval_end_seconds,
+                  stored->quality,
+                  stored->sample_tick == committed_tick};
         return {};
     }
 
@@ -5980,6 +6720,12 @@ struct Session::Impl final : SessionObjectAccess,
                 }
                 continue;
             }
+            current_diagnostic_stage =
+                RuntimeDiagnosticStage::HeldOutputInjection;
+            auto held_result = inject_held_inputs(callsite->handle);
+            if (!held_result) return held_result;
+            current_diagnostic_stage =
+                RuntimeDiagnosticStage::BoundaryInvocation;
             const auto* entry = provider->invocation(callsite->handle);
             if (entry == nullptr) {
                 return failure(SessionError::MissingMaterializer,
@@ -6033,6 +6779,12 @@ struct Session::Impl final : SessionObjectAccess,
             if (!outputs) {
                 return last_result;
             }
+            current_diagnostic_stage =
+                RuntimeDiagnosticStage::HeldOutputCommit;
+            held_result = stage_held_outputs(callsite->handle);
+            if (!held_result) return held_result;
+            current_diagnostic_stage =
+                RuntimeDiagnosticStage::BoundaryInvocation;
             boundary_summary.executed_callsite_handles.push_back(
                 callsite->handle);
             if (cancellation_observed != nullptr &&
@@ -6374,6 +7126,7 @@ CheckpointOutcome Session::checkpoint() noexcept {
         snapshot->states.reserve(
             impl.committed_state_store.blocks.size());
         snapshot->histories.reserve(impl.evaluator_histories.size());
+        snapshot->held_outputs.reserve(impl.image->held_outputs().size());
         snapshot->sealed_boundary.outputs.reserve(
             impl.sealed_boundary.outputs.size());
 
@@ -6498,6 +7251,60 @@ CheckpointOutcome Session::checkpoint() noexcept {
                     std::move(sample_snapshot));
             }
             snapshot->histories.push_back(std::move(history_snapshot));
+        }
+
+        for (std::size_t index = 0U;
+             index < impl.image->held_outputs().size(); ++index) {
+            const auto& plan = impl.image->held_outputs()[index];
+            CheckpointHeldOutput held_snapshot;
+            held_snapshot.held_output_handle = plan.handle;
+            held_snapshot.binding_handle = plan.binding_handle;
+            held_snapshot.source_slot_handle = plan.source_slot_handle;
+            held_snapshot.committed_slot_handle =
+                plan.committed_slot_handle;
+            held_snapshot.producer_callsite_handle =
+                plan.producer_callsite_handle;
+            held_snapshot.consumer_callsite_handles =
+                plan.consumer_callsite_handles;
+            held_snapshot.max_age_steps = plan.max_age_steps;
+            const auto* value = impl.committed_output(
+                plan.committed_slot_handle);
+            held_snapshot.present = value != nullptr;
+            if (value != nullptr) {
+                if (injected_fault == 4U && index == 0U) {
+                    return impl.fail_checkpoint(
+                        impl.failure(
+                            SessionError::CheckpointCloneFailed,
+                            plan.committed_slot_handle,
+                            "qualification checkpoint held-output clone failure"),
+                        RuntimeDiagnosticStage::CheckpointClone, true);
+                }
+                if (value->slot == nullptr ||
+                    value->materializer == nullptr ||
+                    value->address == nullptr) {
+                    return impl.fail_checkpoint(
+                        impl.failure(
+                            SessionError::CheckpointCloneFailed,
+                            plan.committed_slot_handle,
+                            "checkpoint held-output metadata is incomplete"),
+                        RuntimeDiagnosticStage::CheckpointClone, true);
+                }
+                const auto result = impl.clone_checkpoint_value(
+                    *value->slot, *value->materializer, value->address,
+                    SessionObjectRole::CommittedOutputValue, 0U,
+                    value->generation, value->sequence,
+                    value->sample_tick, value->sample_time_seconds,
+                    value->interval_start_seconds,
+                    value->interval_end_seconds, value->quality,
+                    held_snapshot.value);
+                if (!result) {
+                    return impl.fail_checkpoint(
+                        impl.last_result,
+                        RuntimeDiagnosticStage::CheckpointClone, true);
+                }
+            }
+            snapshot->held_outputs.push_back(
+                std::move(held_snapshot));
         }
 
         snapshot->sealed_boundary.committed_epoch =
@@ -6725,6 +7532,13 @@ RestoreOutcome Session::restore(RestoreRequest request) noexcept {
                                      RuntimeDiagnosticStage::RestoreState,
                                      binding_matched, true);
         }
+        std::vector<Impl::StoredValue> held_values;
+        result = impl.stage_restore_held_outputs(checkpoint, held_values);
+        if (!result) {
+            return impl.fail_restore(impl.last_result,
+                                     RuntimeDiagnosticStage::RestoreState,
+                                     binding_matched, true);
+        }
         Impl::SealedBoundaryStore seal;
         result = impl.stage_restore_seal(checkpoint, seal);
         if (!result) {
@@ -6744,7 +7558,7 @@ RestoreOutcome Session::restore(RestoreRequest request) noexcept {
         impl.current_diagnostic_stage =
             RuntimeDiagnosticStage::RestorePrecommit;
         result = impl.validate_restore_precommit(
-            checkpoint, replacements, histories, seal);
+            checkpoint, replacements, histories, held_values, seal);
         if (!result) {
             return impl.fail_restore(impl.last_result,
                                      impl.current_diagnostic_stage,
@@ -6762,6 +7576,7 @@ RestoreOutcome Session::restore(RestoreRequest request) noexcept {
                 candidate->address, replacement.candidate_address);
         }
         impl.evaluator_histories.swap(histories);
+        impl.committed_output_store.outputs.swap(held_values);
         impl.sealed_boundary.outputs.swap(seal.outputs);
         impl.sealed_boundary.committed_epoch = seal.committed_epoch;
         impl.sealed_boundary.committed_tick = seal.committed_tick;
@@ -6923,6 +7738,8 @@ ResetOutcome Session::reset(ResetRequest request) noexcept {
             RuntimeDiagnosticStage::ResetPrecommit;
         std::vector<Impl::EvaluatorHistoryStore> histories;
         impl.prepare_reset_histories(histories);
+        std::vector<Impl::StoredValue> empty_held_outputs;
+        empty_held_outputs.reserve(impl.image->held_outputs().size());
         Impl::SealedBoundaryStore empty_seal;
         empty_seal.outputs.reserve(impl.image->slots().size());
 
@@ -6969,6 +7786,7 @@ ResetOutcome Session::reset(ResetRequest request) noexcept {
             candidate.committed_epoch = impl.committed_epoch;
         }
         impl.evaluator_histories.swap(histories);
+        impl.committed_output_store.outputs.swap(empty_held_outputs);
         impl.sealed_boundary.outputs.swap(empty_seal.outputs);
         impl.sealed_boundary.committed_epoch = 0U;
         impl.sealed_boundary.committed_tick =
@@ -7489,6 +8307,15 @@ StepOutcome Session::execute_step() noexcept {
                 "command transaction prevalidation failed", true);
         }
         allow_command_retry_on_exception = false;
+        impl.current_diagnostic_stage =
+            RuntimeDiagnosticStage::HeldOutputCommit;
+        result = impl.validate_held_output_precommit();
+        if (!result) {
+            return impl.fail_execution(
+                result, transaction.handle,
+                "HeldLatest transaction prevalidation failed");
+        }
+        impl.current_diagnostic_stage = RuntimeDiagnosticStage::Precommit;
         result = impl.validate_precommit(transaction, *branch);
         if (!result) {
             const bool observation_retry =
@@ -7671,7 +8498,28 @@ std::vector<SessionFrameSlotInfo> Session::frame_slots() const {
 std::vector<SessionCommittedOutputInfo> Session::committed_outputs() const {
     std::vector<SessionCommittedOutputInfo> result;
     if (!has_materialized_storage(state())) return result;
-    result.reserve(implementation_->sealed_boundary.outputs.size());
+    result.reserve(
+        implementation_->sealed_boundary.outputs.size() +
+        implementation_->committed_output_store.outputs.size());
+    for (const auto& output :
+         implementation_->committed_output_store.outputs) {
+        if (output.slot == nullptr || output.materializer == nullptr ||
+            output.address == nullptr) {
+            continue;
+        }
+        result.push_back(
+            {output.slot->handle,
+             output.slot->codec_entry_handle,
+             true,
+             output.generation,
+             output.sequence,
+             output.sample_tick,
+             output.sample_time_seconds,
+             output.interval_start_seconds,
+             output.interval_end_seconds,
+             output.quality,
+             false});
+    }
     for (const auto& output :
          implementation_->sealed_boundary.outputs) {
         if (output.slot == nullptr || output.materializer == nullptr ||
@@ -7784,6 +8632,30 @@ SessionResult Session::qualification_read_committed_output(
     if (!has_materialized_storage(state())) {
         return {SessionError::InvalidLifecycleTransition, slot_handle,
                 "sealed output inspection requires a materialized Session"};
+    }
+    const auto held = std::find_if(
+        implementation_->committed_output_store.outputs.begin(),
+        implementation_->committed_output_store.outputs.end(),
+        [slot_handle](const auto& output) {
+            return output.slot != nullptr &&
+                   output.slot->handle == slot_handle;
+        });
+    if (held != implementation_->committed_output_store.outputs.end() &&
+        held->materializer != nullptr && held->address != nullptr) {
+        const auto layout = held->materializer->operations().layout();
+        if (!held->materializer->operations().validate(held->address)) {
+            return {SessionError::HeldOutputValidationFailed, slot_handle,
+                    "committed HeldLatest output validation failed"};
+        }
+        result = {held->address,
+                  layout.size_bytes,
+                  layout.alignment_bytes,
+                  layout.type_identity,
+                  SessionObjectRole::CommittedOutputValue,
+                  held->slot->handle,
+                  0U,
+                  held->slot->codec_entry_handle};
+        return {};
     }
     const auto found = std::find_if(
         implementation_->sealed_boundary.outputs.begin(),
@@ -7948,6 +8820,11 @@ CheckpointOutcome Session::qualification_checkpoint_with_barrier(
 void Session::qualification_set_restore_precommit_failure(
     bool fail) noexcept {
     implementation_->restore_precommit_failure = fail;
+}
+
+void Session::qualification_set_held_output_fault(
+    std::uint8_t fault) noexcept {
+    implementation_->held_output_fault = fault;
 }
 
 std::uint64_t Session::command_ledger_sequence() const noexcept {

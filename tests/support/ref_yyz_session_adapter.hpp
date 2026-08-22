@@ -106,6 +106,18 @@ struct BoundaryContextProbe {
     bool quality_valid = false;
 };
 
+struct InputSampleProbe {
+    std::uint64_t sequence = 0U;
+    std::int64_t consumer_tick = -1;
+    std::int64_t sample_tick = -1;
+    std::uint64_t age_steps = 0U;
+    double sample_seconds = 0.0;
+    double interval_start_seconds = 0.0;
+    double interval_end_seconds = 0.0;
+    bool quality_valid = false;
+    bool fresh = false;
+};
+
 struct OpeningBoundaryProbe {
     std::vector<std::uint32_t> call_order;
     std::vector<BoundaryContextProbe> contexts;
@@ -121,11 +133,16 @@ struct OpeningBoundaryProbe {
     double guidance_command = 0.0;
     double guidance_limit = 0.0;
     bool guidance_saturated = false;
+    std::vector<std::int64_t> guidance_output_ticks;
+    std::vector<double> guidance_commands;
     double controller_pitch_error = 0.0;
     double controller_raw_moment = 0.0;
     double controller_moment = 0.0;
     double controller_limit = 0.0;
     bool controller_saturated = false;
+    std::vector<std::int64_t> controller_output_ticks;
+    std::vector<double> controller_moments;
+    std::vector<InputSampleProbe> controller_guidance_samples;
     std::array<double, 3U> actuator_moment{};
     std::array<double, 3U> propulsion_force{};
     std::array<double, 3U> propulsion_application_from_com{};

@@ -539,6 +539,15 @@ inline void validate_runtime_component(
         }
     }
 
+    const bool has_held_latest_input = std::any_of(
+        model.ports.begin(), model.ports.end(), [](const auto& port) {
+            return port.direction ==
+                       gnc::model_sdk::StaticPortDirection::Input &&
+                   port.binding_kind ==
+                       gnc::model_sdk::BindingKind::SampledSignal &&
+                   port.temporal_relation ==
+                       gnc::model_sdk::TemporalRelation::HeldLatest;
+        });
     const bool periodic_schedule =
         !evaluator &&
         schedule.trigger ==
@@ -547,7 +556,8 @@ inline void validate_runtime_component(
         schedule.offset < schedule.step_interval &&
         schedule.output_hold ==
             gnc::model_sdk::HoldPolicy::ZeroOrderHold &&
-        schedule.max_input_age_steps == 0U;
+        (schedule.max_input_age_steps == 0U ||
+         has_held_latest_input);
     const bool terminal_schedule =
         evaluator &&
         schedule.trigger ==
@@ -561,8 +571,8 @@ inline void validate_runtime_component(
             {DiagnosticCode::InvalidCatalogDescriptor, source,
              definition.model_id,
              "runtime schedule requires an exact periodic or "
-             "terminal-sequence trigger with zero-order hold and "
-             "current-cycle freshness"});
+             "terminal-sequence trigger with zero-order hold and a "
+             "declared HeldLatest input for nonzero maximum age"});
     }
     const std::vector<gnc::model_sdk::RuntimeLifecycleCapability>
         canonical_lifecycle{
@@ -644,8 +654,10 @@ inline void validate_runtime_component(
         const bool valid_semantics =
             (port.binding_kind ==
                  gnc::model_sdk::BindingKind::SampledSignal &&
-             port.temporal_relation ==
-                 gnc::model_sdk::TemporalRelation::CurrentCycle) ||
+             (port.temporal_relation ==
+                  gnc::model_sdk::TemporalRelation::CurrentCycle ||
+              port.temporal_relation ==
+                  gnc::model_sdk::TemporalRelation::HeldLatest)) ||
             (port.binding_kind ==
                  gnc::model_sdk::BindingKind::IntervalModel &&
              port.temporal_relation ==

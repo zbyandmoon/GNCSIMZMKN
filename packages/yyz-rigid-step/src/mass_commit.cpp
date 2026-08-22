@@ -544,8 +544,11 @@ void append_runtime_cell_factory_entry(
 } // namespace
 
 gnc::model_sdk::StaticPackageDescriptor
-describe_yyz_rigid_step_package() {
+describe_yyz_rigid_step_package(YyzRuntimeScheduleProfile profile) {
     auto package = detail::describe_yyz_rigid_step_base_package();
+    const bool multirate_qualification =
+        profile == YyzRuntimeScheduleProfile::
+                       MultirateHeldOutputQualification;
 
     const auto periodic_schedule = [] {
         gnc::model_sdk::StaticRuntimeScheduleDescriptor schedule;
@@ -903,7 +906,9 @@ describe_yyz_rigid_step_package() {
          gnc::model_sdk::StaticPortDirection::Output,
          gnc::model_sdk::BindingKind::SampledSignal,
          gnc::model_sdk::PortCardinality::OneOrMore,
-         gnc::model_sdk::TemporalRelation::CurrentCycle,
+         multirate_qualification
+             ? gnc::model_sdk::TemporalRelation::HeldLatest
+             : gnc::model_sdk::TemporalRelation::CurrentCycle,
          make_yyz_slot_codec_descriptor(
              kGuidanceOutputSlotCodecIdentity,
              kGuidanceOutputSlotCodecCallShapeIdentity,
@@ -930,6 +935,10 @@ describe_yyz_rigid_step_package() {
          gnc::model_sdk::StaticStateWriteKind::None, {},
          std::string(kAltitudePitchGuidanceCallShapeIdentity)}};
     runtime.schedule = periodic_schedule();
+    if (multirate_qualification) {
+        runtime.schedule.step_interval = 2U;
+        runtime.schedule.offset = 0U;
+    }
     runtime.lifecycle_capabilities = lifecycle;
     runtime.definition_builder_id = std::string(
         kAltitudePitchGuidanceDefinitionBuilderIdentity.id);
@@ -990,7 +999,9 @@ describe_yyz_rigid_step_package() {
          gnc::model_sdk::StaticPortDirection::Input,
          gnc::model_sdk::BindingKind::SampledSignal,
          gnc::model_sdk::PortCardinality::ExactlyOne,
-         gnc::model_sdk::TemporalRelation::CurrentCycle},
+         multirate_qualification
+             ? gnc::model_sdk::TemporalRelation::HeldLatest
+             : gnc::model_sdk::TemporalRelation::CurrentCycle},
         {"controller-output",
          std::string(kPitchMomentControllerOutputContractIdentity),
          gnc::model_sdk::StaticPortDirection::Output,
@@ -1023,6 +1034,9 @@ describe_yyz_rigid_step_package() {
          gnc::model_sdk::StaticStateWriteKind::None, {},
          std::string(kPitchMomentControllerCallShapeIdentity)}};
     controller_runtime.schedule = periodic_schedule();
+    if (multirate_qualification) {
+        controller_runtime.schedule.max_input_age_steps = 1U;
+    }
     controller_runtime.lifecycle_capabilities = lifecycle;
     controller_runtime.definition_builder_id = std::string(
         kPitchMomentControllerDefinitionBuilderIdentity.id);
@@ -1411,7 +1425,30 @@ describe_yyz_rigid_step_package() {
 
 gnc::model_sdk::StaticPackageImplementation
 describe_yyz_rigid_step_implementation(std::string build_fingerprint) {
-    const auto package = describe_yyz_rigid_step_package();
+    return describe_yyz_rigid_step_implementation(
+        std::move(build_fingerprint),
+        YyzRuntimeScheduleProfile::ReferenceInterval1);
+}
+
+gnc::model_sdk::StaticPackageDescriptor
+describe_yyz_rigid_step_package() {
+    return describe_yyz_rigid_step_package(
+        YyzRuntimeScheduleProfile::ReferenceInterval1);
+}
+
+gnc::model_sdk::StaticPackageImplementation
+describe_yyz_rigid_step_implementation(
+    std::string build_fingerprint,
+    YyzRuntimeScheduleProfile profile) {
+    const auto package = describe_yyz_rigid_step_package(profile);
+    return describe_yyz_rigid_step_implementation(
+        std::move(build_fingerprint), package);
+}
+
+gnc::model_sdk::StaticPackageImplementation
+describe_yyz_rigid_step_implementation(
+    std::string build_fingerprint,
+    const gnc::model_sdk::StaticPackageDescriptor& package) {
     gnc::model_sdk::StaticPackageImplementation implementation;
     implementation.package_id = package.package_id;
     implementation.package_version = package.package_version;
@@ -3474,9 +3511,15 @@ IdealBodyMomentActuatorKernel::evaluate(
         controller.context.configuration_revision !=
             definition.configuration_revision ||
         controller.context.quality != DataQuality::Valid ||
-        !same_instant(controller.context.sample_time,
-                      context.validity.effective_from,
-                      definition.numerical_policy)) {
+        controller.context.sample_time.tick < 0 ||
+        !std::isfinite(controller.context.sample_time.seconds) ||
+        controller.context.sample_time.tick >
+            context.validity.effective_from.tick ||
+        (controller.context.sample_time.seconds >
+             context.validity.effective_from.seconds &&
+         !near(controller.context.sample_time.seconds,
+               context.validity.effective_from.seconds,
+               definition.numerical_policy))) {
         return mass_commit_failure<IdealBodyMomentActuatorOutput>(
             kIdealBodyMomentActuatorKernelIdentity,
             NumericalStatus::DomainError, "controller-or-interval-context");

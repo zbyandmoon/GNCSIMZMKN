@@ -400,6 +400,9 @@ slot_materializer_if(
     const auto role =
         slot.kind == gnc::contracts::PlanImageSlotKind::HeldIntervalValue
             ? SessionObjectRole::HeldIntervalValue
+        : slot.kind ==
+                  gnc::contracts::PlanImageSlotKind::CommittedOutputValue
+            ? SessionObjectRole::CommittedOutputValue
         : slot.storage_class ==
                   gnc::contracts::SlotStorageClass::TerminalResult
             ? SessionObjectRole::TerminalOutputValue
@@ -3094,6 +3097,9 @@ void build_guidance_invocations(
             probe->guidance_limit =
                 cell->definition.pitch_command_limit_radians;
             probe->guidance_saturated = value.saturated;
+            probe->guidance_output_ticks.push_back(context.tick());
+            probe->guidance_commands.push_back(
+                value.pitch_command_radians);
             probe->contexts.push_back(context_probe(
                 value.source_observation.context,
                 context.interval_start_seconds(),
@@ -3133,6 +3139,17 @@ void build_controller_invocations(
                         context.component_handle(),
                         "controller Runtime Cell type mismatch"};
             }
+            gnc::kernel::SessionFrameAccess::SampleInfo sample;
+            result = context.inputs().sample_info(
+                cell->bindings.guidance_input_slot_handle, sample);
+            if (!result) return result;
+            probe->controller_guidance_samples.push_back(
+                {sample.sequence, context.tick(), sample.sample_tick,
+                 sample.age_steps, sample.sample_time_seconds,
+                 sample.interval_start_seconds,
+                 sample.interval_end_seconds,
+                 sample.quality == gnc::contracts::DataQuality::Valid,
+                 sample.fresh});
             const auto* guidance =
                 checked_input<yyz::AltitudePitchGuidanceOutput>(
                     context, cell->bindings.guidance_input_slot_handle,
@@ -3153,6 +3170,9 @@ void build_controller_invocations(
             probe->controller_limit =
                 cell->definition.moment_command_limit_newton_meters;
             probe->controller_saturated = value.saturated;
+            probe->controller_output_ticks.push_back(context.tick());
+            probe->controller_moments.push_back(
+                value.moment_command_newton_meters);
             probe->contexts.push_back(context_probe(
                 value.context, context.interval_start_seconds(),
                 context.interval_end_seconds()));

@@ -40,6 +40,7 @@ enum class PlanImageSlotKind : std::uint8_t {
     CommittedState,
     CandidateState,
     HeldIntervalValue,
+    CommittedOutputValue,
 };
 
 enum class PlanImageDagNodeKind : std::uint8_t {
@@ -218,6 +219,7 @@ enum class PlanImageWriterOwnerKind : std::uint8_t {
     RuntimeCallsite,
     IntegrationCoordinator,
     InitialStateBuilder,
+    CommittedOutputCoordinator,
 };
 
 struct PlanImageWriterToken {
@@ -270,6 +272,20 @@ struct PlanImageBinding {
     std::uint32_t provider_port_handle = 0U;
     std::uint32_t provider_slot_handle = 0U;
     std::uint32_t consumer_port_handle = 0U;
+};
+
+// One explicit sampled edge whose producer cadence may skip a consumer tick.
+// Its source remains an ordinary CycleFrame slot. The committed slot and this
+// authority table freeze the exact Session-local HeldLatest publication.
+struct PlanImageHeldOutput {
+    std::uint32_t handle = 0U;
+    std::string plan_element_id;
+    std::uint32_t binding_handle = 0U;
+    std::uint32_t source_slot_handle = 0U;
+    std::uint32_t committed_slot_handle = 0U;
+    std::uint32_t producer_callsite_handle = 0U;
+    std::vector<std::uint32_t> consumer_callsite_handles;
+    std::uint32_t max_age_steps = 0U;
 };
 
 struct PlanImageCallsite {
@@ -628,6 +644,7 @@ struct ExecutionPlanImageData {
     std::vector<PlanImageStateBlock> state_blocks;
     std::vector<PlanImageInitialBinding> initial_bindings;
     std::vector<PlanImageBinding> bindings;
+    std::vector<PlanImageHeldOutput> held_outputs;
     std::vector<PlanImageCallsite> callsites;
     std::vector<PlanImageRuntimeComponent> runtime_components;
     std::vector<PlanImageResourcePlan> resource_plans;
@@ -719,6 +736,10 @@ class ExecutionPlanImage final {
     }
     [[nodiscard]] const std::vector<PlanImageBinding>& bindings() const noexcept {
         return data_.bindings;
+    }
+    [[nodiscard]] const std::vector<PlanImageHeldOutput>& held_outputs()
+        const noexcept {
+        return data_.held_outputs;
     }
     [[nodiscard]] const std::vector<PlanImageCallsite>& callsites() const noexcept {
         return data_.callsites;

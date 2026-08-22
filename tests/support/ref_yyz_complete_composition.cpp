@@ -678,6 +678,32 @@ compile_complete_image() {
         source, {package}, {implementation});
 }
 
+gnc::compiler::CompleteStaticCompositionSource
+make_multirate_held_output_qualification_source(
+    const gnc::model_sdk::StaticPackageDescriptor& package) {
+    auto source = make_complete_source(package);
+    source.mission_id =
+        "mission.qualification.yyz.multirate-held-output@1";
+    source.plan_id =
+        "plan.qualification.yyz.multirate-held-output";
+    return source;
+}
+
+gnc::compiler::CompleteOutcome<gnc::contracts::ExecutionPlanImage>
+compile_multirate_held_output_qualification_image() {
+    constexpr auto profile = gnc::packages::yyz::
+        YyzRuntimeScheduleProfile::MultirateHeldOutputQualification;
+    const auto package =
+        gnc::packages::yyz::describe_yyz_rigid_step_package(profile);
+    const auto implementation =
+        gnc::packages::yyz::describe_yyz_rigid_step_implementation(
+            "build.ref-yyz.release", profile);
+    const auto source =
+        make_multirate_held_output_qualification_source(package);
+    return gnc::compiler::compile_and_link_complete_execution_plan(
+        source, {package}, {implementation});
+}
+
 gnc::compiler::CompleteOutcome<gnc::contracts::ExecutionPlanImage>
 compile_complete_image_without_reset_capability() {
     auto package =

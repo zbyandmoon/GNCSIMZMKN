@@ -791,6 +791,14 @@ void require_mission_oracle(const MissionResultProbe& value) {
         return RuntimeDiagnosticCode::CandidateFailed;
     case SessionError::ObservationSealFailed:
         return RuntimeDiagnosticCode::ObservationSealFailed;
+    case SessionError::HeldOutputMissing:
+        return RuntimeDiagnosticCode::HeldOutputMissing;
+    case SessionError::HeldOutputExpired:
+        return RuntimeDiagnosticCode::HeldOutputExpired;
+    case SessionError::HeldOutputCloneFailed:
+        return RuntimeDiagnosticCode::HeldOutputCloneFailed;
+    case SessionError::HeldOutputValidationFailed:
+        return RuntimeDiagnosticCode::HeldOutputValidationFailed;
     case SessionError::TransactionPrecommitFailed:
         return RuntimeDiagnosticCode::TransactionPrecommitFailed;
     case SessionError::InvocationFailed:

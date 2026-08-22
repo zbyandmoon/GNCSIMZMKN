@@ -13,6 +13,14 @@ namespace gnc::packages::yyz {
 
 [[nodiscard]] gnc::model_sdk::StaticPackageImplementation
 describe_yyz_rigid_step_implementation(std::string build_fingerprint);
+[[nodiscard]] gnc::model_sdk::StaticPackageImplementation
+describe_yyz_rigid_step_implementation(
+    std::string build_fingerprint,
+    YyzRuntimeScheduleProfile profile);
+[[nodiscard]] gnc::model_sdk::StaticPackageImplementation
+describe_yyz_rigid_step_implementation(
+    std::string build_fingerprint,
+    const gnc::model_sdk::StaticPackageDescriptor& package);
 
 inline constexpr std::string_view kScalarBurnMassContractIdentity =
     "gnc.package.yyz.mass.scalar-burn.contract.experimental@1";

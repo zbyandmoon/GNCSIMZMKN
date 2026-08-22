@@ -85,6 +85,10 @@ enum class SessionError : std::uint8_t {
     RestoreCompatibilityMismatch,
     RestoreCloneFailed,
     RestorePrecommitFailed,
+    HeldOutputMissing,
+    HeldOutputExpired,
+    HeldOutputCloneFailed,
+    HeldOutputValidationFailed,
 };
 
 [[nodiscard]] std::string_view to_string(SessionError error) noexcept;
@@ -330,6 +334,10 @@ enum class RuntimeDiagnosticCode : std::uint8_t {
     RestoreCompatibilityFailed,
     RestoreCloneFailed,
     RestorePrecommitFailed,
+    HeldOutputMissing,
+    HeldOutputExpired,
+    HeldOutputCloneFailed,
+    HeldOutputValidationFailed,
 };
 
 enum class RuntimeDiagnosticStage : std::uint8_t {
@@ -357,6 +365,8 @@ enum class RuntimeDiagnosticStage : std::uint8_t {
     RestoreMaterialization,
     RestoreState,
     RestorePrecommit,
+    HeldOutputInjection,
+    HeldOutputCommit,
 };
 
 enum class RuntimeFailureDisposition : std::uint8_t {
@@ -646,6 +656,7 @@ enum class SessionObjectRole : std::uint8_t {
     HeldIntervalValue,
     TerminalOutputValue,
     CommittedHistoryValue,
+    CommittedOutputValue,
 };
 
 struct SessionMaterializerIdentity {
@@ -904,6 +915,20 @@ class SessionFrameAccess {
         std::uint32_t callsite_handle, std::uint64_t generation,
         std::uint32_t slot_handle, std::uint32_t writer_token_handle,
         InProcessValueView value) noexcept = 0;
+    struct SampleInfo {
+        std::uint64_t sequence = 0U;
+        std::int64_t sample_tick = 0;
+        std::uint32_t age_steps = 0U;
+        double sample_time_seconds = 0.0;
+        double interval_start_seconds = 0.0;
+        double interval_end_seconds = 0.0;
+        contracts::DataQuality quality = contracts::DataQuality::Invalid;
+        bool fresh = false;
+    };
+    [[nodiscard]] virtual SessionResult input_sample_info(
+        std::uint8_t authority_kind, std::uint32_t authority_handle,
+        std::uint64_t generation, std::uint32_t slot_handle,
+        SampleInfo& result) const noexcept = 0;
     [[nodiscard]] virtual bool frame_active(
         std::uint64_t generation) const noexcept = 0;
 };
@@ -987,6 +1012,9 @@ class SessionInputView final {
     [[nodiscard]] SessionResult read(
         std::uint32_t slot_handle,
         SessionObjectIdentityView& result) const noexcept;
+    [[nodiscard]] SessionResult sample_info(
+        std::uint32_t slot_handle,
+        SessionFrameAccess::SampleInfo& result) const noexcept;
     [[nodiscard]] bool active() const noexcept;
     [[nodiscard]] std::uint64_t generation() const noexcept {
         return generation_;
@@ -1638,6 +1666,7 @@ class Session final {
     [[nodiscard]] CheckpointOutcome qualification_checkpoint_with_barrier(
         std::uint8_t barrier) noexcept;
     void qualification_set_restore_precommit_failure(bool fail) noexcept;
+    void qualification_set_held_output_fault(std::uint8_t fault) noexcept;
     std::unique_ptr<Impl> implementation_;
 
     friend class qualification::SessionAccess;

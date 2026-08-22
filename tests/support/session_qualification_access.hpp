@@ -9,6 +9,7 @@ enum class CheckpointCloneFault : std::uint8_t {
     State = 1U,
     History = 2U,
     Seal = 3U,
+    HeldOutput = 4U,
 };
 
 enum class CheckpointBarrierFault : std::uint8_t {
@@ -23,6 +24,21 @@ enum class CheckpointMutation : std::uint8_t {
     StateCodec = 4U,
     StateType = 5U,
     StateInvariant = 6U,
+    HeldLayout = 7U,
+    HeldCodec = 8U,
+    HeldType = 9U,
+    HeldQuality = 10U,
+    HeldAuthority = 11U,
+    HeldMissing = 12U,
+    HeldExtra = 13U,
+};
+
+enum class HeldOutputFault : std::uint8_t {
+    None = 0U,
+    StoreClone = 1U,
+    InjectionClone = 2U,
+    Validation = 3U,
+    Precommit = 4U,
 };
 
 // This friend is compiled only by qualification probes. Product callers have
@@ -91,6 +107,12 @@ class SessionAccess final {
 
     static void fail_restore_precommit(Session& session) noexcept {
         session.qualification_set_restore_precommit_failure(true);
+    }
+
+    static void fail_next_held_output(
+        Session& session, HeldOutputFault fault) noexcept {
+        session.qualification_set_held_output_fault(
+            static_cast<std::uint8_t>(fault));
     }
 
     static void mutate_checkpoint(

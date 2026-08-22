@@ -379,6 +379,7 @@ enum class CompleteSlotKind : std::uint8_t {
     CommittedState,
     CandidateState,
     HeldIntervalValue,
+    CommittedOutputValue,
 };
 
 struct CompleteSlotPlan {
@@ -403,6 +404,7 @@ enum class WriterOwnerKind : std::uint8_t {
     RuntimeCallsite,
     IntegrationCoordinator,
     InitialStateBuilder,
+    CommittedOutputCoordinator,
 };
 
 struct WriterTokenPlan {
@@ -450,6 +452,17 @@ struct CompleteBindingPlan {
         gnc::model_sdk::BindingKind::Unspecified;
     gnc::model_sdk::TemporalRelation temporal_relation =
         gnc::model_sdk::TemporalRelation::NotApplicable;
+    SourceRef source;
+};
+
+struct HeldOutputPlan {
+    std::string plan_element_id;
+    std::string binding_id;
+    std::string source_slot_id;
+    std::string committed_slot_id;
+    std::string producer_callsite_id;
+    std::vector<std::string> consumer_callsite_ids;
+    std::uint32_t max_age_steps = 0U;
     SourceRef source;
 };
 
@@ -910,6 +923,7 @@ struct CompleteExecutionPlanDescriptor {
     std::vector<CompleteSlotPlan> slots;
     std::vector<WriterTokenPlan> writer_tokens;
     std::vector<CompleteBindingPlan> bindings;
+    std::vector<HeldOutputPlan> held_outputs;
     std::vector<PreparationInputPlan> preparation_inputs;
     std::vector<QueryPlan> queries;
     std::vector<ClosurePlan> closures;
@@ -2766,6 +2780,44 @@ inline void lower_occurrences(LoweringContext& context) {
 inline void lower_bindings(LoweringContext& context) {
     std::set<std::string> binding_ids;
     std::map<std::string, std::size_t> provider_counts;
+    const auto scheduled_at = [](const auto& schedule,
+                                 std::int64_t tick) noexcept {
+        if (schedule.trigger !=
+                gnc::model_sdk::StaticScheduleTrigger::EveryBoundary ||
+            schedule.step_interval == 0U ||
+            tick < static_cast<std::int64_t>(schedule.offset)) {
+            return false;
+        }
+        return (tick - static_cast<std::int64_t>(schedule.offset)) %
+                   static_cast<std::int64_t>(schedule.step_interval) ==
+               0;
+    };
+    const auto consumer_can_run_without_provider =
+        [&](const auto& provider_schedule,
+            const auto& consumer_schedule) noexcept {
+            const auto first = context.ir.clock.initial_tick;
+            const auto last = context.ir.clock.terminal_tick;
+            if (last < first) return false;
+            const auto span = static_cast<std::uint64_t>(last - first);
+            // Current qualification and product clocks are small. A very
+            // large grid is conservatively rejected for CurrentCycle when
+            // cadence equality cannot prove same-tick production directly.
+            if (provider_schedule.trigger == consumer_schedule.trigger &&
+                provider_schedule.step_interval ==
+                    consumer_schedule.step_interval &&
+                provider_schedule.offset == consumer_schedule.offset) {
+                return false;
+            }
+            if (span > 1000000U) return true;
+            for (std::int64_t tick = first;; ++tick) {
+                if (scheduled_at(consumer_schedule, tick) &&
+                    !scheduled_at(provider_schedule, tick)) {
+                    return true;
+                }
+                if (tick == last) break;
+            }
+            return false;
+        };
     for (const auto& binding : context.ir.bindings) {
         if (binding.binding_id.empty() ||
             !binding_ids.insert(binding.binding_id).second ||
@@ -2830,6 +2882,40 @@ inline void lower_bindings(LoweringContext& context) {
                        "binding endpoint temporal relations differ");
             continue;
         }
+        const auto* provider_runtime =
+            provider->descriptor.runtime_component.has_value()
+                ? &*provider->descriptor.runtime_component
+                : nullptr;
+        const auto* consumer_runtime =
+            consumer->descriptor.runtime_component.has_value()
+                ? &*consumer->descriptor.runtime_component
+                : nullptr;
+        if (provider_port->temporal_relation ==
+                gnc::model_sdk::TemporalRelation::CurrentCycle &&
+            provider_runtime != nullptr && consumer_runtime != nullptr &&
+            consumer_can_run_without_provider(provider_runtime->schedule,
+                                              consumer_runtime->schedule)) {
+            diagnostic(
+                context.diagnostics,
+                CompleteDiagnosticCode::TemporalMismatch, binding.source,
+                binding.binding_id,
+                "CurrentCycle consumer cadence can run while its producer is skipped; declare HeldLatest explicitly");
+            continue;
+        }
+        if (provider_port->temporal_relation ==
+                gnc::model_sdk::TemporalRelation::HeldLatest &&
+            (provider_port->binding_kind !=
+                 gnc::model_sdk::BindingKind::SampledSignal ||
+             provider_runtime == nullptr || consumer_runtime == nullptr ||
+             provider_runtime->schedule.output_hold !=
+                 gnc::model_sdk::HoldPolicy::ZeroOrderHold)) {
+            diagnostic(
+                context.diagnostics,
+                CompleteDiagnosticCode::TemporalMismatch, binding.source,
+                binding.binding_id,
+                "HeldLatest requires a sampled RuntimeComponent edge with an explicit ZeroOrderHold producer");
+            continue;
+        }
         if (!compatible_scopes(*provider, *consumer)) {
             diagnostic(context.diagnostics,
                        CompleteDiagnosticCode::ScopeMismatch,
@@ -2868,6 +2954,90 @@ inline void lower_bindings(LoweringContext& context) {
              binding.consumer_port_id, provider_port->contract_id,
              provider_port->binding_kind,
              provider_port->temporal_relation, binding.source});
+        if (provider_port->temporal_relation ==
+            gnc::model_sdk::TemporalRelation::HeldLatest) {
+            const auto provider_callsites =
+                context.output_port_callsites[output_key];
+            const auto consumer_callsites =
+                context.input_port_callsites[input_key];
+            if (provider_callsites.size() != 1U ||
+                consumer_callsites.empty()) {
+                diagnostic(
+                    context.diagnostics,
+                    CompleteDiagnosticCode::TemporalMismatch,
+                    binding.source, binding.binding_id,
+                    "HeldLatest edge must resolve one producer callsite and at least one consumer callsite");
+                continue;
+            }
+            const auto source_slot = std::find_if(
+                context.plan.slots.begin(), context.plan.slots.end(),
+                [&](const auto& candidate) {
+                    return candidate.slot_id == provider_slot;
+                });
+            const auto* producer_callsite =
+                find_callsite(context, provider_callsites.front());
+            if (source_slot == context.plan.slots.end() ||
+                producer_callsite == nullptr) {
+                diagnostic(
+                    context.diagnostics,
+                    CompleteDiagnosticCode::TemporalMismatch,
+                    binding.source, binding.binding_id,
+                    "HeldLatest source slot or producer callsite was not derived");
+                continue;
+            }
+            std::vector<std::string> reader_elements;
+            for (const auto& consumer_callsite_id : consumer_callsites) {
+                const auto* reader =
+                    find_callsite(context, consumer_callsite_id);
+                if (reader != nullptr) {
+                    reader_elements.push_back(reader->plan_element_id);
+                }
+            }
+            std::sort(reader_elements.begin(), reader_elements.end());
+            reader_elements.erase(
+                std::unique(reader_elements.begin(),
+                            reader_elements.end()),
+                reader_elements.end());
+            const auto committed_slot_id =
+                "slot/committed-output/" + binding.binding_id;
+            const auto committed_writer_id =
+                "writer/" + committed_slot_id;
+            CompleteSlotPlan committed_output;
+            committed_output.plan_element_id = committed_slot_id;
+            committed_output.slot_id = committed_slot_id;
+            committed_output.kind =
+                CompleteSlotKind::CommittedOutputValue;
+            committed_output.owner_occurrence_id =
+                binding.provider_occurrence_id;
+            committed_output.contract_id = source_slot->contract_id;
+            committed_output.layout_id = source_slot->layout_id;
+            committed_output.codec_entry_requirement_id =
+                source_slot->codec_entry_requirement_id;
+            committed_output.writer_token_id = committed_writer_id;
+            committed_output.reader_plan_element_ids = reader_elements;
+            committed_output.storage_class =
+                gnc::contracts::SlotStorageClass::CommittedOutput;
+            committed_output.hold_policy =
+                gnc::contracts::SlotHoldPolicy::HeldLatest;
+            committed_output.source = binding.source;
+            context.plan.slots.push_back(std::move(committed_output));
+            context.plan.writer_tokens.push_back(
+                {"writer-token/" + committed_writer_id,
+                 committed_writer_id, committed_slot_id,
+                 WriterOwnerKind::CommittedOutputCoordinator,
+                 producer_callsite->plan_element_id, binding.source});
+            auto held_consumers = consumer_callsites;
+            std::sort(held_consumers.begin(), held_consumers.end());
+            held_consumers.erase(
+                std::unique(held_consumers.begin(), held_consumers.end()),
+                held_consumers.end());
+            context.plan.held_outputs.push_back(
+                {"held-output/" + binding.binding_id,
+                 binding.binding_id, provider_slot, committed_slot_id,
+                 provider_callsites.front(), std::move(held_consumers),
+                 consumer_runtime->schedule.max_input_age_steps,
+                 binding.source});
+        }
     }
     for (const auto& occurrence : context.ir.occurrences) {
         for (const auto& port : occurrence.descriptor.ports) {
@@ -4201,6 +4371,7 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
     append(plan.slots);
     append(plan.writer_tokens);
     append(plan.bindings);
+    append(plan.held_outputs);
     append(plan.preparation_inputs);
     append(plan.queries);
     append(plan.closures);
@@ -4232,7 +4403,8 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
     }
     if (element.rfind("port/", 0U) == 0U ||
         element.rfind("slot/", 0U) == 0U ||
-        element.rfind("writer-token/", 0U) == 0U) {
+        element.rfind("writer-token/", 0U) == 0U ||
+        element.rfind("held-output/", 0U) == 0U) {
         return PlanProofKind::PortAndSlotDerivation;
     }
     if (element.rfind("binding/", 0U) == 0U) {
@@ -4533,6 +4705,20 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
                                 ? gnc::model_sdk::TemporalRelation::NotApplicable
                                 : consumer_port->temporal_relation)},
             {binding.plan_element_id}, binding.source);
+    }
+    for (const auto& held : plan.held_outputs) {
+        std::vector<std::string> premises{
+            "binding=" + held.binding_id,
+            "source-slot=" + held.source_slot_id,
+            "committed-slot=" + held.committed_slot_id,
+            "producer-callsite=" + held.producer_callsite_id,
+            "max-age-steps=" + std::to_string(held.max_age_steps)};
+        append_ids(premises, "consumer-callsite",
+                   held.consumer_callsite_ids);
+        add("proof/held-output/" + held.binding_id,
+            PlanProofKind::TemporalCompatibility,
+            held.plan_element_id, std::move(premises),
+            {held.plan_element_id}, held.source);
     }
 
     for (const auto& preparation : plan.preparation_inputs) {
@@ -6950,6 +7136,21 @@ namespace complete_plan_detail {
                             gnc::contracts::SlotStorageClass::IntegrationHeld &&
                         slot.hold_policy ==
                             gnc::contracts::SlotHoldPolicy::HoldInterval;
+            } else if (slot.kind ==
+                       CompleteSlotKind::CommittedOutputValue) {
+                const auto held = std::find_if(
+                    plan.held_outputs.begin(), plan.held_outputs.end(),
+                    [&](const auto& candidate) {
+                        return candidate.committed_slot_id == slot.slot_id;
+                    });
+                valid = valid && slot.port_id.empty() &&
+                        held != plan.held_outputs.end() &&
+                        slot.storage_class ==
+                            gnc::contracts::SlotStorageClass::CommittedOutput &&
+                        slot.hold_policy ==
+                            gnc::contracts::SlotHoldPolicy::HeldLatest &&
+                        same_package(requirement->package,
+                                     occurrence->package);
             } else {
                 const auto port = std::find_if(
                     plan.ports.begin(), plan.ports.end(),
@@ -7017,6 +7218,18 @@ namespace complete_plan_detail {
             valid = valid && scope != plan.integration_scopes.end() &&
                     (scope->held_form_slot_id == writer.slot_id ||
                      scope->candidate_state_slot_id == writer.slot_id);
+        } else if (writer.owner_kind ==
+                   WriterOwnerKind::CommittedOutputCoordinator) {
+            const auto callsite = callsite_for_element(
+                writer.owner_plan_element_id);
+            const auto held = std::find_if(
+                plan.held_outputs.begin(), plan.held_outputs.end(),
+                [&](const auto& candidate) {
+                    return candidate.committed_slot_id == writer.slot_id;
+                });
+            valid = valid && callsite != plan.runtime_callsites.end() &&
+                    held != plan.held_outputs.end() &&
+                    held->producer_callsite_id == callsite->callsite_id;
         } else {
             const auto initial = initial_for_element(
                 writer.owner_plan_element_id);
@@ -7026,6 +7239,100 @@ namespace complete_plan_detail {
         if (!valid) {
             report(writer.source, writer.writer_token_id,
                    "writer token does not uniquely own its declared stored slot");
+        }
+    }
+
+    std::set<std::string> held_elements;
+    std::set<std::string> held_bindings;
+    for (const auto& held : plan.held_outputs) {
+        const auto binding = std::find_if(
+            plan.bindings.begin(), plan.bindings.end(),
+            [&](const auto& candidate) {
+                return candidate.binding_id == held.binding_id;
+            });
+        const auto source = slot_for(held.source_slot_id);
+        const auto committed = slot_for(held.committed_slot_id);
+        const auto producer = callsite_for(held.producer_callsite_id);
+        const auto provider_component =
+            binding == plan.bindings.end()
+                ? plan.runtime_components.end()
+                : std::find_if(
+                      plan.runtime_components.begin(),
+                      plan.runtime_components.end(), [&](const auto& value) {
+                          return value.occurrence_id ==
+                                 binding->provider_occurrence_id;
+                      });
+        const auto consumer_component =
+            binding == plan.bindings.end()
+                ? plan.runtime_components.end()
+                : std::find_if(
+                      plan.runtime_components.begin(),
+                      plan.runtime_components.end(), [&](const auto& value) {
+                          return value.occurrence_id ==
+                                 binding->consumer_occurrence_id;
+                      });
+        std::vector<std::string> expected_reader_elements;
+        expected_reader_elements.reserve(held.consumer_callsite_ids.size());
+        for (const auto& consumer_id : held.consumer_callsite_ids) {
+            const auto consumer = callsite_for(consumer_id);
+            if (consumer != plan.runtime_callsites.end()) {
+                expected_reader_elements.push_back(
+                    consumer->plan_element_id);
+            }
+        }
+        std::sort(expected_reader_elements.begin(),
+                  expected_reader_elements.end());
+        bool valid = held_elements.insert(held.plan_element_id).second &&
+                     held_bindings.insert(held.binding_id).second &&
+                     held.plan_element_id ==
+                         "held-output/" + held.binding_id &&
+                      binding != plan.bindings.end() &&
+                      binding->temporal_relation ==
+                          gnc::model_sdk::TemporalRelation::HeldLatest &&
+                      binding->provider_slot_id == held.source_slot_id &&
+                      source != plan.slots.end() &&
+                      source->kind == CompleteSlotKind::PortValue &&
+                      source->storage_class ==
+                          gnc::contracts::SlotStorageClass::CycleFrame &&
+                      committed != plan.slots.end() &&
+                      committed->kind ==
+                          CompleteSlotKind::CommittedOutputValue &&
+                      source->owner_occurrence_id ==
+                          committed->owner_occurrence_id &&
+                      source->contract_id == committed->contract_id &&
+                      source->layout_id == committed->layout_id &&
+                      source->codec_entry_requirement_id ==
+                          committed->codec_entry_requirement_id &&
+                      committed->reader_plan_element_ids ==
+                          expected_reader_elements &&
+                      producer != plan.runtime_callsites.end() &&
+                      provider_component != plan.runtime_components.end() &&
+                      consumer_component != plan.runtime_components.end() &&
+                      producer->occurrence_id ==
+                          binding->provider_occurrence_id &&
+                      provider_component->schedule.output_hold ==
+                          gnc::model_sdk::HoldPolicy::ZeroOrderHold &&
+                      consumer_component->schedule.max_input_age_steps ==
+                          held.max_age_steps &&
+                      std::find(producer->output_slot_ids.begin(),
+                                producer->output_slot_ids.end(),
+                               held.source_slot_id) !=
+                         producer->output_slot_ids.end() &&
+                     !held.consumer_callsite_ids.empty() &&
+                     sorted_unique(held.consumer_callsite_ids);
+        for (const auto& consumer_id : held.consumer_callsite_ids) {
+            const auto consumer = callsite_for(consumer_id);
+            valid = valid && consumer != plan.runtime_callsites.end() &&
+                    consumer->occurrence_id ==
+                        binding->consumer_occurrence_id &&
+                    std::find(consumer->input_slot_ids.begin(),
+                              consumer->input_slot_ids.end(),
+                              held.source_slot_id) !=
+                        consumer->input_slot_ids.end();
+        }
+        if (!valid) {
+            report(held.source, held.binding_id,
+                   "HeldLatest store, writer, reader, or temporal authority is not exact");
         }
     }
 
@@ -8088,6 +8395,17 @@ namespace complete_plan_detail {
                         gnc::contracts::SlotStorageClass::IntegrationHeld &&
                     slot.hold_policy ==
                         gnc::contracts::SlotHoldPolicy::HoldInterval;
+        } else if (slot.kind ==
+                   gnc::contracts::PlanImageSlotKind::CommittedOutputValue) {
+            valid = valid && !slot.contract_id.empty() &&
+                    slot.storage_class ==
+                        gnc::contracts::SlotStorageClass::CommittedOutput &&
+                    slot.hold_policy ==
+                        gnc::contracts::SlotHoldPolicy::HeldLatest &&
+                    writer != writers.end() &&
+                    writer->second->owner_kind ==
+                        gnc::contracts::PlanImageWriterOwnerKind::
+                            CommittedOutputCoordinator;
         } else {
             const bool terminal =
                 slot.storage_class ==
@@ -8141,6 +8459,121 @@ namespace complete_plan_detail {
     }
     if (slots.size() != image.slots.size()) {
         report(image.plan_id, "materialized slot handles are duplicated");
+    }
+    std::set<std::uint32_t> held_handles;
+    std::set<std::uint32_t> held_bindings;
+    std::set<std::uint32_t> held_committed_slots;
+    for (const auto& held : image.held_outputs) {
+        const auto binding = std::find_if(
+            image.bindings.begin(), image.bindings.end(),
+            [&](const auto& value) {
+                return value.handle == held.binding_handle;
+            });
+        const auto source = slots.find(held.source_slot_handle);
+        const auto committed = slots.find(held.committed_slot_handle);
+        const auto producer = std::find_if(
+            image.callsites.begin(), image.callsites.end(),
+            [&](const auto& value) {
+                return value.handle == held.producer_callsite_handle;
+            });
+        const auto provider_component =
+            producer == image.callsites.end()
+                ? image.runtime_components.end()
+                : std::find_if(
+                      image.runtime_components.begin(),
+                      image.runtime_components.end(), [&](const auto& value) {
+                          return value.occurrence_handle ==
+                                 producer->occurrence_handle;
+                      });
+        const auto consumer_component =
+            binding == image.bindings.end()
+                ? image.runtime_components.end()
+                : std::find_if(
+                      image.runtime_components.begin(),
+                      image.runtime_components.end(), [&](const auto& value) {
+                          const auto port = std::find_if(
+                              image.ports.begin(), image.ports.end(),
+                              [&](const auto& candidate) {
+                                  return candidate.handle ==
+                                         binding->consumer_port_handle;
+                              });
+                          return port != image.ports.end() &&
+                                 value.occurrence_handle ==
+                                     port->occurrence_handle;
+                      });
+        const auto committed_writer =
+            committed == slots.end()
+                ? writers.end()
+                : writers.find(committed->second->writer_token_handle);
+        bool valid = held.handle != 0U &&
+                     held_handles.insert(held.handle).second &&
+                     held_bindings.insert(held.binding_handle).second &&
+                      held_committed_slots
+                          .insert(held.committed_slot_handle).second &&
+                      binding != image.bindings.end() &&
+                      binding->provider_slot_handle ==
+                          held.source_slot_handle &&
+                      source != slots.end() && committed != slots.end() &&
+                     source->second->storage_class ==
+                         gnc::contracts::SlotStorageClass::CycleFrame &&
+                     committed->second->kind ==
+                         gnc::contracts::PlanImageSlotKind::
+                             CommittedOutputValue &&
+                     source->second->contract_id ==
+                         committed->second->contract_id &&
+                     source->second->layout_id ==
+                         committed->second->layout_id &&
+                      source->second->codec_entry_handle ==
+                          committed->second->codec_entry_handle &&
+                      producer != image.callsites.end() &&
+                      provider_component != image.runtime_components.end() &&
+                      consumer_component != image.runtime_components.end() &&
+                      provider_component->output_hold == "ZeroOrderHold" &&
+                      consumer_component->max_input_age_steps ==
+                          held.max_age_steps &&
+                      committed_writer != writers.end() &&
+                      committed_writer->second->owner_kind ==
+                          gnc::contracts::PlanImageWriterOwnerKind::
+                              CommittedOutputCoordinator &&
+                      committed_writer->second->owner_handle ==
+                          held.producer_callsite_handle &&
+                      committed->second->reader_handles ==
+                          held.consumer_callsite_handles &&
+                      std::find(producer->output_slot_handles.begin(),
+                                producer->output_slot_handles.end(),
+                               held.source_slot_handle) !=
+                         producer->output_slot_handles.end() &&
+                     !held.consumer_callsite_handles.empty() &&
+                     std::is_sorted(
+                         held.consumer_callsite_handles.begin(),
+                         held.consumer_callsite_handles.end()) &&
+                     std::adjacent_find(
+                         held.consumer_callsite_handles.begin(),
+                         held.consumer_callsite_handles.end()) ==
+                         held.consumer_callsite_handles.end();
+        for (const auto reader_handle :
+             held.consumer_callsite_handles) {
+            const auto reader = std::find_if(
+                image.callsites.begin(), image.callsites.end(),
+                [&](const auto& value) {
+                    return value.handle == reader_handle;
+                });
+            valid = valid && reader != image.callsites.end() &&
+                    reader->occurrence_handle ==
+                        consumer_component->occurrence_handle &&
+                    std::find(reader->input_slot_handles.begin(),
+                              reader->input_slot_handles.end(),
+                              held.source_slot_handle) !=
+                        reader->input_slot_handles.end() &&
+                    std::find(committed->second->reader_handles.begin(),
+                              committed->second->reader_handles.end(),
+                              reader_handle) !=
+                        committed->second->reader_handles.end();
+        }
+        if (!valid) {
+            report(held.plan_element_id,
+                   "materialized HeldLatest source/store/authority facts are invalid");
+        }
     }
     return diagnostics.empty();
 }
@@ -8650,6 +9083,24 @@ namespace complete_plan_detail {
             encoder.uint32(member.committed_state_slot_handle);
         }
     });
+    // Keep the established interval-1 REF-YYZ fingerprint byte-for-byte
+    // stable when no explicit HeldLatest edge exists.
+    if (!image.held_outputs.empty()) {
+        encoder.string("gnc.execution-plan-image.held-latest@1");
+        encode_ids(image.held_outputs, [&](const auto& value) {
+            encoder.uint32(value.handle);
+            encoder.string(value.plan_element_id);
+            encoder.uint32(value.binding_handle);
+            encoder.uint32(value.source_slot_handle);
+            encoder.uint32(value.committed_slot_handle);
+            encoder.uint32(value.producer_callsite_handle);
+            encoder.collection(value.consumer_callsite_handles.size());
+            for (const auto handle : value.consumer_callsite_handles) {
+                encoder.uint32(handle);
+            }
+            encoder.uint32(value.max_age_steps);
+        });
+    }
     const auto encode_handle_vector = [&](const auto& handles) {
         encoder.collection(handles.size());
         for (const auto handle : handles) {
@@ -9279,6 +9730,9 @@ link_complete_execution_plan(
             kind = gnc::contracts::PlanImageSlotKind::CandidateState;
         } else if (slot.kind == CompleteSlotKind::HeldIntervalValue) {
             kind = gnc::contracts::PlanImageSlotKind::HeldIntervalValue;
+        } else if (slot.kind ==
+                   CompleteSlotKind::CommittedOutputValue) {
+            kind = gnc::contracts::PlanImageSlotKind::CommittedOutputValue;
         }
         std::uint32_t port_handle = 0U;
         if (!slot.port_id.empty()) {
@@ -9400,6 +9854,22 @@ link_complete_execution_plan(
              port_handles.at(binding.consumer_occurrence_id + "\x1f" +
                              binding.consumer_port_id)});
         conformance_handles[binding.plan_element_id].push_back(handle);
+    }
+    for (const auto& held : plan.held_outputs) {
+        const auto handle = next_handle++;
+        std::vector<std::uint32_t> consumers;
+        consumers.reserve(held.consumer_callsite_ids.size());
+        for (const auto& consumer : held.consumer_callsite_ids) {
+            consumers.push_back(callsite_handles.at(consumer));
+        }
+        image.held_outputs.push_back(
+            {handle, held.plan_element_id,
+             binding_handles.at(held.binding_id),
+             slot_handles.at(held.source_slot_id),
+             slot_handles.at(held.committed_slot_id),
+             callsite_handles.at(held.producer_callsite_id),
+             std::move(consumers), held.max_age_steps});
+        conformance_handles[held.plan_element_id].push_back(handle);
     }
 
     std::map<std::string, std::uint32_t> invocation_handles;
@@ -9927,6 +10397,12 @@ link_complete_execution_plan(
                    WriterOwnerKind::IntegrationCoordinator) {
             owner_kind = gnc::contracts::PlanImageWriterOwnerKind::
                 IntegrationCoordinator;
+            owner_handle = plan_element_runtime_handles.at(
+                writer.owner_plan_element_id);
+        } else if (writer.owner_kind ==
+                   WriterOwnerKind::CommittedOutputCoordinator) {
+            owner_kind = gnc::contracts::PlanImageWriterOwnerKind::
+                CommittedOutputCoordinator;
             owner_handle = plan_element_runtime_handles.at(
                 writer.owner_plan_element_id);
         } else {

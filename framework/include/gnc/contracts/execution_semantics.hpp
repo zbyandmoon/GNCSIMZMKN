@@ -10,6 +10,7 @@ enum class TemporalRelation : std::uint8_t {
     IntervalModel,
     CandidateStateQuery,
     CurrentCycle,
+    HeldLatest,
 };
 
 [[nodiscard]] constexpr std::string_view to_string(
@@ -23,6 +24,8 @@ enum class TemporalRelation : std::uint8_t {
         return "CandidateStateQuery";
     case TemporalRelation::CurrentCycle:
         return "CurrentCycle";
+    case TemporalRelation::HeldLatest:
+        return "HeldLatest";
     }
     return "Unknown";
 }
@@ -32,7 +35,8 @@ enum class TemporalRelation : std::uint8_t {
     return relation == TemporalRelation::NotApplicable ||
            relation == TemporalRelation::IntervalModel ||
            relation == TemporalRelation::CandidateStateQuery ||
-           relation == TemporalRelation::CurrentCycle;
+           relation == TemporalRelation::CurrentCycle ||
+           relation == TemporalRelation::HeldLatest;
 }
 
 enum class ExecutionObligation : std::uint8_t {
@@ -168,6 +172,7 @@ enum class SlotStorageClass : std::uint8_t {
     TransactionCandidate,
     IntegrationHeld,
     TerminalResult,
+    CommittedOutput,
 };
 
 [[nodiscard]] constexpr std::string_view to_string(
@@ -185,6 +190,8 @@ enum class SlotStorageClass : std::uint8_t {
         return "IntegrationHeld";
     case SlotStorageClass::TerminalResult:
         return "TerminalResult";
+    case SlotStorageClass::CommittedOutput:
+        return "CommittedOutput";
     }
     return "Unknown";
 }
@@ -195,6 +202,7 @@ enum class SlotHoldPolicy : std::uint8_t {
     HoldInterval,
     Committed,
     Terminal,
+    HeldLatest,
 };
 
 [[nodiscard]] constexpr std::string_view to_string(
@@ -210,6 +218,8 @@ enum class SlotHoldPolicy : std::uint8_t {
         return "Committed";
     case SlotHoldPolicy::Terminal:
         return "Terminal";
+    case SlotHoldPolicy::HeldLatest:
+        return "HeldLatest";
     }
     return "Unknown";
 }
