@@ -31,6 +31,8 @@ enum class PlanImageEntryKind : std::uint8_t {
     BoundaryEvaluation,
     IntervalEvolution,
     DerivativeEvaluation,
+    CommandReduction,
+    EventConsumption,
 };
 
 enum class PlanImageSlotKind : std::uint8_t {
@@ -427,6 +429,7 @@ struct PlanImageTransactionCandidateMember {
     std::string producer_kind;
     std::uint32_t producer_handle = 0U;
     std::uint32_t writer_token_handle = 0U;
+    StateCommitClass commit_class = StateCommitClass::IntervalCandidate;
 };
 
 struct PlanImageTransactionBranch {
@@ -476,6 +479,38 @@ struct PlanImageCancellationSafePoint {
 
 struct PlanImageCancellationPolicy {
     std::vector<PlanImageCancellationSafePoint> safe_points;
+};
+
+struct PlanImageCommandRoute {
+    std::uint32_t handle = 0U;
+    std::string plan_element_id;
+    std::uint32_t transaction_handle = 0U;
+    std::uint32_t target_runtime_component_handle = 0U;
+    std::uint32_t target_owner_occurrence_handle = 0U;
+    std::uint32_t target_state_block_handle = 0U;
+    std::uint32_t reducer_callsite_handle = 0U;
+    std::string payload_schema_id;
+    std::uint32_t decision_authority = 0U;
+    std::uint32_t queue_capacity = 0U;
+    CommandQueuePolicy queue_policy = CommandQueuePolicy::RejectNewest;
+    CommandSupersessionPolicy supersession_policy =
+        CommandSupersessionPolicy::LatestDuePerKey;
+    CommandEffectivePoint effective_point =
+        CommandEffectivePoint::TransactionStart;
+    CommandCutoffPolicy cutoff_policy =
+        CommandCutoffPolicy::LedgerSequenceAtTransactionStart;
+    std::uint32_t event_delivery_handle = 0U;
+};
+
+struct PlanImageEventDelivery {
+    std::uint32_t handle = 0U;
+    std::string plan_element_id;
+    std::uint32_t producer_command_route_handle = 0U;
+    std::uint32_t producer_callsite_handle = 0U;
+    std::uint32_t consumer_callsite_handle = 0U;
+    std::string event_schema_id;
+    EventDeliveryPoint delivery = EventDeliveryPoint::LaterPhaseSameTick;
+    std::uint32_t stable_order = 0U;
 };
 
 [[nodiscard]] inline const PlanImageTransactionBranch*
@@ -603,6 +638,8 @@ struct ExecutionPlanImageData {
     std::vector<PlanImageIntegrationScope> integration_scopes;
     std::vector<PlanImageTransaction> transactions;
     PlanImageCancellationPolicy cancellation_policy;
+    std::vector<PlanImageCommandRoute> command_routes;
+    std::vector<PlanImageEventDelivery> event_deliveries;
     std::vector<PlanImageEvaluatorHistory> evaluator_histories;
     PlanImageLifecycle lifecycle;
     std::vector<PlanImageConformance> conformance;
@@ -713,6 +750,14 @@ class ExecutionPlanImage final {
     [[nodiscard]] const PlanImageCancellationPolicy& cancellation_policy()
         const noexcept {
         return data_.cancellation_policy;
+    }
+    [[nodiscard]] const std::vector<PlanImageCommandRoute>& command_routes()
+        const noexcept {
+        return data_.command_routes;
+    }
+    [[nodiscard]] const std::vector<PlanImageEventDelivery>& event_deliveries()
+        const noexcept {
+        return data_.event_deliveries;
     }
     [[nodiscard]] const std::vector<PlanImageEvaluatorHistory>& evaluator_histories() const noexcept {
         return data_.evaluator_histories;

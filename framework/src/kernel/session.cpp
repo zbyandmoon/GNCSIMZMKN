@@ -517,6 +517,10 @@ std::string_view to_string(RuntimeDiagnosticStage stage) noexcept {
     case RuntimeDiagnosticStage::ResetRequest: return "ResetRequest";
     case RuntimeDiagnosticStage::ResetState: return "ResetState";
     case RuntimeDiagnosticStage::ResetPrecommit: return "ResetPrecommit";
+    case RuntimeDiagnosticStage::CommandReduction:
+        return "CommandReduction";
+    case RuntimeDiagnosticStage::EventConsumption:
+        return "EventConsumption";
     }
     return "Lifecycle";
 }
@@ -591,6 +595,33 @@ SessionResult SessionCandidateWriterSet::write(
 bool SessionCandidateWriterSet::active() const noexcept {
     return access_ != nullptr && access_->transaction_active(generation_);
 }
+
+SessionCommandReductionContext::SessionCommandReductionContext(
+    std::uint32_t route_handle, std::uint32_t callsite_handle,
+    std::uint32_t component_handle, CommandId command_id,
+    std::uint64_t ledger_sequence, std::uint32_t decision_authority,
+    std::int64_t tick,
+    std::int64_t effective_tick,
+    std::optional<std::int64_t> expiry_tick,
+    std::string_view supersession_key, InProcessValueView payload,
+    SessionCommittedStateView committed,
+    SessionCandidateWriterSet candidates) noexcept
+    : route_handle_(route_handle), callsite_handle_(callsite_handle),
+      component_handle_(component_handle),
+      command_id_(std::move(command_id)), ledger_sequence_(ledger_sequence),
+      decision_authority_(decision_authority), tick_(tick),
+      effective_tick_(effective_tick),
+      expiry_tick_(expiry_tick), supersession_key_(supersession_key),
+      payload_(payload), committed_(committed), candidates_(candidates) {}
+
+SessionEventConsumptionContext::SessionEventConsumptionContext(
+    std::uint32_t delivery_handle, std::uint32_t callsite_handle,
+    std::uint32_t component_handle, EventId event_id,
+    CommandId command_id, std::int64_t tick,
+    InProcessValueView payload) noexcept
+    : delivery_handle_(delivery_handle), callsite_handle_(callsite_handle),
+      component_handle_(component_handle), event_id_(event_id),
+      command_id_(std::move(command_id)), tick_(tick), payload_(payload) {}
 
 SessionOutputWriterSet::SessionOutputWriterSet(
     SessionFrameAccess* access, std::uint32_t callsite_handle,
@@ -883,6 +914,47 @@ struct Session::Impl final : SessionObjectAccess,
         bool open = false;
     };
 
+    struct CommandLedgerRecord {
+        CommandRequest request;
+        CommandSubmissionOutcome outcome;
+    };
+
+    struct QueuedCommand {
+        CommandRequest request;
+        std::uint64_t ledger_sequence = 0U;
+        bool consumed = false;
+    };
+
+    struct CommandTransactionStage {
+        bool active = false;
+        std::uint64_t cutoff_ledger_sequence = 0U;
+        std::vector<QueuedCommand> queue;
+        std::vector<std::size_t> selected_queue_indices;
+        std::vector<std::size_t> consumed_queue_indices;
+        std::vector<CommandApplicationReceipt> application_receipts;
+        std::vector<CommittedEvent> committed_events;
+        std::vector<CommandMaintenanceReceipt> maintenance_receipts;
+        std::size_t base_application_receipt_count = 0U;
+        std::size_t base_event_count = 0U;
+        std::size_t base_maintenance_receipt_count = 0U;
+        std::uint64_t ledger_sequence_after_commit = 0U;
+
+        void clear() noexcept {
+            active = false;
+            cutoff_ledger_sequence = 0U;
+            queue.clear();
+            selected_queue_indices.clear();
+            consumed_queue_indices.clear();
+            application_receipts.clear();
+            committed_events.clear();
+            maintenance_receipts.clear();
+            base_application_receipt_count = 0U;
+            base_event_count = 0U;
+            base_maintenance_receipt_count = 0U;
+            ledger_sequence_after_commit = 0U;
+        }
+    };
+
     std::shared_ptr<const contracts::ExecutionPlanImage> image;
     std::shared_ptr<const SessionMaterializationProvider> provider;
     SessionState state = SessionState::Created;
@@ -921,6 +993,14 @@ struct Session::Impl final : SessionObjectAccess,
     std::int64_t committed_tick = 0;
     std::uint64_t committed_step_count = 0U;
     std::uint32_t active_transaction_handle = 0U;
+    std::uint64_t command_ledger_sequence = 0U;
+    std::vector<CommandLedgerRecord> command_ledger;
+    std::vector<CommandSubmissionOutcome> command_submission_outcomes;
+    std::vector<QueuedCommand> command_queue;
+    std::vector<CommandMaintenanceReceipt> command_maintenance_receipts;
+    std::vector<CommandApplicationReceipt> command_application_receipts;
+    std::vector<CommittedEvent> committed_events;
+    CommandTransactionStage command_stage;
 
     // request_cancel() only touches this synchronized mirror. Every other
     // mutable Session field remains owned by the execution thread.
@@ -1359,6 +1439,51 @@ struct Session::Impl final : SessionObjectAccess,
     [[nodiscard]] const contracts::PlanImageEntry* entry_for_callsite(
         const contracts::PlanImageCallsite& callsite) const noexcept {
         return find_handle(image->entries(), callsite.entry_handle);
+    }
+
+    [[nodiscard]] const contracts::PlanImageCommandRoute* command_route(
+        std::uint32_t handle) const noexcept {
+        return find_handle(image->command_routes(), handle);
+    }
+
+    [[nodiscard]] const contracts::PlanImageEventDelivery* event_delivery(
+        std::uint32_t handle) const noexcept {
+        return find_handle(image->event_deliveries(), handle);
+    }
+
+    [[nodiscard]] static bool same_command_request(
+        const CommandRequest& lhs,
+        const CommandRequest& rhs) noexcept {
+        return lhs.command_id == rhs.command_id &&
+               lhs.run_id == rhs.run_id &&
+               lhs.route_handle == rhs.route_handle &&
+               lhs.target_runtime_component_handle ==
+                   rhs.target_runtime_component_handle &&
+               lhs.payload_schema_id == rhs.payload_schema_id &&
+               lhs.decision_authority == rhs.decision_authority &&
+               lhs.effective_tick == rhs.effective_tick &&
+               lhs.expiry_tick == rhs.expiry_tick &&
+               lhs.supersession_key == rhs.supersession_key &&
+               lhs.payload.address() == rhs.payload.address() &&
+               lhs.payload.type_identity() ==
+                   rhs.payload.type_identity();
+    }
+
+    [[nodiscard]] std::size_t pending_command_count() const noexcept {
+        return static_cast<std::size_t>(std::count_if(
+            command_queue.begin(), command_queue.end(),
+            [](const auto& command) { return !command.consumed; }));
+    }
+
+    void clear_command_control() noexcept {
+        command_stage.clear();
+        command_ledger.clear();
+        command_submission_outcomes.clear();
+        command_queue.clear();
+        command_maintenance_receipts.clear();
+        command_application_receipts.clear();
+        committed_events.clear();
+        command_ledger_sequence = 0U;
     }
 
     [[nodiscard]] Arena* arena(std::uint32_t handle) noexcept {
@@ -2039,11 +2164,17 @@ struct Session::Impl final : SessionObjectAccess,
                            "transaction candidates or held slots are invalid");
         }
         std::vector<std::uint32_t> candidate_slots;
+        std::vector<std::uint32_t> interval_candidate_slots;
         std::vector<std::uint32_t> candidate_tokens;
         candidate_slots.reserve(transaction.candidates.size());
         candidate_tokens.reserve(transaction.candidates.size());
         for (const auto& candidate : transaction.candidates) {
             candidate_slots.push_back(candidate.candidate_state_slot_handle);
+            if (candidate.commit_class !=
+                contracts::StateCommitClass::InstantPatch) {
+                interval_candidate_slots.push_back(
+                    candidate.candidate_state_slot_handle);
+            }
             candidate_tokens.push_back(candidate.writer_token_handle);
             const auto* block = state_for_slot(
                 candidate.candidate_state_slot_handle);
@@ -2075,7 +2206,11 @@ struct Session::Impl final : SessionObjectAccess,
                     callsite != nullptr && component != nullptr &&
                     entry != nullptr &&
                     entry->kind ==
-                        contracts::PlanImageEntryKind::IntervalEvolution &&
+                        (candidate.commit_class ==
+                                 contracts::StateCommitClass::InstantPatch
+                             ? contracts::PlanImageEntryKind::CommandReduction
+                             : contracts::PlanImageEntryKind::
+                                   IntervalEvolution) &&
                     component->occurrence_handle ==
                         candidate.owner_occurrence_handle &&
                     token != nullptr &&
@@ -2091,6 +2226,10 @@ struct Session::Impl final : SessionObjectAccess,
                 token->slot_handle !=
                     candidate.candidate_state_slot_handle ||
                 token->owner_handle != candidate.producer_handle ||
+                (candidate.commit_class ==
+                         contracts::StateCommitClass::InstantPatch
+                     ? block->evolution != "InstantPatch"
+                     : block->evolution == "InstantPatch") ||
                 !producer_valid) {
                 return failure(SessionError::InvalidImageStructure,
                                candidate.candidate_state_slot_handle,
@@ -2126,7 +2265,7 @@ struct Session::Impl final : SessionObjectAccess,
                 contracts::HeldIntervalEndPolicy::ReleaseAfterModelCommit ||
             !branch->observation_seal ||
             !same_handle_set(branch->committed_candidate_slot_handles,
-                             candidate_slots) ||
+                              interval_candidate_slots) ||
             !same_handle_set(branch->retained_held_slot_handles,
                              transaction.held_slot_handles) ||
             !branch->discarded_candidate_slot_handles.empty() ||
@@ -2164,11 +2303,12 @@ struct Session::Impl final : SessionObjectAccess,
             transaction, contracts::TransactionBranch::Terminal);
         if (terminal == nullptr || !terminal->committed_state_preserved ||
             !terminal->model_commit || !terminal->observation_seal ||
-            !terminal->result_seal_after_observation ||
+            terminal->result_seal_after_observation !=
+                !terminal_outputs.empty() ||
             terminal->epoch_delta != 1 || terminal->tick_delta != 0 ||
             !terminal->committed_candidate_slot_handles.empty() ||
             !same_handle_set(terminal->discarded_candidate_slot_handles,
-                             candidate_slots) ||
+                              interval_candidate_slots) ||
             !terminal->retained_held_slot_handles.empty() ||
             !same_handle_set(terminal->discarded_held_slot_handles,
                              transaction.held_slot_handles) ||
@@ -2209,6 +2349,210 @@ struct Session::Impl final : SessionObjectAccess,
             return failure(SessionError::InvalidImageStructure,
                            transaction.handle,
                            "Failure transaction branch is not atomic");
+        }
+        return {};
+    }
+
+    [[nodiscard]] SessionResult validate_command_event_routes() noexcept {
+        const auto& routes = image->command_routes();
+        const auto& deliveries = image->event_deliveries();
+        if (routes.empty() && deliveries.empty()) {
+            return {};
+        }
+        if (routes.empty() || routes.size() != deliveries.size()) {
+            return failure(
+                SessionError::InvalidImageStructure, 0U,
+                "command route and event delivery cardinality is invalid");
+        }
+        std::vector<std::uint32_t> targeted_components;
+        targeted_components.reserve(routes.size());
+        for (const auto& route : routes) {
+            const auto* transaction = find_handle(
+                image->transactions(), route.transaction_handle);
+            const auto* component = find_handle(
+                image->runtime_components(),
+                route.target_runtime_component_handle);
+            const auto* occurrence = find_handle(
+                image->occurrences(),
+                route.target_owner_occurrence_handle);
+            const auto* state = find_handle(
+                image->state_blocks(), route.target_state_block_handle);
+            const auto* reducer = find_handle(
+                image->callsites(), route.reducer_callsite_handle);
+            const auto* reducer_entry = reducer == nullptr
+                                            ? nullptr
+                                            : entry_for_callsite(*reducer);
+            const auto* delivery = find_handle(
+                deliveries, route.event_delivery_handle);
+            const auto* writer = reducer == nullptr ||
+                                         reducer->output_writer_token_handles
+                                                 .size() != 1U
+                                     ? nullptr
+                                     : find_handle(
+                                           image->writer_tokens(),
+                                           reducer->output_writer_token_handles
+                                               .front());
+            const auto candidate_count =
+                transaction == nullptr || state == nullptr
+                    ? 0U
+                    : static_cast<std::size_t>(std::count_if(
+                          transaction->candidates.begin(),
+                          transaction->candidates.end(),
+                          [&](const auto& candidate) {
+                              return candidate.owner_occurrence_handle ==
+                                         route.target_owner_occurrence_handle &&
+                                     candidate.candidate_state_slot_handle ==
+                                         state->candidate_slot_handle &&
+                                     candidate.producer_kind ==
+                                         "RuntimeCallsite" &&
+                                     candidate.producer_handle ==
+                                         route.reducer_callsite_handle &&
+                                     candidate.writer_token_handle ==
+                                         (writer == nullptr
+                                              ? 0U
+                                              : writer->handle) &&
+                                     candidate.commit_class ==
+                                         contracts::StateCommitClass::
+                                             InstantPatch;
+                          }));
+            const auto* reducer_adapter =
+                provider->command_reducer(route.handle);
+            const auto reducer_identity =
+                reducer_adapter == nullptr
+                    ? SessionCommandReducerIdentity{}
+                    : reducer_adapter->identity();
+            const bool valid =
+                !route.plan_element_id.empty() && transaction != nullptr &&
+                component != nullptr && occurrence != nullptr &&
+                state != nullptr && reducer != nullptr &&
+                reducer_entry != nullptr && delivery != nullptr &&
+                writer != nullptr && candidate_count == 1U &&
+                component->profile == "ModeOwner" &&
+                component->occurrence_handle == occurrence->handle &&
+                state->owner_occurrence_handle == occurrence->handle &&
+                state->evolution == "InstantPatch" &&
+                reducer->occurrence_handle == occurrence->handle &&
+                reducer->obligation == "CommandReduction" &&
+                reducer_entry->kind ==
+                    contracts::PlanImageEntryKind::CommandReduction &&
+                reducer->request_contract_id == route.payload_schema_id &&
+                !route.payload_schema_id.empty() &&
+                reducer->input_slot_handles ==
+                    std::vector<std::uint32_t>{
+                        state->committed_slot_handle} &&
+                reducer->output_slot_handles ==
+                    std::vector<std::uint32_t>{
+                        state->candidate_slot_handle} &&
+                writer->slot_handle == state->candidate_slot_handle &&
+                writer->owner_kind ==
+                    contracts::PlanImageWriterOwnerKind::RuntimeCallsite &&
+                writer->owner_handle == route.reducer_callsite_handle &&
+                route.decision_authority != 0U &&
+                route.queue_capacity != 0U &&
+                route.queue_capacity <= 1024U &&
+                route.queue_policy ==
+                    contracts::CommandQueuePolicy::RejectNewest &&
+                route.supersession_policy ==
+                    contracts::CommandSupersessionPolicy::LatestDuePerKey &&
+                route.effective_point ==
+                    contracts::CommandEffectivePoint::TransactionStart &&
+                route.cutoff_policy ==
+                    contracts::CommandCutoffPolicy::
+                        LedgerSequenceAtTransactionStart &&
+                std::count(component->transaction_handles.begin(),
+                           component->transaction_handles.end(),
+                           transaction->handle) == 1 &&
+                reducer_adapter != nullptr &&
+                reducer_identity.route_handle == route.handle &&
+                reducer_identity.callsite_handle == reducer->handle &&
+                reducer_identity.runtime_component_handle ==
+                    component->handle &&
+                reducer_identity.linked_entry_handle ==
+                    reducer->entry_handle &&
+                reducer_identity.payload_type_identity != nullptr &&
+                reducer_identity.event_type_identity != nullptr;
+            if (!valid) {
+                return failure(
+                    SessionError::InvalidImageStructure, route.handle,
+                    "command route, reducer, target, authority, or typed adapter is invalid");
+            }
+            targeted_components.push_back(component->handle);
+        }
+        if (!unique_nonzero_handles(targeted_components)) {
+            return failure(
+                SessionError::InvalidImageStructure, 0U,
+                "command routes assign multiple reducers to one target owner");
+        }
+
+        for (std::size_t index = 0U; index < deliveries.size(); ++index) {
+            const auto& delivery = deliveries[index];
+            const auto* route = find_handle(
+                routes, delivery.producer_command_route_handle);
+            const auto* producer = find_handle(
+                image->callsites(), delivery.producer_callsite_handle);
+            const auto* consumer = find_handle(
+                image->callsites(), delivery.consumer_callsite_handle);
+            const auto* producer_entry = producer == nullptr
+                                             ? nullptr
+                                             : entry_for_callsite(*producer);
+            const auto* consumer_entry = consumer == nullptr
+                                             ? nullptr
+                                             : entry_for_callsite(*consumer);
+            const auto* consumer_component =
+                consumer == nullptr
+                    ? nullptr
+                    : component_for_callsite(consumer->handle);
+            const auto* reducer_adapter =
+                route == nullptr
+                    ? nullptr
+                    : provider->command_reducer(route->handle);
+            const auto* consumer_adapter =
+                provider->event_consumer(delivery.handle);
+            const auto reducer_identity =
+                reducer_adapter == nullptr
+                    ? SessionCommandReducerIdentity{}
+                    : reducer_adapter->identity();
+            const auto consumer_identity =
+                consumer_adapter == nullptr
+                    ? SessionEventConsumerIdentity{}
+                    : consumer_adapter->identity();
+            const bool valid =
+                !delivery.plan_element_id.empty() && route != nullptr &&
+                producer != nullptr && consumer != nullptr &&
+                producer_entry != nullptr && consumer_entry != nullptr &&
+                consumer_component != nullptr &&
+                route->reducer_callsite_handle == producer->handle &&
+                route->event_delivery_handle == delivery.handle &&
+                producer_entry->kind ==
+                    contracts::PlanImageEntryKind::CommandReduction &&
+                consumer_entry->kind ==
+                    contracts::PlanImageEntryKind::EventConsumption &&
+                producer->obligation == "CommandReduction" &&
+                consumer->obligation == "EventConsumption" &&
+                producer->result_contract_id == delivery.event_schema_id &&
+                consumer->request_contract_id == delivery.event_schema_id &&
+                !delivery.event_schema_id.empty() &&
+                consumer->input_slot_handles.empty() &&
+                consumer->output_slot_handles.empty() &&
+                delivery.delivery ==
+                    contracts::EventDeliveryPoint::LaterPhaseSameTick &&
+                delivery.stable_order == index &&
+                reducer_adapter != nullptr && consumer_adapter != nullptr &&
+                reducer_identity.event_type_identity != nullptr &&
+                reducer_identity.event_type_identity ==
+                    consumer_identity.event_type_identity &&
+                consumer_identity.output_type_identity != nullptr &&
+                consumer_identity.delivery_handle == delivery.handle &&
+                consumer_identity.callsite_handle == consumer->handle &&
+                consumer_identity.runtime_component_handle ==
+                    consumer_component->handle &&
+                consumer_identity.linked_entry_handle ==
+                    consumer->entry_handle;
+            if (!valid) {
+                return failure(
+                    SessionError::InvalidImageStructure, delivery.handle,
+                    "event delivery, later-phase consumer, or typed adapter is invalid");
+            }
         }
         return {};
     }
@@ -2565,10 +2909,12 @@ struct Session::Impl final : SessionObjectAccess,
             !unique_nonzero_handles(image->invocations()) ||
             !unique_nonzero_handles(image->regions()) ||
             !unique_nonzero_handles(image->dag_nodes()) ||
-            !unique_nonzero_handles(image->integration_scopes()) ||
-            !unique_nonzero_handles(image->transactions()) ||
-            !unique_nonzero_handles(
-                image->cancellation_policy().safe_points) ||
+             !unique_nonzero_handles(image->integration_scopes()) ||
+             !unique_nonzero_handles(image->transactions()) ||
+             !unique_nonzero_handles(image->command_routes()) ||
+             !unique_nonzero_handles(image->event_deliveries()) ||
+             !unique_nonzero_handles(
+                 image->cancellation_policy().safe_points) ||
             !unique_nonzero_handles(image->evaluator_histories())) {
             return failure(SessionError::InvalidImageHandle, 0U,
                            "Image contains a duplicate or zero handle");
@@ -2578,6 +2924,7 @@ struct Session::Impl final : SessionObjectAccess,
         if (result) result = validate_states();
         if (result) result = validate_histories();
         if (result) result = validate_transactions();
+        if (result) result = validate_command_event_routes();
         if (result) result = validate_cancellation_policy();
         if (result) result = validate_materializers();
         if (result) result = build_opening_schedule();
@@ -2613,6 +2960,17 @@ struct Session::Impl final : SessionObjectAccess,
         step_summary.candidates.reserve(image->state_blocks().size());
         step_summary.histories.reserve(image->evaluator_histories().size());
         step_summary.seals.reserve(image->slots().size());
+        std::size_t command_capacity = 0U;
+        for (const auto& route : image->command_routes()) {
+            command_capacity += route.queue_capacity;
+        }
+        command_queue.reserve(command_capacity);
+        command_ledger.reserve(command_capacity);
+        command_submission_outcomes.reserve(command_capacity);
+        command_stage.selected_queue_indices.reserve(
+            image->command_routes().size());
+        command_stage.consumed_queue_indices.reserve(
+            image->command_routes().size());
     }
 
     [[nodiscard]] SessionResult allocate_arenas() noexcept {
@@ -3001,6 +3359,7 @@ struct Session::Impl final : SessionObjectAccess,
         staged_sealed_boundary.committed_epoch = 0U;
         staged_sealed_boundary.committed_tick = image->clock().initial_tick;
         active_transaction_handle = 0U;
+        command_stage.clear();
     }
 
     [[nodiscard]] SessionResult prepare_evaluator_histories() {
@@ -3067,6 +3426,337 @@ struct Session::Impl final : SessionObjectAccess,
                 return failure(SessionError::CandidateRearmFailed,
                                member.candidate_state_slot_handle,
                                "candidate rearm from committed state failed");
+            }
+        }
+        return {};
+    }
+
+    [[nodiscard]] SessionResult prepare_command_transaction(
+        const contracts::PlanImageTransaction& transaction,
+        bool terminal) {
+        auto next_queue = command_queue;
+        auto next_maintenance = command_maintenance_receipts;
+        auto next_ledger_sequence = command_ledger_sequence;
+        const auto cutoff = command_ledger_sequence;
+
+        const auto belongs_to_transaction = [&](const QueuedCommand& value) {
+            const auto* route = command_route(value.request.route_handle);
+            return route != nullptr &&
+                   route->transaction_handle == transaction.handle;
+        };
+        const auto eligible = [&](const QueuedCommand& value) {
+            return !value.consumed && value.ledger_sequence <= cutoff &&
+                   belongs_to_transaction(value);
+        };
+        const auto due = [&](const QueuedCommand& value) {
+            return eligible(value) &&
+                   value.request.effective_tick <= committed_tick &&
+                   (!value.request.expiry_tick.has_value() ||
+                    *value.request.expiry_tick >= committed_tick);
+        };
+        const auto append_maintenance =
+            [&](std::size_t index,
+                CommandMaintenanceDisposition disposition) {
+                auto& value = next_queue[index];
+                ++next_ledger_sequence;
+                next_maintenance.push_back(
+                    {disposition, value.request.command_id,
+                     value.request.run_id, value.request.route_handle,
+                     value.ledger_sequence, next_ledger_sequence,
+                     committed_epoch, committed_tick});
+                value.consumed = true;
+            };
+
+        for (std::size_t index = 0U; index < next_queue.size(); ++index) {
+            const auto& value = next_queue[index];
+            if (eligible(value) && value.request.expiry_tick.has_value() &&
+                *value.request.expiry_tick < committed_tick) {
+                append_maintenance(
+                    index, CommandMaintenanceDisposition::Expired);
+            }
+        }
+        for (std::size_t index = 0U; index < next_queue.size(); ++index) {
+            if (!due(next_queue[index])) {
+                continue;
+            }
+            bool newer_due_same_key = false;
+            for (std::size_t other = 0U; other < next_queue.size(); ++other) {
+                if (other == index || !due(next_queue[other])) {
+                    continue;
+                }
+                newer_due_same_key =
+                    next_queue[other].request.route_handle ==
+                        next_queue[index].request.route_handle &&
+                    next_queue[other].request.supersession_key ==
+                        next_queue[index].request.supersession_key &&
+                    next_queue[other].ledger_sequence >
+                        next_queue[index].ledger_sequence;
+                if (newer_due_same_key) {
+                    break;
+                }
+            }
+            if (newer_due_same_key) {
+                append_maintenance(
+                    index, CommandMaintenanceDisposition::Superseded);
+            }
+        }
+
+        CommandTransactionStage next_stage;
+        next_stage.active = true;
+        next_stage.cutoff_ledger_sequence = cutoff;
+        next_stage.application_receipts = command_application_receipts;
+        next_stage.committed_events = committed_events;
+        next_stage.maintenance_receipts = next_maintenance;
+        next_stage.base_application_receipt_count =
+            command_application_receipts.size();
+        next_stage.base_event_count = committed_events.size();
+        next_stage.base_maintenance_receipt_count =
+            command_maintenance_receipts.size();
+        next_stage.ledger_sequence_after_commit = next_ledger_sequence;
+        next_stage.selected_queue_indices.reserve(
+            image->command_routes().size());
+        next_stage.consumed_queue_indices.reserve(
+            image->command_routes().size());
+
+        for (const auto& route : image->command_routes()) {
+            if (route.transaction_handle != transaction.handle) {
+                continue;
+            }
+            if (terminal) {
+                for (std::size_t index = 0U; index < next_queue.size();
+                     ++index) {
+                    if (next_queue[index].consumed ||
+                        next_queue[index].request.route_handle !=
+                            route.handle) {
+                        continue;
+                    }
+                    append_maintenance(
+                        index, CommandMaintenanceDisposition::Terminated);
+                }
+                continue;
+            }
+            std::size_t selected = next_queue.size();
+            for (std::size_t index = 0U; index < next_queue.size(); ++index) {
+                if (!due(next_queue[index]) ||
+                    next_queue[index].request.route_handle != route.handle) {
+                    continue;
+                }
+                if (selected == next_queue.size() ||
+                    next_queue[index].ledger_sequence <
+                        next_queue[selected].ledger_sequence) {
+                    selected = index;
+                }
+            }
+            if (selected != next_queue.size()) {
+                next_stage.selected_queue_indices.push_back(selected);
+            }
+        }
+        next_stage.maintenance_receipts = next_maintenance;
+        next_stage.ledger_sequence_after_commit = next_ledger_sequence;
+        next_stage.queue = std::move(next_queue);
+
+        command_stage = std::move(next_stage);
+        return {};
+    }
+
+    [[nodiscard]] SessionResult execute_due_commands(
+        const contracts::PlanImageTransaction& transaction,
+        const contracts::PlanImageTransactionBranch& branch,
+        bool& cancellation_observed) {
+        cancellation_observed = false;
+        for (const auto queue_index :
+             command_stage.selected_queue_indices) {
+            if (queue_index >= command_stage.queue.size() ||
+                command_stage.queue[queue_index].consumed) {
+                return failure(
+                    SessionError::InternalFailure, transaction.handle,
+                    "selected command queue entry is unavailable");
+            }
+            const auto& queued = command_stage.queue[queue_index];
+            const auto* route = command_route(
+                queued.request.route_handle);
+            const auto* delivery =
+                route == nullptr
+                    ? nullptr
+                    : event_delivery(route->event_delivery_handle);
+            const auto* reducer_callsite =
+                route == nullptr
+                    ? nullptr
+                    : find_handle(image->callsites(),
+                                  route->reducer_callsite_handle);
+            const auto* component =
+                route == nullptr
+                    ? nullptr
+                    : find_handle(image->runtime_components(),
+                                  route->target_runtime_component_handle);
+            const auto* state =
+                route == nullptr
+                    ? nullptr
+                    : find_handle(image->state_blocks(),
+                                  route->target_state_block_handle);
+            const auto* reducer =
+                route == nullptr
+                    ? nullptr
+                    : provider->command_reducer(route->handle);
+            const auto runtime =
+                component == nullptr ? SessionObjectIdentityView{}
+                                     : runtime_view(component->handle);
+            if (route == nullptr || delivery == nullptr ||
+                reducer_callsite == nullptr || component == nullptr ||
+                state == nullptr || reducer == nullptr || !runtime ||
+                reducer_callsite->output_writer_token_handles.size() != 1U) {
+                return failure(
+                    SessionError::MissingMaterializer,
+                    queued.request.route_handle,
+                    "command reducer execution dependency is missing");
+            }
+
+            SessionCommandReductionContext context(
+                route->handle, reducer_callsite->handle,
+                component->handle, queued.request.command_id,
+                queued.ledger_sequence, queued.request.decision_authority,
+                committed_tick,
+                queued.request.effective_tick,
+                queued.request.expiry_tick,
+                queued.request.supersession_key,
+                queued.request.payload.view(),
+                SessionCommittedStateView(
+                    this, SessionStateAuthorityKind::RuntimeComponent,
+                    component->handle),
+                SessionCandidateWriterSet(
+                    this,
+                    SessionCandidateProducerKind::RuntimeCallsite,
+                    reducer_callsite->handle, cycle_frame.generation,
+                    transaction.handle));
+            SessionCommandReductionResult reduction;
+            current_diagnostic_stage =
+                RuntimeDiagnosticStage::CommandReduction;
+            auto result = reducer->reduce(context, reduction);
+            if (!result) {
+                return result;
+            }
+            step_summary.executed_callsite_handles.push_back(
+                reducer_callsite->handle);
+            auto* candidate = candidate_for_slot(
+                state->candidate_slot_handle);
+            const bool candidate_present =
+                candidate != nullptr && candidate->candidate_present;
+            const auto reducer_identity = reducer->identity();
+            if (reduction.decision ==
+                CommandApplicationDecision::Applied) {
+                if (!candidate_present || !reduction.event_payload ||
+                    reduction.event_payload.type_identity() !=
+                        reducer_identity.event_type_identity) {
+                    return failure(
+                        SessionError::TransactionPrecommitFailed,
+                        route->handle,
+                        "applied command lacks one complete state replacement and typed event");
+                }
+            } else if (candidate_present || reduction.event_payload) {
+                return failure(
+                    SessionError::TransactionPrecommitFailed,
+                    route->handle,
+                    "rejected or deferred command produced staged application data");
+            }
+
+            CommandApplicationReceipt receipt;
+            receipt.decision = reduction.decision;
+            receipt.command_id = queued.request.command_id;
+            receipt.run_id = queued.request.run_id;
+            receipt.route_handle = route->handle;
+            receipt.target_runtime_component_handle = component->handle;
+            receipt.command_ledger_sequence = queued.ledger_sequence;
+            receipt.application_code = reduction.application_code;
+            receipt.base_epoch = committed_epoch;
+            receipt.committed_epoch =
+                committed_epoch +
+                static_cast<std::uint64_t>(branch.epoch_delta);
+            receipt.tick = committed_tick;
+            command_stage.application_receipts.push_back(receipt);
+
+            if (reduction.decision ==
+                CommandApplicationDecision::Applied) {
+                const EventId event_id{
+                    committed_run_sequence, committed_tick,
+                    delivery->handle, queued.ledger_sequence};
+                const auto* consumer_callsite = find_handle(
+                    image->callsites(),
+                    delivery->consumer_callsite_handle);
+                const auto* consumer_component =
+                    consumer_callsite == nullptr
+                        ? nullptr
+                        : component_for_callsite(
+                              consumer_callsite->handle);
+                const auto* consumer = provider->event_consumer(
+                    delivery->handle);
+                if (consumer_callsite == nullptr ||
+                    consumer_component == nullptr || consumer == nullptr) {
+                    return failure(
+                        SessionError::MissingMaterializer,
+                        delivery->handle,
+                        "event consumer execution dependency is missing");
+                }
+                SessionEventConsumptionContext event_context(
+                    delivery->handle, consumer_callsite->handle,
+                    consumer_component->handle, event_id,
+                    queued.request.command_id, committed_tick,
+                    reduction.event_payload.view());
+                InProcessOwnedValue consumer_output;
+                current_diagnostic_stage =
+                    RuntimeDiagnosticStage::EventConsumption;
+                result = consumer->consume(event_context,
+                                           consumer_output);
+                if (!result) {
+                    return result;
+                }
+                const auto consumer_identity = consumer->identity();
+                if (!consumer_output ||
+                    consumer_output.type_identity() !=
+                        consumer_identity.output_type_identity) {
+                    return failure(
+                        SessionError::ObjectTypeMismatch,
+                        delivery->handle,
+                        "event consumer output type is invalid");
+                }
+                command_stage.committed_events.push_back(
+                    {event_id, queued.request.command_id,
+                     queued.request.run_id, route->handle,
+                     delivery->handle,
+                     committed_epoch +
+                         static_cast<std::uint64_t>(
+                             branch.epoch_delta),
+                     delivery->event_schema_id,
+                     reduction.event_payload,
+                     std::move(consumer_output)});
+                command_stage.consumed_queue_indices.push_back(
+                    queue_index);
+                step_summary.candidate_slot_handles.push_back(
+                    state->candidate_slot_handle);
+                step_summary.executed_callsite_handles.push_back(
+                    consumer_callsite->handle);
+            } else if (reduction.decision ==
+                       CommandApplicationDecision::Rejected) {
+                command_stage.consumed_queue_indices.push_back(
+                    queue_index);
+            } else if (branch.branch ==
+                       contracts::TransactionBranch::Terminal) {
+                ++command_stage.ledger_sequence_after_commit;
+                command_stage.maintenance_receipts.push_back(
+                    {CommandMaintenanceDisposition::Terminated,
+                     queued.request.command_id, queued.request.run_id,
+                     route->handle, queued.ledger_sequence,
+                     command_stage.ledger_sequence_after_commit,
+                     committed_epoch, committed_tick});
+                command_stage.consumed_queue_indices.push_back(
+                    queue_index);
+            }
+            if (cancellation_requested_at(
+                    transaction.handle,
+                    contracts::PlanImageCancellationSafePointKind::
+                        AfterCandidateProducer,
+                    reducer_callsite->handle)) {
+                cancellation_observed = true;
+                return {};
             }
         }
         return {};
@@ -3291,9 +3981,163 @@ struct Session::Impl final : SessionObjectAccess,
         return {};
     }
 
+    [[nodiscard]] SessionResult validate_command_precommit(
+        const contracts::PlanImageTransaction& transaction,
+        const contracts::PlanImageTransactionBranch& branch) noexcept {
+        if (!command_stage.active ||
+            command_stage.base_application_receipt_count !=
+                command_application_receipts.size() ||
+            command_stage.base_event_count != committed_events.size() ||
+            command_stage.base_maintenance_receipt_count !=
+                command_maintenance_receipts.size() ||
+            command_stage.application_receipts.size() !=
+                command_stage.base_application_receipt_count +
+                    command_stage.selected_queue_indices.size() ||
+            command_stage.ledger_sequence_after_commit <
+                command_ledger_sequence ||
+            command_stage.maintenance_receipts.size() <
+                command_stage.base_maintenance_receipt_count ||
+            command_stage.ledger_sequence_after_commit -
+                    command_ledger_sequence !=
+                command_stage.maintenance_receipts.size() -
+                    command_stage.base_maintenance_receipt_count) {
+            return failure(
+                SessionError::TransactionPrecommitFailed,
+                transaction.handle,
+                "command receipt staging is incomplete at precommit");
+        }
+        auto selected_indices = command_stage.selected_queue_indices;
+        std::sort(selected_indices.begin(), selected_indices.end());
+        if (std::adjacent_find(selected_indices.begin(),
+                               selected_indices.end()) !=
+            selected_indices.end()) {
+            return failure(
+                SessionError::TransactionPrecommitFailed,
+                transaction.handle,
+                "selected command queue membership is not canonical");
+        }
+        std::size_t applied_count = 0U;
+        std::size_t expected_consumed = 0U;
+        for (std::size_t offset = 0U;
+             offset < command_stage.selected_queue_indices.size();
+             ++offset) {
+            const auto queue_index =
+                command_stage.selected_queue_indices[offset];
+            if (queue_index >= command_stage.queue.size()) {
+                return failure(
+                    SessionError::TransactionPrecommitFailed,
+                    transaction.handle,
+                    "selected command index is outside the queue");
+            }
+            const auto& queued = command_stage.queue[queue_index];
+            const auto& receipt = command_stage.application_receipts[
+                command_stage.base_application_receipt_count + offset];
+            const auto* route = command_route(
+                queued.request.route_handle);
+            const bool receipt_matches =
+                route != nullptr &&
+                route->transaction_handle == transaction.handle &&
+                !queued.consumed &&
+                queued.ledger_sequence <=
+                    command_stage.cutoff_ledger_sequence &&
+                queued.request.effective_tick <= committed_tick &&
+                (!queued.request.expiry_tick.has_value() ||
+                 *queued.request.expiry_tick >= committed_tick) &&
+                receipt.command_id == queued.request.command_id &&
+                receipt.run_id == queued.request.run_id &&
+                receipt.route_handle == queued.request.route_handle &&
+                receipt.target_runtime_component_handle ==
+                    route->target_runtime_component_handle &&
+                receipt.command_ledger_sequence ==
+                    queued.ledger_sequence &&
+                receipt.base_epoch == committed_epoch &&
+                receipt.committed_epoch ==
+                    committed_epoch +
+                        static_cast<std::uint64_t>(
+                            branch.epoch_delta) &&
+                receipt.tick == committed_tick;
+            if (!receipt_matches) {
+                return failure(
+                    SessionError::TransactionPrecommitFailed,
+                    queued.request.route_handle,
+                    "staged application receipt does not match its due command");
+            }
+            if (receipt.decision ==
+                CommandApplicationDecision::Applied) {
+                ++applied_count;
+                ++expected_consumed;
+                const auto* delivery = event_delivery(
+                    route->event_delivery_handle);
+                const auto event_count = static_cast<std::size_t>(
+                    std::count_if(
+                        command_stage.committed_events.begin() +
+                            static_cast<std::ptrdiff_t>(
+                                command_stage.base_event_count),
+                        command_stage.committed_events.end(),
+                        [&](const auto& event) {
+                            return delivery != nullptr &&
+                                   event.command_id ==
+                                       queued.request.command_id &&
+                                   event.run_id == queued.request.run_id &&
+                                   event.route_handle == route->handle &&
+                                   event.delivery_handle ==
+                                       delivery->handle &&
+                                   event.committed_epoch ==
+                                       receipt.committed_epoch &&
+                                   event.event_id.run_sequence ==
+                                       committed_run_sequence &&
+                                   event.event_id.tick == committed_tick &&
+                                   event.event_id.delivery_handle ==
+                                       delivery->handle &&
+                                   event.event_id
+                                           .command_ledger_sequence ==
+                                       queued.ledger_sequence &&
+                                   event.payload &&
+                                   event.consumer_output;
+                        }));
+                if (event_count != 1U) {
+                    return failure(
+                        SessionError::TransactionPrecommitFailed,
+                        route->handle,
+                        "applied command lacks one staged consumed event");
+                }
+            } else if (receipt.decision ==
+                       CommandApplicationDecision::Rejected) {
+                ++expected_consumed;
+            } else if (branch.branch ==
+                       contracts::TransactionBranch::Terminal) {
+                ++expected_consumed;
+            }
+        }
+        if (command_stage.committed_events.size() !=
+                command_stage.base_event_count + applied_count ||
+            command_stage.consumed_queue_indices.size() !=
+                expected_consumed) {
+            return failure(
+                SessionError::TransactionPrecommitFailed,
+                transaction.handle,
+                "command event or queue-consumption staging is incomplete");
+        }
+        auto consumed = command_stage.consumed_queue_indices;
+        std::sort(consumed.begin(), consumed.end());
+        if (std::adjacent_find(consumed.begin(), consumed.end()) !=
+            consumed.end()) {
+            return failure(
+                SessionError::TransactionPrecommitFailed,
+                transaction.handle,
+                "command queue consumption is duplicated");
+        }
+        return {};
+    }
+
     [[nodiscard]] SessionResult validate_precommit(
         const contracts::PlanImageTransaction& transaction,
         const contracts::PlanImageTransactionBranch& branch) {
+        auto command_result = validate_command_precommit(
+            transaction, branch);
+        if (!command_result) {
+            return command_result;
+        }
         if (!step_summary.history_staged ||
             staged_evaluator_histories.size() !=
                 evaluator_histories.size()) {
@@ -3342,7 +4186,19 @@ struct Session::Impl final : SessionObjectAccess,
                            transaction.handle,
                            "observation or result seal is incomplete");
         }
-        if (!same_handle_set(branch.committed_candidate_slot_handles,
+        auto expected_candidate_slots =
+            branch.committed_candidate_slot_handles;
+        for (const auto& member : transaction.candidates) {
+            const auto* candidate = candidate_for_slot(
+                member.candidate_state_slot_handle);
+            if (member.commit_class ==
+                    contracts::StateCommitClass::InstantPatch &&
+                candidate != nullptr && candidate->candidate_present) {
+                expected_candidate_slots.push_back(
+                    member.candidate_state_slot_handle);
+            }
+        }
+        if (!same_handle_set(expected_candidate_slots,
                              step_summary.candidate_slot_handles)) {
             return failure(SessionError::TransactionPrecommitFailed,
                            transaction.handle,
@@ -3353,10 +4209,10 @@ struct Session::Impl final : SessionObjectAccess,
             auto* candidate = candidate_for_slot(
                 member.candidate_state_slot_handle);
             const bool should_commit = std::find(
-                branch.committed_candidate_slot_handles.begin(),
-                branch.committed_candidate_slot_handles.end(),
+                expected_candidate_slots.begin(),
+                expected_candidate_slots.end(),
                 member.candidate_state_slot_handle) !=
-                branch.committed_candidate_slot_handles.end();
+                expected_candidate_slots.end();
             const bool valid =
                 candidate != nullptr && candidate->materializer != nullptr &&
                 candidate->materializer->operations().validate(
@@ -3415,12 +4271,24 @@ struct Session::Impl final : SessionObjectAccess,
     void commit_transaction_noexcept(
         const contracts::PlanImageTransactionBranch& branch) noexcept {
         for (const auto slot_handle :
-             branch.committed_candidate_slot_handles) {
+             step_summary.candidate_slot_handles) {
             auto* candidate = candidate_for_slot(slot_handle);
             auto* committed = committed_for_block(candidate->block->handle);
             candidate->materializer->operations().nofail_swap(
                 committed->address, candidate->address);
         }
+        command_application_receipts.swap(
+            command_stage.application_receipts);
+        committed_events.swap(command_stage.committed_events);
+        command_maintenance_receipts.swap(
+            command_stage.maintenance_receipts);
+        command_ledger_sequence =
+            command_stage.ledger_sequence_after_commit;
+        for (const auto queue_index :
+             command_stage.consumed_queue_indices) {
+            command_stage.queue[queue_index].consumed = true;
+        }
+        command_queue.swap(command_stage.queue);
         // Finish the no-fail publication and its cancellation mirror under one
         // lock. A concurrent caller therefore observes either the prior
         // committed boundary or the complete new boundary, never stale
@@ -3473,17 +4341,32 @@ struct Session::Impl final : SessionObjectAccess,
         staged_sealed_boundary.outputs.clear();
         staged_sealed_boundary.committed_epoch = 0U;
         staged_sealed_boundary.committed_tick = 0;
+        command_stage.clear();
     }
 
     [[nodiscard]] StepOutcome fail_execution(
         SessionError error, std::uint32_t handle,
         std::string_view detail) noexcept {
+        const bool retryable_command_rollback =
+            command_stage.active &&
+            !command_stage.selected_queue_indices.empty();
         const auto result = failure(error, handle, detail);
         step_summary.primary_failure = result;
         const auto diagnostic = make_diagnostic(
             result, current_diagnostic_stage,
-            contracts::EvidenceValidity::Invalid);
+            retryable_command_rollback
+                ? contracts::EvidenceValidity::Unknown
+                : contracts::EvidenceValidity::Invalid);
         close_frame();
+        if (retryable_command_rollback) {
+            step_summary.committed = false;
+            step_summary.committed_epoch = committed_epoch;
+            step_summary.committed_tick = committed_tick;
+            step_outcome = make_step_outcome(
+                StepStatus::Failed, result, diagnostic);
+            publish_cancellation_lifecycle(SessionState::Initialized);
+            return step_outcome;
+        }
         state = SessionState::Failed;
         step_outcome = make_step_outcome(
             StepStatus::Failed, result, diagnostic);
@@ -3526,6 +4409,7 @@ struct Session::Impl final : SessionObjectAccess,
         if (resources_disposed) return;
         resources_disposed = true;
         close_frame();
+        clear_command_control();
         staged_sealed_boundary.outputs.clear();
         sealed_boundary.outputs.clear();
         staged_evaluator_histories.clear();
@@ -4456,6 +5340,7 @@ InitializationOutcome Session::initialize(
         impl.committed_run_sequence = 0U;
         impl.has_committed_run = true;
         impl.committed_step_count = 0U;
+        impl.clear_command_control();
         impl.state = SessionState::Initialized;
         impl.publish_cancellation_run_start(*impl.committed_run_id);
         impl.last_result = {};
@@ -4648,6 +5533,7 @@ ResetOutcome Session::reset(ResetRequest request) noexcept {
         impl.committed_run_sequence = impl.pending_reset_run_sequence;
         impl.committed_step_count = 0U;
         impl.clear_run_journals_noexcept();
+        impl.clear_command_control();
         impl.run_outcome_frozen = false;
         impl.has_committed_run = true;
         impl.state = SessionState::Initialized;
@@ -4719,6 +5605,122 @@ CancellationOutcome Session::request_cancel(
             ? CancellationDisposition::Rejected
             : CancellationDisposition::Superseded;
     return outcome;
+}
+
+CommandSubmissionOutcome Session::submit_command(
+    CommandRequest request) noexcept {
+    auto& impl = *implementation_;
+    CommandSubmissionOutcome outcome;
+    outcome.command_id = request.command_id;
+    outcome.run_id = request.run_id;
+    outcome.route_handle = request.route_handle;
+    outcome.observed_committed_epoch = impl.committed_epoch;
+    outcome.observed_committed_tick = impl.committed_tick;
+
+    if (impl.state != SessionState::Initialized ||
+        !impl.committed_run_id.has_value()) {
+        outcome.status = CommandSubmissionStatus::Rejected;
+        outcome.reason = CommandSubmissionReason::InvalidLifecycle;
+        outcome.ledger_sequence = impl.command_ledger_sequence;
+        return outcome;
+    }
+    if (impl.cycle_frame.open || impl.active_transaction_handle != 0U) {
+        outcome.status = CommandSubmissionStatus::Rejected;
+        outcome.reason = CommandSubmissionReason::TransactionOpen;
+        outcome.ledger_sequence = impl.command_ledger_sequence;
+        return outcome;
+    }
+
+    const auto exact_retry = std::find_if(
+        impl.command_ledger.begin(), impl.command_ledger.end(),
+        [&](const auto& record) {
+            return record.request.command_id == request.command_id &&
+                   Impl::same_command_request(record.request, request);
+        });
+    if (exact_retry != impl.command_ledger.end()) {
+        outcome = exact_retry->outcome;
+        outcome.duplicate_retry = true;
+        return outcome;
+    }
+    CommandSubmissionReason reason = CommandSubmissionReason::None;
+    const auto conflicting_id = std::any_of(
+        impl.command_ledger.begin(), impl.command_ledger.end(),
+        [&](const auto& record) {
+            return record.request.command_id == request.command_id;
+        });
+    const auto* route = impl.command_route(request.route_handle);
+    const auto* reducer =
+        route == nullptr
+            ? nullptr
+            : impl.provider->command_reducer(route->handle);
+    if (conflicting_id) {
+        reason = CommandSubmissionReason::CommandIdConflict;
+    } else if (request.command_id.empty()) {
+        reason = CommandSubmissionReason::EmptyCommandId;
+    } else if (request.run_id.empty() ||
+               request.run_id != *impl.committed_run_id) {
+        reason = CommandSubmissionReason::WrongRunId;
+    } else if (route == nullptr || reducer == nullptr) {
+        reason = CommandSubmissionReason::UnknownRoute;
+    } else if (request.target_runtime_component_handle !=
+               route->target_runtime_component_handle) {
+        reason = CommandSubmissionReason::TargetMismatch;
+    } else if (request.payload_schema_id != route->payload_schema_id) {
+        reason = CommandSubmissionReason::SchemaMismatch;
+    } else if (request.decision_authority !=
+               route->decision_authority) {
+        reason = CommandSubmissionReason::AuthorityMismatch;
+    } else if (request.effective_tick < impl.committed_tick ||
+               request.effective_tick >
+                   impl.image->clock().terminal_tick ||
+               (request.expiry_tick.has_value() &&
+                *request.expiry_tick < request.effective_tick) ||
+               request.supersession_key.empty()) {
+        reason = CommandSubmissionReason::InvalidTiming;
+    } else if (!request.payload) {
+        reason = CommandSubmissionReason::MissingPayload;
+    } else if (request.payload.type_identity() !=
+               reducer->identity().payload_type_identity) {
+        reason = CommandSubmissionReason::PayloadTypeMismatch;
+    } else {
+        const auto pending_for_route = static_cast<std::size_t>(
+            std::count_if(
+                impl.command_queue.begin(), impl.command_queue.end(),
+                [&](const auto& command) {
+                    return !command.consumed &&
+                           command.request.route_handle == route->handle;
+                }));
+        if (pending_for_route >= route->queue_capacity) {
+            reason = CommandSubmissionReason::CapacityExceeded;
+        }
+    }
+
+    outcome.status = reason == CommandSubmissionReason::None
+                         ? CommandSubmissionStatus::Enqueued
+                         : CommandSubmissionStatus::Rejected;
+    outcome.reason = reason;
+    outcome.ledger_sequence = impl.command_ledger_sequence + 1U;
+    try {
+        auto next_ledger = impl.command_ledger;
+        auto next_outcomes = impl.command_submission_outcomes;
+        auto next_queue = impl.command_queue;
+        next_ledger.push_back({request, outcome});
+        next_outcomes.push_back(outcome);
+        if (outcome.status == CommandSubmissionStatus::Enqueued) {
+            next_queue.push_back(
+                {request, outcome.ledger_sequence, false});
+        }
+        impl.command_ledger.swap(next_ledger);
+        impl.command_submission_outcomes.swap(next_outcomes);
+        impl.command_queue.swap(next_queue);
+        impl.command_ledger_sequence = outcome.ledger_sequence;
+        return outcome;
+    } catch (...) {
+        outcome.status = CommandSubmissionStatus::Rejected;
+        outcome.reason = CommandSubmissionReason::AllocationFailure;
+        outcome.ledger_sequence = impl.command_ledger_sequence;
+        return outcome;
+    }
 }
 
 SessionResult Session::dispose() noexcept {
@@ -4834,7 +5836,15 @@ StepOutcome Session::execute_step() noexcept {
             return impl.cancel_execution_precommit();
         }
         impl.current_diagnostic_stage = RuntimeDiagnosticStage::Schedule;
-        auto result = impl.begin_frame(transaction.handle);
+        auto result = impl.prepare_command_transaction(
+            transaction,
+            branch_kind == contracts::TransactionBranch::Terminal);
+        if (!result) {
+            return impl.fail_execution(
+                result, transaction.handle,
+                "command transaction cutoff preparation failed");
+        }
+        result = impl.begin_frame(transaction.handle);
         if (!result) {
             return impl.fail_execution(result, transaction.handle,
                                        "CycleFrame open failed");
@@ -4846,14 +5856,12 @@ StepOutcome Session::execute_step() noexcept {
             return impl.fail_execution(result, transaction.handle,
                                        "committed history staging failed");
         }
-        if (branch_kind == contracts::TransactionBranch::Continue) {
-            impl.current_diagnostic_stage =
-                RuntimeDiagnosticStage::CandidateProduction;
-            result = impl.rearm_candidates(transaction);
-            if (!result) {
-                return impl.fail_execution(result, transaction.handle,
-                                           "candidate rearm failed");
-            }
+        impl.current_diagnostic_stage =
+            RuntimeDiagnosticStage::CandidateProduction;
+        result = impl.rearm_candidates(transaction);
+        if (!result) {
+            return impl.fail_execution(result, transaction.handle,
+                                       "candidate rearm failed");
         }
         impl.current_diagnostic_stage =
             RuntimeDiagnosticStage::BoundaryInvocation;
@@ -4873,6 +5881,17 @@ StepOutcome Session::execute_step() noexcept {
             return impl.cancel_execution_precommit();
         }
 
+        result = impl.execute_due_commands(
+            transaction, *branch, cancellation_observed);
+        if (!result) {
+            return impl.fail_execution(
+                result, transaction.handle,
+                "command reduction or event consumption failed");
+        }
+        if (cancellation_observed) {
+            return impl.cancel_execution_precommit();
+        }
+
         if (branch_kind == contracts::TransactionBranch::Continue) {
             impl.current_diagnostic_stage =
                 RuntimeDiagnosticStage::CandidateProduction;
@@ -4882,6 +5901,10 @@ StepOutcome Session::execute_step() noexcept {
             const auto interval_end = interval_start +
                                       impl.image->clock().base_step_seconds;
             for (const auto& member : transaction.candidates) {
+                if (member.commit_class ==
+                    contracts::StateCommitClass::InstantPatch) {
+                    continue;
+                }
                 if (member.producer_kind == "IntegrationScope") {
                     const auto* scope = find_handle(
                         impl.image->integration_scopes(),
@@ -5376,6 +6399,34 @@ std::uint64_t Session::committed_step_count() const noexcept {
 
 bool Session::frame_open() const noexcept {
     return implementation_->cycle_frame.open;
+}
+
+std::uint64_t Session::command_ledger_sequence() const noexcept {
+    return implementation_->command_ledger_sequence;
+}
+
+std::size_t Session::pending_command_count() const noexcept {
+    return implementation_->pending_command_count();
+}
+
+const std::vector<CommandSubmissionOutcome>&
+Session::command_submission_outcomes() const noexcept {
+    return implementation_->command_submission_outcomes;
+}
+
+const std::vector<CommandMaintenanceReceipt>&
+Session::command_maintenance_receipts() const noexcept {
+    return implementation_->command_maintenance_receipts;
+}
+
+const std::vector<CommandApplicationReceipt>&
+Session::command_application_receipts() const noexcept {
+    return implementation_->command_application_receipts;
+}
+
+const std::vector<CommittedEvent>&
+Session::committed_events() const noexcept {
+    return implementation_->committed_events;
 }
 
 SessionCreation create_session(

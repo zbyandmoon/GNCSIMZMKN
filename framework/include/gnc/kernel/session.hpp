@@ -10,6 +10,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <typeinfo>
 #include <utility>
 #include <vector>
 
@@ -113,6 +115,31 @@ class RunId final {
     }
 
     void swap(RunId& other) noexcept { value_.swap(other.value_); }
+
+  private:
+    std::shared_ptr<const std::string> value_;
+};
+
+class CommandId final {
+  public:
+    CommandId() noexcept = default;
+    explicit CommandId(std::string value)
+        : value_(std::make_shared<const std::string>(std::move(value))) {}
+
+    [[nodiscard]] std::string_view value() const noexcept {
+        return value_ == nullptr ? std::string_view{}
+                                 : std::string_view(*value_);
+    }
+    [[nodiscard]] bool empty() const noexcept { return value().empty(); }
+
+    friend bool operator==(const CommandId& lhs,
+                           const CommandId& rhs) noexcept {
+        return lhs.value() == rhs.value();
+    }
+    friend bool operator!=(const CommandId& lhs,
+                           const CommandId& rhs) noexcept {
+        return !(lhs == rhs);
+    }
 
   private:
     std::shared_ptr<const std::string> value_;
@@ -254,6 +281,8 @@ enum class RuntimeDiagnosticStage : std::uint8_t {
     ResetRequest,
     ResetState,
     ResetPrecommit,
+    CommandReduction,
+    EventConsumption,
 };
 
 enum class RuntimeFailureDisposition : std::uint8_t {
@@ -551,6 +580,174 @@ struct InProcessValueView {
     const void* type_identity = nullptr;
 };
 
+// Immutable process-local ownership for command and event values. It carries
+// exact C++ type identity and layout only; no serializer, wire schema, runtime
+// variant, or string-keyed type registry participates in Session execution.
+class InProcessOwnedValue final {
+  public:
+    InProcessOwnedValue() noexcept = default;
+
+    template <typename Value>
+    [[nodiscard]] static InProcessOwnedValue make(Value value) {
+        using Stored = std::decay_t<Value>;
+        auto object = std::make_shared<const Stored>(std::move(value));
+        InProcessOwnedValue result;
+        result.object_ = std::move(object);
+        result.size_bytes_ = sizeof(Stored);
+        result.alignment_bytes_ = alignof(Stored);
+        result.type_identity_ = &typeid(Stored);
+        return result;
+    }
+
+    [[nodiscard]] InProcessValueView view() const noexcept {
+        return {object_.get(), size_bytes_, alignment_bytes_,
+                type_identity_};
+    }
+    [[nodiscard]] const void* address() const noexcept {
+        return object_.get();
+    }
+    [[nodiscard]] const void* type_identity() const noexcept {
+        return type_identity_;
+    }
+    [[nodiscard]] bool empty() const noexcept {
+        return object_ == nullptr;
+    }
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return !empty();
+    }
+
+    template <typename Value>
+    [[nodiscard]] const Value* get_if() const noexcept {
+        return type_identity_ == &typeid(Value)
+                   ? static_cast<const Value*>(object_.get())
+                   : nullptr;
+    }
+
+  private:
+    std::shared_ptr<const void> object_;
+    std::uint64_t size_bytes_ = 0U;
+    std::uint64_t alignment_bytes_ = 0U;
+    const void* type_identity_ = nullptr;
+};
+
+enum class CommandSubmissionStatus : std::uint8_t {
+    Enqueued,
+    Rejected,
+};
+
+enum class CommandSubmissionReason : std::uint8_t {
+    None,
+    InvalidLifecycle,
+    EmptyCommandId,
+    WrongRunId,
+    UnknownRoute,
+    TargetMismatch,
+    SchemaMismatch,
+    AuthorityMismatch,
+    InvalidTiming,
+    CapacityExceeded,
+    MissingPayload,
+    PayloadTypeMismatch,
+    CommandIdConflict,
+    TransactionOpen,
+    AllocationFailure,
+};
+
+struct CommandRequest {
+    CommandId command_id;
+    RunId run_id;
+    std::uint32_t route_handle = 0U;
+    std::uint32_t target_runtime_component_handle = 0U;
+    std::string payload_schema_id;
+    std::uint32_t decision_authority = 0U;
+    std::int64_t effective_tick = 0;
+    std::optional<std::int64_t> expiry_tick;
+    std::string supersession_key;
+    InProcessOwnedValue payload;
+};
+
+struct CommandSubmissionOutcome {
+    CommandSubmissionStatus status = CommandSubmissionStatus::Rejected;
+    CommandSubmissionReason reason = CommandSubmissionReason::None;
+    CommandId command_id;
+    RunId run_id;
+    std::uint32_t route_handle = 0U;
+    std::uint64_t ledger_sequence = 0U;
+    std::uint64_t observed_committed_epoch = 0U;
+    std::int64_t observed_committed_tick = 0;
+    bool duplicate_retry = false;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return status == CommandSubmissionStatus::Enqueued;
+    }
+};
+
+enum class CommandMaintenanceDisposition : std::uint8_t {
+    Expired,
+    Superseded,
+    Terminated,
+};
+
+struct CommandMaintenanceReceipt {
+    CommandMaintenanceDisposition disposition =
+        CommandMaintenanceDisposition::Expired;
+    CommandId command_id;
+    RunId run_id;
+    std::uint32_t route_handle = 0U;
+    std::uint64_t command_ledger_sequence = 0U;
+    std::uint64_t maintenance_ledger_sequence = 0U;
+    std::uint64_t observed_committed_epoch = 0U;
+    std::int64_t observed_committed_tick = 0;
+};
+
+enum class CommandApplicationDecision : std::uint8_t {
+    Applied,
+    Rejected,
+    Deferred,
+};
+
+struct CommandApplicationReceipt {
+    CommandApplicationDecision decision =
+        CommandApplicationDecision::Deferred;
+    CommandId command_id;
+    RunId run_id;
+    std::uint32_t route_handle = 0U;
+    std::uint32_t target_runtime_component_handle = 0U;
+    std::uint64_t command_ledger_sequence = 0U;
+    std::uint32_t application_code = 0U;
+    std::uint64_t base_epoch = 0U;
+    std::uint64_t committed_epoch = 0U;
+    std::int64_t tick = 0;
+};
+
+struct EventId {
+    std::uint64_t run_sequence = 0U;
+    std::int64_t tick = 0;
+    std::uint32_t delivery_handle = 0U;
+    std::uint64_t command_ledger_sequence = 0U;
+
+    friend bool operator==(const EventId& lhs,
+                           const EventId& rhs) noexcept {
+        return lhs.run_sequence == rhs.run_sequence &&
+               lhs.tick == rhs.tick &&
+               lhs.delivery_handle == rhs.delivery_handle &&
+               lhs.command_ledger_sequence ==
+                   rhs.command_ledger_sequence;
+    }
+};
+
+struct CommittedEvent {
+    EventId event_id;
+    CommandId command_id;
+    RunId run_id;
+    std::uint32_t route_handle = 0U;
+    std::uint32_t delivery_handle = 0U;
+    std::uint64_t committed_epoch = 0U;
+    std::string event_schema_id;
+    InProcessOwnedValue payload;
+    InProcessOwnedValue consumer_output;
+};
+
 class SessionCommittedStateAccess {
   public:
     virtual ~SessionCommittedStateAccess() = default;
@@ -696,6 +893,163 @@ class SessionCandidateWriterSet final {
     std::uint32_t transaction_handle_ = 0U;
 
     friend class Session;
+};
+
+struct SessionCommandReducerIdentity {
+    std::uint32_t route_handle = 0U;
+    std::uint32_t callsite_handle = 0U;
+    std::uint32_t runtime_component_handle = 0U;
+    std::uint32_t linked_entry_handle = 0U;
+    const void* payload_type_identity = nullptr;
+    const void* event_type_identity = nullptr;
+};
+
+class SessionCommandReductionContext final {
+  public:
+    [[nodiscard]] std::uint32_t route_handle() const noexcept {
+        return route_handle_;
+    }
+    [[nodiscard]] std::uint32_t callsite_handle() const noexcept {
+        return callsite_handle_;
+    }
+    [[nodiscard]] std::uint32_t component_handle() const noexcept {
+        return component_handle_;
+    }
+    [[nodiscard]] const CommandId& command_id() const noexcept {
+        return command_id_;
+    }
+    [[nodiscard]] std::uint64_t ledger_sequence() const noexcept {
+        return ledger_sequence_;
+    }
+    [[nodiscard]] std::uint32_t decision_authority() const noexcept {
+        return decision_authority_;
+    }
+    [[nodiscard]] std::int64_t tick() const noexcept { return tick_; }
+    [[nodiscard]] std::int64_t effective_tick() const noexcept {
+        return effective_tick_;
+    }
+    [[nodiscard]] const std::optional<std::int64_t>& expiry_tick()
+        const noexcept {
+        return expiry_tick_;
+    }
+    [[nodiscard]] std::string_view supersession_key() const noexcept {
+        return supersession_key_;
+    }
+    [[nodiscard]] InProcessValueView payload() const noexcept {
+        return payload_;
+    }
+    [[nodiscard]] const SessionCommittedStateView& committed()
+        const noexcept {
+        return committed_;
+    }
+    [[nodiscard]] const SessionCandidateWriterSet& candidates()
+        const noexcept {
+        return candidates_;
+    }
+
+  private:
+    SessionCommandReductionContext(
+        std::uint32_t route_handle, std::uint32_t callsite_handle,
+        std::uint32_t component_handle, CommandId command_id,
+        std::uint64_t ledger_sequence, std::uint32_t decision_authority,
+        std::int64_t tick,
+        std::int64_t effective_tick,
+        std::optional<std::int64_t> expiry_tick,
+        std::string_view supersession_key, InProcessValueView payload,
+        SessionCommittedStateView committed,
+        SessionCandidateWriterSet candidates) noexcept;
+
+    std::uint32_t route_handle_ = 0U;
+    std::uint32_t callsite_handle_ = 0U;
+    std::uint32_t component_handle_ = 0U;
+    CommandId command_id_;
+    std::uint64_t ledger_sequence_ = 0U;
+    std::uint32_t decision_authority_ = 0U;
+    std::int64_t tick_ = 0;
+    std::int64_t effective_tick_ = 0;
+    std::optional<std::int64_t> expiry_tick_;
+    std::string_view supersession_key_;
+    InProcessValueView payload_;
+    SessionCommittedStateView committed_;
+    SessionCandidateWriterSet candidates_;
+
+    friend class Session;
+};
+
+struct SessionCommandReductionResult {
+    CommandApplicationDecision decision =
+        CommandApplicationDecision::Deferred;
+    std::uint32_t application_code = 0U;
+    InProcessOwnedValue event_payload;
+};
+
+class SessionCommandReducerEntry {
+  public:
+    virtual ~SessionCommandReducerEntry() = default;
+    [[nodiscard]] virtual SessionCommandReducerIdentity identity()
+        const noexcept = 0;
+    [[nodiscard]] virtual SessionResult reduce(
+        const SessionCommandReductionContext& context,
+        SessionCommandReductionResult& result) const noexcept = 0;
+};
+
+struct SessionEventConsumerIdentity {
+    std::uint32_t delivery_handle = 0U;
+    std::uint32_t callsite_handle = 0U;
+    std::uint32_t runtime_component_handle = 0U;
+    std::uint32_t linked_entry_handle = 0U;
+    const void* event_type_identity = nullptr;
+    const void* output_type_identity = nullptr;
+};
+
+class SessionEventConsumptionContext final {
+  public:
+    [[nodiscard]] std::uint32_t delivery_handle() const noexcept {
+        return delivery_handle_;
+    }
+    [[nodiscard]] std::uint32_t callsite_handle() const noexcept {
+        return callsite_handle_;
+    }
+    [[nodiscard]] std::uint32_t component_handle() const noexcept {
+        return component_handle_;
+    }
+    [[nodiscard]] const EventId& event_id() const noexcept {
+        return event_id_;
+    }
+    [[nodiscard]] const CommandId& command_id() const noexcept {
+        return command_id_;
+    }
+    [[nodiscard]] std::int64_t tick() const noexcept { return tick_; }
+    [[nodiscard]] InProcessValueView payload() const noexcept {
+        return payload_;
+    }
+
+  private:
+    SessionEventConsumptionContext(
+        std::uint32_t delivery_handle, std::uint32_t callsite_handle,
+        std::uint32_t component_handle, EventId event_id,
+        CommandId command_id, std::int64_t tick,
+        InProcessValueView payload) noexcept;
+
+    std::uint32_t delivery_handle_ = 0U;
+    std::uint32_t callsite_handle_ = 0U;
+    std::uint32_t component_handle_ = 0U;
+    EventId event_id_;
+    CommandId command_id_;
+    std::int64_t tick_ = 0;
+    InProcessValueView payload_;
+
+    friend class Session;
+};
+
+class SessionEventConsumerEntry {
+  public:
+    virtual ~SessionEventConsumerEntry() = default;
+    [[nodiscard]] virtual SessionEventConsumerIdentity identity()
+        const noexcept = 0;
+    [[nodiscard]] virtual SessionResult consume(
+        const SessionEventConsumptionContext& context,
+        InProcessOwnedValue& output) const noexcept = 0;
 };
 
 class SessionOutputWriterSet final {
@@ -918,6 +1272,16 @@ class SessionMaterializationProvider {
         (void)integration_scope_handle;
         return nullptr;
     }
+    [[nodiscard]] virtual const SessionCommandReducerEntry* command_reducer(
+        std::uint32_t route_handle) const noexcept {
+        (void)route_handle;
+        return nullptr;
+    }
+    [[nodiscard]] virtual const SessionEventConsumerEntry* event_consumer(
+        std::uint32_t delivery_handle) const noexcept {
+        (void)delivery_handle;
+        return nullptr;
+    }
 };
 
 struct SessionStorageExtent {
@@ -1048,6 +1412,8 @@ class Session final {
     // single execution owner. Session lifetime must cover the whole call.
     [[nodiscard]] CancellationOutcome request_cancel(
         CancellationRequest request) noexcept;
+    [[nodiscard]] CommandSubmissionOutcome submit_command(
+        CommandRequest request) noexcept;
     [[nodiscard]] SessionResult dispose() noexcept;
     [[nodiscard]] StepOutcome execute_step() noexcept;
     [[nodiscard]] RunDriveOutcome run_to_terminal() noexcept;
@@ -1089,6 +1455,16 @@ class Session final {
     [[nodiscard]] std::int64_t committed_tick() const noexcept;
     [[nodiscard]] std::uint64_t committed_step_count() const noexcept;
     [[nodiscard]] bool frame_open() const noexcept;
+    [[nodiscard]] std::uint64_t command_ledger_sequence() const noexcept;
+    [[nodiscard]] std::size_t pending_command_count() const noexcept;
+    [[nodiscard]] const std::vector<CommandSubmissionOutcome>&
+    command_submission_outcomes() const noexcept;
+    [[nodiscard]] const std::vector<CommandMaintenanceReceipt>&
+    command_maintenance_receipts() const noexcept;
+    [[nodiscard]] const std::vector<CommandApplicationReceipt>&
+    command_application_receipts() const noexcept;
+    [[nodiscard]] const std::vector<CommittedEvent>& committed_events()
+        const noexcept;
 
   private:
     struct Impl;

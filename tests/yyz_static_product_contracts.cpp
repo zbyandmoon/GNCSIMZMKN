@@ -333,6 +333,10 @@ void require_rejects_truncated_definition(
         return StaticEntryKind::IntervalEvolution;
     case RuntimeExecutionObligation::DerivativeEvaluation:
         return StaticEntryKind::DerivativeEvaluation;
+    case RuntimeExecutionObligation::CommandReduction:
+        return StaticEntryKind::CommandReduction;
+    case RuntimeExecutionObligation::EventConsumption:
+        return StaticEntryKind::EventConsumption;
     }
     return StaticEntryKind::BoundaryEvaluation;
 }

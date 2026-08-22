@@ -32,6 +32,8 @@ enum class StaticEntryKind : std::uint8_t {
     BoundaryEvaluation,
     IntervalEvolution,
     DerivativeEvaluation,
+    CommandReduction,
+    EventConsumption,
 };
 
 [[nodiscard]] constexpr std::string_view to_string(
@@ -61,6 +63,10 @@ enum class StaticEntryKind : std::uint8_t {
         return "IntervalEvolution";
     case StaticEntryKind::DerivativeEvaluation:
         return "DerivativeEvaluation";
+    case StaticEntryKind::CommandReduction:
+        return "CommandReduction";
+    case StaticEntryKind::EventConsumption:
+        return "EventConsumption";
     }
     return "Unknown";
 }
@@ -68,7 +74,7 @@ enum class StaticEntryKind : std::uint8_t {
 [[nodiscard]] constexpr bool valid_static_entry_kind(
     StaticEntryKind kind) noexcept {
     return kind >= StaticEntryKind::DefinitionBuilder &&
-           kind <= StaticEntryKind::DerivativeEvaluation;
+           kind <= StaticEntryKind::EventConsumption;
 }
 
 // Independent package-implementation witness for the exact committed-history
@@ -454,6 +460,12 @@ canonical_runtime_invocation_requirements_suffix(
         break;
     case gnc::contracts::ExecutionObligation::DerivativeEvaluation:
         kind = StaticEntryKind::DerivativeEvaluation;
+        break;
+    case gnc::contracts::ExecutionObligation::CommandReduction:
+        kind = StaticEntryKind::CommandReduction;
+        break;
+    case gnc::contracts::ExecutionObligation::EventConsumption:
+        kind = StaticEntryKind::EventConsumption;
         break;
     }
     auto signature = canonical_static_entry_signature(

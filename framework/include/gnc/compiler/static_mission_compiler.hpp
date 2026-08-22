@@ -423,6 +423,8 @@ inline void validate_runtime_component(
         gnc::model_sdk::RuntimeCellProfile::DiscreteStateProcessor;
     const bool evaluator = runtime.profile ==
         gnc::model_sdk::RuntimeCellProfile::Evaluator;
+    const bool mode_owner = runtime.profile ==
+        gnc::model_sdk::RuntimeCellProfile::ModeOwner;
     const bool profile_contract =
         (sampled &&
          (model.placement ==
@@ -463,7 +465,19 @@ inline void validate_runtime_component(
              std::set<gnc::model_sdk::RuntimeExecutionObligation>{
                  gnc::model_sdk::RuntimeExecutionObligation::
                      BoundaryEvaluation} &&
-         !runtime.state_owner.has_value());
+         !runtime.state_owner.has_value()) ||
+        (mode_owner &&
+         model.placement ==
+             gnc::model_sdk::ModelPlacement::VehicleProcess &&
+         obligations ==
+             std::set<gnc::model_sdk::RuntimeExecutionObligation>{
+                 gnc::model_sdk::RuntimeExecutionObligation::
+                     PublishProjection,
+                 gnc::model_sdk::RuntimeExecutionObligation::
+                     CommandReduction,
+                 gnc::model_sdk::RuntimeExecutionObligation::
+                     EventConsumption} &&
+         runtime.state_owner.has_value());
     if (!profile_contract) {
         diagnostics.push_back(
             {DiagnosticCode::InvalidCatalogDescriptor, source,
@@ -475,9 +489,13 @@ inline void validate_runtime_component(
     if (runtime.state_owner.has_value()) {
         const auto& owner = *runtime.state_owner;
         const auto& schema = owner.schema;
-        const auto expected_evolution = continuous
-            ? gnc::model_sdk::StaticStateEvolution::ContinuousCandidate
-            : gnc::model_sdk::StaticStateEvolution::IntervalCandidate;
+        const auto expected_evolution = mode_owner
+            ? gnc::model_sdk::StaticStateEvolution::InstantPatch
+            : (continuous
+                   ? gnc::model_sdk::StaticStateEvolution::
+                         ContinuousCandidate
+                   : gnc::model_sdk::StaticStateEvolution::
+                         IntervalCandidate);
         if (schema.schema_id.empty() || schema.schema_version == 0U ||
             schema.layout_id.empty() || schema.fields.empty() ||
             owner.initial_state_builder_id.empty() ||
@@ -682,8 +700,9 @@ inline void validate_runtime_component(
     const bool config_driven_output_source =
         sampled &&
         model.placement == gnc::model_sdk::ModelPlacement::VehicleOutput;
-    if ((!config_driven_output_source && input_count == 0U) ||
-        output_count == 0U) {
+    if (!mode_owner &&
+        ((!config_driven_output_source && input_count == 0U) ||
+         output_count == 0U)) {
         diagnostics.push_back(
             {DiagnosticCode::InvalidCatalogDescriptor, source,
              definition.model_id,
@@ -754,6 +773,26 @@ inline void validate_runtime_component(
                                          VehicleProcess
                                  ? gnc::model_sdk::CoarsePhase::Process
                                  : gnc::model_sdk::CoarsePhase::Output;
+        } else if (mode_owner) {
+            if (entry.obligation ==
+                gnc::model_sdk::RuntimeExecutionObligation::
+                    PublishProjection) {
+                expected_phase = gnc::model_sdk::CoarsePhase::Publish;
+                expected_read =
+                    gnc::model_sdk::StaticStateReadKind::Committed;
+            } else if (entry.obligation ==
+                       gnc::model_sdk::RuntimeExecutionObligation::
+                           CommandReduction) {
+                expected_phase = gnc::model_sdk::CoarsePhase::Process;
+                expected_read =
+                    gnc::model_sdk::StaticStateReadKind::Committed;
+                expected_write =
+                    gnc::model_sdk::StaticStateWriteKind::InstantPatch;
+            } else if (entry.obligation ==
+                       gnc::model_sdk::RuntimeExecutionObligation::
+                           EventConsumption) {
+                expected_phase = gnc::model_sdk::CoarsePhase::Output;
+            }
         }
         if (entry.phase != expected_phase ||
             entry.state_read != expected_read ||

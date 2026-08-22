@@ -42,6 +42,8 @@ enum class ExecutionObligation : std::uint8_t {
     PublishProjection = 1U,
     IntervalEvolution,
     DerivativeEvaluation,
+    CommandReduction,
+    EventConsumption,
 };
 
 [[nodiscard]] constexpr std::string_view to_string(
@@ -55,6 +57,10 @@ enum class ExecutionObligation : std::uint8_t {
         return "IntervalEvolution";
     case ExecutionObligation::DerivativeEvaluation:
         return "DerivativeEvaluation";
+    case ExecutionObligation::CommandReduction:
+        return "CommandReduction";
+    case ExecutionObligation::EventConsumption:
+        return "EventConsumption";
     }
     return "Unknown";
 }
@@ -64,8 +70,36 @@ enum class ExecutionObligation : std::uint8_t {
     return obligation == ExecutionObligation::PublishProjection ||
            obligation == ExecutionObligation::BoundaryEvaluation ||
            obligation == ExecutionObligation::IntervalEvolution ||
-           obligation == ExecutionObligation::DerivativeEvaluation;
+           obligation == ExecutionObligation::DerivativeEvaluation ||
+           obligation == ExecutionObligation::CommandReduction ||
+           obligation == ExecutionObligation::EventConsumption;
 }
+
+enum class StateCommitClass : std::uint8_t {
+    IntervalCandidate,
+    ContinuousCandidate,
+    InstantPatch,
+};
+
+enum class CommandQueuePolicy : std::uint8_t {
+    RejectNewest,
+};
+
+enum class CommandSupersessionPolicy : std::uint8_t {
+    LatestDuePerKey,
+};
+
+enum class CommandEffectivePoint : std::uint8_t {
+    TransactionStart,
+};
+
+enum class CommandCutoffPolicy : std::uint8_t {
+    LedgerSequenceAtTransactionStart,
+};
+
+enum class EventDeliveryPoint : std::uint8_t {
+    LaterPhaseSameTick,
+};
 
 // Shared continuous-closure strategy authority. Individual Compiler slices
 // still admit only strategies backed by their selected product definitions.

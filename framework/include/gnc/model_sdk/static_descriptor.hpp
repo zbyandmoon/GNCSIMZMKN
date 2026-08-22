@@ -139,6 +139,7 @@ enum class RuntimeCellProfile : std::uint8_t {
     DiscreteStateProcessor,
     ContinuousStateOwner,
     Evaluator,
+    ModeOwner,
 };
 
 [[nodiscard]] constexpr std::string_view to_string(
@@ -154,6 +155,8 @@ enum class RuntimeCellProfile : std::uint8_t {
         return "ContinuousStateOwner";
     case RuntimeCellProfile::Evaluator:
         return "Evaluator";
+    case RuntimeCellProfile::ModeOwner:
+        return "ModeOwner";
     }
     return "Unknown";
 }
@@ -163,7 +166,8 @@ enum class RuntimeCellProfile : std::uint8_t {
     return profile == RuntimeCellProfile::SampledTransform ||
            profile == RuntimeCellProfile::DiscreteStateProcessor ||
            profile == RuntimeCellProfile::ContinuousStateOwner ||
-           profile == RuntimeCellProfile::Evaluator;
+           profile == RuntimeCellProfile::Evaluator ||
+           profile == RuntimeCellProfile::ModeOwner;
 }
 
 using RuntimeExecutionObligation = gnc::contracts::ExecutionObligation;
@@ -417,6 +421,7 @@ enum class StaticStateEvolution : std::uint8_t {
     Unspecified,
     ContinuousCandidate,
     IntervalCandidate,
+    InstantPatch,
 };
 
 [[nodiscard]] constexpr std::string_view to_string(
@@ -428,6 +433,8 @@ enum class StaticStateEvolution : std::uint8_t {
         return "ContinuousCandidate";
     case StaticStateEvolution::IntervalCandidate:
         return "IntervalCandidate";
+    case StaticStateEvolution::InstantPatch:
+        return "InstantPatch";
     }
     return "Unknown";
 }
@@ -505,6 +512,7 @@ struct StaticInvocationRequirementDescriptor {
 enum class StaticStateWriteKind : std::uint8_t {
     None,
     IntervalCandidate,
+    InstantPatch,
 };
 
 enum class StaticStateReadKind : std::uint8_t {

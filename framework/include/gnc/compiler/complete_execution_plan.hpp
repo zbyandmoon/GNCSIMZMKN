@@ -81,6 +81,8 @@ enum class CompleteDiagnosticCode : std::uint8_t {
     MultipleImplementationEntries,
     ImplementationMismatch,
     SourceImageConformanceFailure,
+    InvalidCommandRoute,
+    InvalidEventDelivery,
 };
 
 [[nodiscard]] constexpr std::string_view to_string(
@@ -166,6 +168,10 @@ enum class CompleteDiagnosticCode : std::uint8_t {
         return "GNC-R2-LINK-IMPLEMENTATION-MISMATCH";
     case CompleteDiagnosticCode::SourceImageConformanceFailure:
         return "GNC-R2-LINK-SOURCE-IMAGE-CONFORMANCE";
+    case CompleteDiagnosticCode::InvalidCommandRoute:
+        return "GNC-R3-CMD-ROUTE";
+    case CompleteDiagnosticCode::InvalidEventDelivery:
+        return "GNC-R3-EVT-DELIVERY";
     }
     return "GNC-R2-UNKNOWN";
 }
@@ -260,6 +266,29 @@ struct CompleteSourceEvaluatorHistory {
     std::string evaluator_occurrence_id;
     std::uint32_t committed_history_depth = 0U;
     std::vector<std::string> owner_occurrence_ids;
+    SourceRef source;
+};
+
+// Input to the narrow command/event lowering pass. It names stable descriptor
+// facts; the pass resolves all runtime references to existing plan elements
+// before link, so Session never performs an id-based lookup.
+struct CommandRouteSpec {
+    std::string route_id;
+    std::string target_occurrence_id;
+    std::string payload_schema_id;
+    std::uint32_t decision_authority = 0U;
+    std::uint32_t queue_capacity = 0U;
+    gnc::contracts::CommandQueuePolicy queue_policy =
+        gnc::contracts::CommandQueuePolicy::RejectNewest;
+    gnc::contracts::CommandSupersessionPolicy supersession_policy =
+        gnc::contracts::CommandSupersessionPolicy::LatestDuePerKey;
+    gnc::contracts::CommandEffectivePoint effective_point =
+        gnc::contracts::CommandEffectivePoint::TransactionStart;
+    gnc::contracts::CommandCutoffPolicy cutoff_policy =
+        gnc::contracts::CommandCutoffPolicy::
+            LedgerSequenceAtTransactionStart;
+    std::string event_schema_id;
+    std::string event_consumer_occurrence_id;
     SourceRef source;
 };
 
@@ -688,6 +717,8 @@ struct TransactionCandidateMemberPlan {
     std::string candidate_state_slot_id;
     CandidateProducerPlan producer;
     std::string writer_token_id;
+    gnc::contracts::StateCommitClass commit_class =
+        gnc::contracts::StateCommitClass::IntervalCandidate;
 };
 
 struct TransactionBranchPlan {
@@ -723,6 +754,41 @@ struct TransactionPlan {
     std::vector<TransactionCandidateMemberPlan> candidates;
     std::vector<std::string> held_slot_ids;
     std::vector<TransactionBranchPlan> branches;
+    SourceRef source;
+};
+
+struct CommandRoutePlan {
+    std::string plan_element_id;
+    std::string route_id;
+    std::string transaction_id;
+    std::string target_occurrence_id;
+    std::string reducer_callsite_id;
+    std::string payload_schema_id;
+    std::uint32_t decision_authority = 0U;
+    std::uint32_t queue_capacity = 0U;
+    gnc::contracts::CommandQueuePolicy queue_policy =
+        gnc::contracts::CommandQueuePolicy::RejectNewest;
+    gnc::contracts::CommandSupersessionPolicy supersession_policy =
+        gnc::contracts::CommandSupersessionPolicy::LatestDuePerKey;
+    gnc::contracts::CommandEffectivePoint effective_point =
+        gnc::contracts::CommandEffectivePoint::TransactionStart;
+    gnc::contracts::CommandCutoffPolicy cutoff_policy =
+        gnc::contracts::CommandCutoffPolicy::
+            LedgerSequenceAtTransactionStart;
+    std::string event_delivery_id;
+    SourceRef source;
+};
+
+struct EventDeliveryPlan {
+    std::string plan_element_id;
+    std::string event_delivery_id;
+    std::string producer_command_route_id;
+    std::string producer_callsite_id;
+    std::string consumer_callsite_id;
+    std::string event_schema_id;
+    gnc::contracts::EventDeliveryPoint delivery =
+        gnc::contracts::EventDeliveryPoint::LaterPhaseSameTick;
+    std::uint32_t stable_order = 0U;
     SourceRef source;
 };
 
@@ -859,6 +925,8 @@ struct CompleteExecutionPlanDescriptor {
     std::vector<BoundaryDagEdgePlan> boundary_dag;
     std::vector<IntegrationScopePlan> integration_scopes;
     std::vector<TransactionPlan> transactions;
+    std::vector<CommandRoutePlan> command_routes;
+    std::vector<EventDeliveryPlan> event_deliveries;
     std::vector<EvaluatorCommittedHistoryPlan> evaluator_histories;
     LifecyclePlan lifecycle;
     std::vector<EntryLinkRequirement> entry_requirements;
@@ -977,6 +1045,10 @@ namespace complete_plan_detail {
         return gnc::model_sdk::StaticEntryKind::IntervalEvolution;
     case gnc::contracts::ExecutionObligation::DerivativeEvaluation:
         return gnc::model_sdk::StaticEntryKind::DerivativeEvaluation;
+    case gnc::contracts::ExecutionObligation::CommandReduction:
+        return gnc::model_sdk::StaticEntryKind::CommandReduction;
+    case gnc::contracts::ExecutionObligation::EventConsumption:
+        return gnc::model_sdk::StaticEntryKind::EventConsumption;
     }
     return gnc::model_sdk::StaticEntryKind::BoundaryEvaluation;
 }
@@ -1010,6 +1082,10 @@ namespace complete_plan_detail {
         return I::IntervalEvolution;
     case S::DerivativeEvaluation:
         return I::DerivativeEvaluation;
+    case S::CommandReduction:
+        return I::CommandReduction;
+    case S::EventConsumption:
+        return I::EventConsumption;
     }
     return I::Prepare;
 }
@@ -2451,14 +2527,17 @@ inline void lower_occurrences(LoweringContext& context) {
                            occurrence.source, entry.entry_id,
                            "projection must read committed owner state and cannot write candidate state");
             }
-            if (entry.state_write ==
-                    gnc::model_sdk::StaticStateWriteKind::IntervalCandidate &&
+            if ((entry.state_write ==
+                     gnc::model_sdk::StaticStateWriteKind::
+                         IntervalCandidate ||
+                 entry.state_write ==
+                     gnc::model_sdk::StaticStateWriteKind::InstantPatch) &&
                 entry.state_read !=
                     gnc::model_sdk::StaticStateReadKind::Committed) {
                 diagnostic(context.diagnostics,
                            CompleteDiagnosticCode::InvalidCatalog,
                            occurrence.source, entry.entry_id,
-                           "interval candidate writer must read committed owner state");
+                           "state replacement writer must read committed owner state");
             }
             const auto callsite = callsite_id(
                 occurrence.occurrence_id, entry.obligation,
@@ -2613,6 +2692,13 @@ inline void lower_occurrences(LoweringContext& context) {
                            CompleteDiagnosticCode::MissingStateWriter,
                            occurrence.source, occurrence.occurrence_id,
                            "state owner has no candidate writer obligation");
+            } else if (evolution ==
+                           gnc::model_sdk::StaticStateEvolution::InstantPatch &&
+                       writer_count == 0U) {
+                diagnostic(context.diagnostics,
+                           CompleteDiagnosticCode::MissingStateWriter,
+                           occurrence.source, occurrence.occurrence_id,
+                           "instant state owner has no command reducer writer");
             } else if (writer_count > 1U ||
                        (evolution == gnc::model_sdk::StaticStateEvolution::
                                          ContinuousCandidate &&
@@ -3678,7 +3764,17 @@ inline void lower_transactions(LoweringContext& context) {
             candidates.push_back(
                 {owner_id, state->candidate_slot_id,
                  std::move(candidate_producer),
-                 "writer/" + state->candidate_slot_id});
+                 "writer/" + state->candidate_slot_id,
+                 state->evolution ==
+                         gnc::model_sdk::StaticStateEvolution::InstantPatch
+                     ? gnc::contracts::StateCommitClass::InstantPatch
+                     : (state->evolution ==
+                                gnc::model_sdk::StaticStateEvolution::
+                                    ContinuousCandidate
+                            ? gnc::contracts::StateCommitClass::
+                                  ContinuousCandidate
+                            : gnc::contracts::StateCommitClass::
+                                  IntervalCandidate)});
             ++owner_counts[owner_id];
         }
         if (!valid || owners.size() != candidates.size()) {
@@ -3694,8 +3790,14 @@ inline void lower_transactions(LoweringContext& context) {
                              rhs.owner_occurrence_id;
                   });
         std::vector<std::string> candidate_slots;
+        std::vector<std::string> interval_candidate_slots;
         for (const auto& candidate : candidates) {
             candidate_slots.push_back(candidate.candidate_state_slot_id);
+            if (candidate.commit_class !=
+                gnc::contracts::StateCommitClass::InstantPatch) {
+                interval_candidate_slots.push_back(
+                    candidate.candidate_state_slot_id);
+            }
         }
         std::vector<std::string> held_slots;
         for (const auto& integration : context.plan.integration_scopes) {
@@ -3704,6 +3806,8 @@ inline void lower_transactions(LoweringContext& context) {
             }
         }
         std::sort(candidate_slots.begin(), candidate_slots.end());
+        std::sort(interval_candidate_slots.begin(),
+                  interval_candidate_slots.end());
         std::sort(held_slots.begin(), held_slots.end());
         std::vector<std::string> current_cycle_outputs;
         std::vector<std::string> terminal_outputs;
@@ -3735,7 +3839,8 @@ inline void lower_transactions(LoweringContext& context) {
         TransactionBranchPlan continue_branch;
         continue_branch.branch =
             gnc::contracts::TransactionBranch::Continue;
-        continue_branch.committed_candidate_slot_ids = candidate_slots;
+        continue_branch.committed_candidate_slot_ids =
+            interval_candidate_slots;
         continue_branch.retained_held_slot_ids = held_slots;
         continue_branch.published_output_slot_ids = current_cycle_outputs;
         continue_branch.sealed_output_slot_ids = current_cycle_outputs;
@@ -3753,7 +3858,8 @@ inline void lower_transactions(LoweringContext& context) {
         TransactionBranchPlan terminal_branch;
         terminal_branch.branch =
             gnc::contracts::TransactionBranch::Terminal;
-        terminal_branch.discarded_candidate_slot_ids = candidate_slots;
+        terminal_branch.discarded_candidate_slot_ids =
+            interval_candidate_slots;
         terminal_branch.discarded_held_slot_ids = held_slots;
         terminal_branch.published_output_slot_ids =
             terminal_published_outputs;
@@ -3768,7 +3874,8 @@ inline void lower_transactions(LoweringContext& context) {
         terminal_branch.committed_state_preserved = true;
         terminal_branch.model_commit = true;
         terminal_branch.observation_seal = true;
-        terminal_branch.result_seal_after_observation = true;
+        terminal_branch.result_seal_after_observation =
+            !terminal_outputs.empty();
         terminal_branch.epoch_delta = 1;
         TransactionBranchPlan failure_branch;
         failure_branch.branch =
@@ -5147,12 +5254,294 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
             encoder.integer(branch.tick_delta);
         }
     }
+    // Preserve the established R2/REF-YYZ descriptor hash when the optional
+    // R3 command/event extension is absent. Once routes exist, the extension
+    // marker closes the hash over every new runtime-impacting fact, including
+    // the candidate commit class that distinguishes instant replacement from
+    // interval evolution.
+    if (!plan.command_routes.empty() || !plan.event_deliveries.empty()) {
+        encoder.string("gnc.complete-plan.command-event@1");
+        encoder.collection(plan.transactions.size());
+        for (const auto& transaction : plan.transactions) {
+            encoder.string(transaction.transaction_id);
+            encoder.collection(transaction.candidates.size());
+            for (const auto& candidate : transaction.candidates) {
+                encoder.string(candidate.candidate_state_slot_id);
+                encoder.uint32(
+                    static_cast<std::uint32_t>(candidate.commit_class));
+            }
+        }
+        encoder.collection(plan.command_routes.size());
+        for (const auto& route : plan.command_routes) {
+            encoder.string(route.plan_element_id);
+            encoder.string(route.route_id);
+            encoder.string(route.transaction_id);
+            encoder.string(route.target_occurrence_id);
+            encoder.string(route.reducer_callsite_id);
+            encoder.string(route.payload_schema_id);
+            encoder.uint32(route.decision_authority);
+            encoder.uint32(route.queue_capacity);
+            encoder.uint32(
+                static_cast<std::uint32_t>(route.queue_policy));
+            encoder.uint32(
+                static_cast<std::uint32_t>(route.supersession_policy));
+            encoder.uint32(
+                static_cast<std::uint32_t>(route.effective_point));
+            encoder.uint32(
+                static_cast<std::uint32_t>(route.cutoff_policy));
+            encoder.string(route.event_delivery_id);
+        }
+        encoder.collection(plan.event_deliveries.size());
+        for (const auto& delivery : plan.event_deliveries) {
+            encoder.string(delivery.plan_element_id);
+            encoder.string(delivery.event_delivery_id);
+            encoder.string(delivery.producer_command_route_id);
+            encoder.string(delivery.producer_callsite_id);
+            encoder.string(delivery.consumer_callsite_id);
+            encoder.string(delivery.event_schema_id);
+            encoder.uint32(
+                static_cast<std::uint32_t>(delivery.delivery));
+            encoder.uint32(delivery.stable_order);
+        }
+    }
     // The proof derivation is a normalized semantic projection of every plan
     // relationship (ports/slots/bindings/auth/regions/DAG/state/transactions
     // and exact entry requirements). Including it closes descriptor hashing
     // over facts not repeated in the compact legacy loops above.
     encoder.string(derive_proofs(plan).proof_index_hash);
     return hash_bytes(encoder);
+}
+
+[[nodiscard]] inline bool validate_command_event_routes(
+    const CompleteExecutionPlanDescriptor& plan,
+    std::vector<CompleteDiagnostic>& diagnostics) {
+    constexpr std::uint32_t kMaximumQueueCapacity = 1024U;
+    const auto find_occurrence = [&](std::string_view id) {
+        return std::find_if(
+            plan.occurrences.begin(), plan.occurrences.end(),
+            [&](const auto& value) { return value.occurrence_id == id; });
+    };
+    const auto find_component = [&](std::string_view occurrence_id) {
+        return std::find_if(
+            plan.runtime_components.begin(), plan.runtime_components.end(),
+            [&](const auto& value) {
+                return value.occurrence_id == occurrence_id;
+            });
+    };
+    const auto find_state = [&](std::string_view occurrence_id) {
+        return std::find_if(
+            plan.state_blocks.begin(), plan.state_blocks.end(),
+            [&](const auto& value) {
+                return value.owner_occurrence_id == occurrence_id;
+            });
+    };
+    const auto find_callsite = [&](std::string_view id) {
+        return std::find_if(
+            plan.runtime_callsites.begin(), plan.runtime_callsites.end(),
+            [&](const auto& value) { return value.callsite_id == id; });
+    };
+    const auto find_transaction = [&](std::string_view id) {
+        return std::find_if(
+            plan.transactions.begin(), plan.transactions.end(),
+            [&](const auto& value) { return value.transaction_id == id; });
+    };
+    const auto find_delivery = [&](std::string_view id) {
+        return std::find_if(
+            plan.event_deliveries.begin(), plan.event_deliveries.end(),
+            [&](const auto& value) {
+                return value.event_delivery_id == id;
+            });
+    };
+
+    if (plan.command_routes.empty() != plan.event_deliveries.empty() ||
+        plan.command_routes.size() != plan.event_deliveries.size()) {
+        diagnostic(diagnostics, CompleteDiagnosticCode::InvalidCommandRoute,
+                   {}, plan.plan_id,
+                   "command routes and event deliveries must have one-to-one cardinality");
+        return false;
+    }
+    std::set<std::string> route_ids;
+    std::set<std::string> route_elements;
+    std::set<std::string> target_occurrence_ids;
+    std::set<std::string> delivery_ids;
+    std::set<std::string> delivery_elements;
+    std::string previous_route_id;
+    for (const auto& route : plan.command_routes) {
+        const auto occurrence = find_occurrence(route.target_occurrence_id);
+        const auto component = find_component(route.target_occurrence_id);
+        const auto state = find_state(route.target_occurrence_id);
+        const auto reducer = find_callsite(route.reducer_callsite_id);
+        const auto transaction = find_transaction(route.transaction_id);
+        const auto delivery = find_delivery(route.event_delivery_id);
+        const bool unique_route = route_ids.insert(route.route_id).second;
+        const bool unique_element =
+            route_elements.insert(route.plan_element_id).second;
+        const bool unique_target =
+            target_occurrence_ids.insert(route.target_occurrence_id).second;
+        const bool canonical_order =
+            previous_route_id.empty() || previous_route_id < route.route_id;
+        previous_route_id = route.route_id;
+        bool valid = valid_source_ref(route.source) &&
+                      !route.route_id.empty() && unique_route &&
+                      unique_element && unique_target && canonical_order &&
+                     route.plan_element_id ==
+                         "command-route/" + route.route_id &&
+                     occurrence != plan.occurrences.end() &&
+                     component != plan.runtime_components.end() &&
+                     component->profile ==
+                         gnc::model_sdk::RuntimeCellProfile::ModeOwner &&
+                     state != plan.state_blocks.end() &&
+                     state->evolution ==
+                         gnc::model_sdk::StaticStateEvolution::InstantPatch &&
+                     reducer != plan.runtime_callsites.end() &&
+                     reducer->occurrence_id == route.target_occurrence_id &&
+                     reducer->obligation ==
+                         gnc::contracts::ExecutionObligation::
+                             CommandReduction &&
+                     reducer->phase == gnc::model_sdk::CoarsePhase::Process &&
+                     reducer->request_contract_id ==
+                         route.payload_schema_id &&
+                     !route.payload_schema_id.empty() &&
+                     reducer->state_read ==
+                         gnc::model_sdk::StaticStateReadKind::Committed &&
+                     reducer->state_write ==
+                         gnc::model_sdk::StaticStateWriteKind::InstantPatch &&
+                     route.decision_authority != 0U &&
+                     route.queue_capacity != 0U &&
+                     route.queue_capacity <= kMaximumQueueCapacity &&
+                     route.queue_policy ==
+                         gnc::contracts::CommandQueuePolicy::RejectNewest &&
+                     route.supersession_policy ==
+                         gnc::contracts::CommandSupersessionPolicy::
+                             LatestDuePerKey &&
+                     route.effective_point ==
+                         gnc::contracts::CommandEffectivePoint::
+                             TransactionStart &&
+                     route.cutoff_policy ==
+                         gnc::contracts::CommandCutoffPolicy::
+                             LedgerSequenceAtTransactionStart &&
+                     transaction != plan.transactions.end() &&
+                     delivery != plan.event_deliveries.end();
+        if (state != plan.state_blocks.end() &&
+            reducer != plan.runtime_callsites.end()) {
+            valid = valid &&
+                    reducer->input_slot_ids ==
+                        std::vector<std::string>{state->committed_slot_id} &&
+                    reducer->output_slot_ids ==
+                        std::vector<std::string>{state->candidate_slot_id} &&
+                    reducer->output_writer_token_ids ==
+                        std::vector<std::string>{
+                            "writer/" + state->candidate_slot_id};
+        }
+        if (component != plan.runtime_components.end()) {
+            valid = valid &&
+                    std::find(component->transaction_ids.begin(),
+                              component->transaction_ids.end(),
+                              route.transaction_id) !=
+                        component->transaction_ids.end();
+        }
+        if (transaction != plan.transactions.end() &&
+            state != plan.state_blocks.end()) {
+            const auto candidate_count = static_cast<std::size_t>(
+                std::count_if(
+                    transaction->candidates.begin(),
+                    transaction->candidates.end(), [&](const auto& value) {
+                        return value.owner_occurrence_id ==
+                                   route.target_occurrence_id &&
+                               value.candidate_state_slot_id ==
+                                   state->candidate_slot_id &&
+                               value.producer.kind ==
+                                   CandidateProducerKind::RuntimeCallsite &&
+                               value.producer.producer_id ==
+                                   route.reducer_callsite_id &&
+                               value.writer_token_id ==
+                                   "writer/" + state->candidate_slot_id &&
+                               value.commit_class ==
+                                   gnc::contracts::StateCommitClass::
+                                       InstantPatch;
+                    }));
+            valid = valid && candidate_count == 1U;
+        }
+        if (!valid) {
+            diagnostic(
+                diagnostics, CompleteDiagnosticCode::InvalidCommandRoute,
+                route.source, route.route_id,
+                "command route does not resolve exactly to one bounded ModeOwner InstantPatch reducer and transaction candidate");
+        }
+    }
+
+    for (std::size_t index = 0U; index < plan.event_deliveries.size();
+         ++index) {
+        const auto& delivery = plan.event_deliveries[index];
+        const auto route = std::find_if(
+            plan.command_routes.begin(), plan.command_routes.end(),
+            [&](const auto& value) {
+                return value.route_id ==
+                       delivery.producer_command_route_id;
+            });
+        const auto producer = find_callsite(delivery.producer_callsite_id);
+        const auto consumer = find_callsite(delivery.consumer_callsite_id);
+        const bool unique_id =
+            delivery_ids.insert(delivery.event_delivery_id).second;
+        const bool unique_element =
+            delivery_elements.insert(delivery.plan_element_id).second;
+        bool valid = valid_source_ref(delivery.source) && unique_id &&
+                     unique_element &&
+                     !delivery.event_delivery_id.empty() &&
+                     delivery.plan_element_id ==
+                         delivery.event_delivery_id &&
+                     delivery.event_delivery_id ==
+                         "event-delivery/" +
+                             delivery.producer_command_route_id &&
+                     delivery.stable_order == index &&
+                     delivery.delivery ==
+                         gnc::contracts::EventDeliveryPoint::
+                             LaterPhaseSameTick &&
+                     route != plan.command_routes.end() &&
+                     producer != plan.runtime_callsites.end() &&
+                     consumer != plan.runtime_callsites.end() &&
+                     !delivery.event_schema_id.empty();
+        if (route != plan.command_routes.end()) {
+            valid = valid &&
+                    route->event_delivery_id ==
+                        delivery.event_delivery_id &&
+                    route->reducer_callsite_id ==
+                        delivery.producer_callsite_id;
+        }
+        if (producer != plan.runtime_callsites.end()) {
+            valid = valid &&
+                    producer->obligation ==
+                        gnc::contracts::ExecutionObligation::
+                            CommandReduction &&
+                    producer->result_contract_id ==
+                        delivery.event_schema_id;
+        }
+        if (consumer != plan.runtime_callsites.end() &&
+            producer != plan.runtime_callsites.end()) {
+            valid = valid &&
+                    consumer->obligation ==
+                        gnc::contracts::ExecutionObligation::
+                            EventConsumption &&
+                    consumer->request_contract_id ==
+                        delivery.event_schema_id &&
+                    !consumer->result_contract_id.empty() &&
+                    consumer->state_read ==
+                        gnc::model_sdk::StaticStateReadKind::None &&
+                    consumer->state_write ==
+                        gnc::model_sdk::StaticStateWriteKind::None &&
+                    consumer->input_slot_ids.empty() &&
+                    consumer->output_slot_ids.empty() &&
+                    static_cast<std::uint32_t>(consumer->phase) >
+                        static_cast<std::uint32_t>(producer->phase);
+        }
+        if (!valid) {
+            diagnostic(
+                diagnostics, CompleteDiagnosticCode::InvalidEventDelivery,
+                delivery.source, delivery.event_delivery_id,
+                "event delivery does not resolve exactly from its reducer to one later-phase typed consumer");
+        }
+    }
+    return diagnostics.empty();
 }
 
 } // namespace complete_plan_detail
@@ -5196,6 +5585,159 @@ compile_complete_execution_plan(
     outcome.value = CompleteStaticCompilation{
         std::move(*ir_outcome.value), std::move(context.plan),
         std::move(proofs)};
+    return outcome;
+}
+
+// Attaches the optional R3 command/event extension to an already canonical
+// static plan. The pass accepts stable descriptor identities and emits only
+// resolved plan references; link subsequently converts them to numeric Image
+// handles. Existing source/IR contracts remain unchanged.
+[[nodiscard]] inline CompleteOutcome<CompleteExecutionPlanDescriptor>
+compile_command_event_routes(
+    CompleteExecutionPlanDescriptor plan,
+    const std::vector<CommandRouteSpec>& route_specs) {
+    using namespace complete_plan_detail;
+    CompleteOutcome<CompleteExecutionPlanDescriptor> outcome;
+    if (plan.revision != 6U ||
+        plan.descriptor_identity != kCompleteExecutionPlanDescriptorIdentity ||
+        plan.descriptor_semantic_hash != descriptor_hash(plan) ||
+        !plan.command_routes.empty() || !plan.event_deliveries.empty()) {
+        diagnostic(outcome.diagnostics,
+                   CompleteDiagnosticCode::InvalidCommandRoute, {},
+                   plan.plan_id,
+                   "command/event lowering requires one canonical unextended complete plan");
+        return outcome;
+    }
+    if (route_specs.empty()) {
+        diagnostic(outcome.diagnostics,
+                   CompleteDiagnosticCode::InvalidCommandRoute, {},
+                   plan.plan_id,
+                   "command/event lowering requires at least one route specification");
+        return outcome;
+    }
+
+    std::vector<const CommandRouteSpec*> ordered_specs;
+    ordered_specs.reserve(route_specs.size());
+    for (const auto& spec : route_specs) {
+        ordered_specs.push_back(&spec);
+    }
+    std::sort(ordered_specs.begin(), ordered_specs.end(),
+              [](const auto* lhs, const auto* rhs) {
+                  return lhs->route_id < rhs->route_id;
+              });
+    std::set<std::string> route_ids;
+    for (std::size_t index = 0U; index < ordered_specs.size(); ++index) {
+        const auto& spec = *ordered_specs[index];
+        if (spec.route_id.empty() ||
+            !route_ids.insert(spec.route_id).second ||
+            !valid_source_ref(spec.source)) {
+            diagnostic(outcome.diagnostics,
+                       CompleteDiagnosticCode::InvalidCommandRoute,
+                       spec.source, spec.route_id,
+                       "route identity and source reference must be unique and complete");
+            continue;
+        }
+        const auto reducer = std::find_if(
+            plan.runtime_callsites.begin(), plan.runtime_callsites.end(),
+            [&](const auto& value) {
+                return value.occurrence_id == spec.target_occurrence_id &&
+                       value.obligation ==
+                           gnc::contracts::ExecutionObligation::
+                               CommandReduction;
+            });
+        const auto reducer_count = static_cast<std::size_t>(std::count_if(
+            plan.runtime_callsites.begin(), plan.runtime_callsites.end(),
+            [&](const auto& value) {
+                return value.occurrence_id == spec.target_occurrence_id &&
+                       value.obligation ==
+                           gnc::contracts::ExecutionObligation::
+                               CommandReduction;
+            }));
+        const auto consumer = std::find_if(
+            plan.runtime_callsites.begin(), plan.runtime_callsites.end(),
+            [&](const auto& value) {
+                return value.occurrence_id ==
+                           spec.event_consumer_occurrence_id &&
+                       value.obligation ==
+                           gnc::contracts::ExecutionObligation::
+                               EventConsumption;
+            });
+        const auto consumer_count = static_cast<std::size_t>(std::count_if(
+            plan.runtime_callsites.begin(), plan.runtime_callsites.end(),
+            [&](const auto& value) {
+                return value.occurrence_id ==
+                           spec.event_consumer_occurrence_id &&
+                       value.obligation ==
+                           gnc::contracts::ExecutionObligation::
+                               EventConsumption;
+            }));
+        const auto transaction = std::find_if(
+            plan.transactions.begin(), plan.transactions.end(),
+            [&](const auto& value) {
+                return std::any_of(
+                    value.candidates.begin(), value.candidates.end(),
+                    [&](const auto& candidate) {
+                        return candidate.owner_occurrence_id ==
+                                   spec.target_occurrence_id &&
+                               candidate.commit_class ==
+                                   gnc::contracts::StateCommitClass::
+                                       InstantPatch;
+                    });
+            });
+        const auto transaction_count = static_cast<std::size_t>(
+            std::count_if(
+                plan.transactions.begin(), plan.transactions.end(),
+                [&](const auto& value) {
+                    return std::any_of(
+                        value.candidates.begin(), value.candidates.end(),
+                        [&](const auto& candidate) {
+                            return candidate.owner_occurrence_id ==
+                                       spec.target_occurrence_id &&
+                                   candidate.commit_class ==
+                                       gnc::contracts::StateCommitClass::
+                                           InstantPatch;
+                        });
+                }));
+        if (reducer_count != 1U || consumer_count != 1U ||
+            transaction_count != 1U ||
+            reducer == plan.runtime_callsites.end() ||
+            consumer == plan.runtime_callsites.end() ||
+            transaction == plan.transactions.end()) {
+            diagnostic(
+                outcome.diagnostics,
+                reducer_count != 1U || transaction_count != 1U
+                    ? CompleteDiagnosticCode::InvalidCommandRoute
+                    : CompleteDiagnosticCode::InvalidEventDelivery,
+                spec.source, spec.route_id,
+                "route must resolve exactly one target reducer, transaction, and event consumer");
+            continue;
+        }
+        const auto delivery_id = "event-delivery/" + spec.route_id;
+        plan.command_routes.push_back(
+            {"command-route/" + spec.route_id, spec.route_id,
+             transaction->transaction_id, spec.target_occurrence_id,
+             reducer->callsite_id, spec.payload_schema_id,
+             spec.decision_authority, spec.queue_capacity,
+             spec.queue_policy, spec.supersession_policy,
+             spec.effective_point, spec.cutoff_policy, delivery_id,
+             spec.source});
+        plan.event_deliveries.push_back(
+            {delivery_id, delivery_id, spec.route_id,
+             reducer->callsite_id, consumer->callsite_id,
+             spec.event_schema_id,
+             gnc::contracts::EventDeliveryPoint::LaterPhaseSameTick,
+             static_cast<std::uint32_t>(index), spec.source});
+    }
+    if (!outcome.diagnostics.empty()) {
+        return outcome;
+    }
+    static_cast<void>(
+        validate_command_event_routes(plan, outcome.diagnostics));
+    if (!outcome.diagnostics.empty()) {
+        return outcome;
+    }
+    plan.descriptor_semantic_hash = descriptor_hash(plan);
+    outcome.value = std::move(plan);
     return outcome;
 }
 
@@ -5457,7 +5999,9 @@ namespace complete_plan_detail {
                 callsite.state_write ==
                     gnc::model_sdk::StaticStateWriteKind::None ||
                 callsite.state_write ==
-                    gnc::model_sdk::StaticStateWriteKind::IntervalCandidate;
+                    gnc::model_sdk::StaticStateWriteKind::IntervalCandidate ||
+                callsite.state_write ==
+                    gnc::model_sdk::StaticStateWriteKind::InstantPatch;
             valid = valid && valid_state_read && valid_state_write &&
                     ((callsite.state_read ==
                               gnc::model_sdk::StaticStateReadKind::None &&
@@ -5494,8 +6038,8 @@ namespace complete_plan_detail {
                     expected_input_slots.push_back(
                         state->candidate_slot_id);
                 }
-                if (callsite.state_write ==
-                    gnc::model_sdk::StaticStateWriteKind::IntervalCandidate) {
+                if (callsite.state_write !=
+                    gnc::model_sdk::StaticStateWriteKind::None) {
                     expected_output_slots.push_back(
                         state->candidate_slot_id);
                 }
@@ -6756,6 +7300,7 @@ namespace complete_plan_detail {
         std::sort(expected_owners.begin(), expected_owners.end());
         std::vector<std::string> actual_owners;
         std::vector<std::string> candidate_slots;
+        std::vector<std::string> interval_candidate_slots;
         bool valid = !transaction.transaction_id.empty() &&
                      transaction.plan_element_id ==
                          "transaction/" + transaction.transaction_id &&
@@ -6776,6 +7321,27 @@ namespace complete_plan_detail {
                         candidate.candidate_state_slot_id &&
                     writer != plan.writer_tokens.end() &&
                     writer->slot_id == candidate.candidate_state_slot_id;
+            if (state != plan.state_blocks.end()) {
+                const auto expected_commit_class =
+                    state->evolution ==
+                            gnc::model_sdk::StaticStateEvolution::
+                                InstantPatch
+                        ? gnc::contracts::StateCommitClass::InstantPatch
+                        : (state->evolution ==
+                                   gnc::model_sdk::StaticStateEvolution::
+                                       ContinuousCandidate
+                               ? gnc::contracts::StateCommitClass::
+                                     ContinuousCandidate
+                               : gnc::contracts::StateCommitClass::
+                                     IntervalCandidate);
+                valid = valid &&
+                        candidate.commit_class == expected_commit_class;
+                if (candidate.commit_class !=
+                    gnc::contracts::StateCommitClass::InstantPatch) {
+                    interval_candidate_slots.push_back(
+                        candidate.candidate_state_slot_id);
+                }
+            }
             if (state != plan.state_blocks.end() &&
                 state->evolution ==
                     gnc::model_sdk::StaticStateEvolution::
@@ -6814,6 +7380,8 @@ namespace complete_plan_detail {
         valid = valid && actual_owners == expected_owners &&
                 sorted_unique(actual_owners);
         std::sort(candidate_slots.begin(), candidate_slots.end());
+        std::sort(interval_candidate_slots.begin(),
+                  interval_candidate_slots.end());
         std::vector<std::string> expected_held;
         for (const auto& scope : plan.integration_scopes) {
             if (scope.scope == transaction.scope) {
@@ -6897,7 +7465,7 @@ namespace complete_plan_detail {
         valid = valid &&
                 branch_matches(
                     0U, gnc::contracts::TransactionBranch::Continue,
-                    candidate_slots, {}, expected_held, {},
+                    interval_candidate_slots, {}, expected_held, {},
                     expected_cycle_outputs, expected_cycle_outputs,
                     expected_terminal_outputs,
                     gnc::contracts::TransactionOutputVisibility::
@@ -6911,7 +7479,7 @@ namespace complete_plan_detail {
                     false, 1, 1) &&
                 branch_matches(
                     1U, gnc::contracts::TransactionBranch::Terminal, {},
-                    candidate_slots, {}, expected_held,
+                    interval_candidate_slots, {}, expected_held,
                     expected_terminal_published,
                     expected_terminal_published, {},
                     gnc::contracts::TransactionOutputVisibility::
@@ -6921,7 +7489,7 @@ namespace complete_plan_detail {
                     true,
                     gnc::contracts::TransactionFailureOwner::Unspecified,
                     gnc::contracts::TransactionFailureRoute::Unspecified,
-                    true, true, true,
+                    true, true, !expected_terminal_outputs.empty(),
                     1, 0) &&
                 branch_matches(
                     2U, gnc::contracts::TransactionBranch::Failure, {},
@@ -8001,6 +8569,50 @@ namespace complete_plan_detail {
             encoder.integer(branch.tick_delta);
         }
     });
+    if (!image.command_routes.empty() || !image.event_deliveries.empty()) {
+        encoder.string("gnc.execution-plan-image.command-event@1");
+        encode_ids(image.transactions, [&](const auto& value) {
+            encoder.uint32(value.handle);
+            encoder.collection(value.candidates.size());
+            for (const auto& candidate : value.candidates) {
+                encoder.uint32(candidate.candidate_state_slot_handle);
+                encoder.uint32(
+                    static_cast<std::uint32_t>(candidate.commit_class));
+            }
+        });
+        encode_ids(image.command_routes, [&](const auto& value) {
+            encoder.uint32(value.handle);
+            encoder.string(value.plan_element_id);
+            encoder.uint32(value.transaction_handle);
+            encoder.uint32(value.target_runtime_component_handle);
+            encoder.uint32(value.target_owner_occurrence_handle);
+            encoder.uint32(value.target_state_block_handle);
+            encoder.uint32(value.reducer_callsite_handle);
+            encoder.string(value.payload_schema_id);
+            encoder.uint32(value.decision_authority);
+            encoder.uint32(value.queue_capacity);
+            encoder.uint32(
+                static_cast<std::uint32_t>(value.queue_policy));
+            encoder.uint32(
+                static_cast<std::uint32_t>(value.supersession_policy));
+            encoder.uint32(
+                static_cast<std::uint32_t>(value.effective_point));
+            encoder.uint32(
+                static_cast<std::uint32_t>(value.cutoff_policy));
+            encoder.uint32(value.event_delivery_handle);
+        });
+        encode_ids(image.event_deliveries, [&](const auto& value) {
+            encoder.uint32(value.handle);
+            encoder.string(value.plan_element_id);
+            encoder.uint32(value.producer_command_route_handle);
+            encoder.uint32(value.producer_callsite_handle);
+            encoder.uint32(value.consumer_callsite_handle);
+            encoder.string(value.event_schema_id);
+            encoder.uint32(
+                static_cast<std::uint32_t>(value.delivery));
+            encoder.uint32(value.stable_order);
+        });
+    }
     encode_ids(image.cancellation_policy.safe_points, [&](const auto& value) {
         encoder.uint32(value.handle);
         encoder.uint32(value.transaction_handle);
@@ -8083,6 +8695,8 @@ link_complete_execution_plan(
     static_cast<void>(
         validate_storage_resources_transactions_lifecycle(
             plan, outcome.diagnostics));
+    static_cast<void>(
+        validate_command_event_routes(plan, outcome.diagnostics));
     if (!outcome.diagnostics.empty()) {
         return outcome;
     }
@@ -8927,6 +9541,15 @@ link_complete_execution_plan(
         transaction_handles.emplace(transaction.transaction_id,
                                     next_handle++);
     }
+    std::map<std::string, std::uint32_t> command_route_handles;
+    for (const auto& route : plan.command_routes) {
+        command_route_handles.emplace(route.route_id, next_handle++);
+    }
+    std::map<std::string, std::uint32_t> event_delivery_handles;
+    for (const auto& delivery : plan.event_deliveries) {
+        event_delivery_handles.emplace(delivery.event_delivery_id,
+                                       next_handle++);
+    }
     std::map<std::string, std::uint32_t> evaluator_history_handles;
     for (const auto& history : plan.evaluator_histories) {
         evaluator_history_handles.emplace(history.history_id,
@@ -9116,12 +9739,13 @@ link_complete_execution_plan(
                 {occurrence_handles.at(candidate.owner_occurrence_id),
                  slot_handles.at(candidate.candidate_state_slot_id),
                  integration ? "IntegrationScope" : "RuntimeCallsite",
-                 integration
-                     ? integration_handles.at(
-                           candidate.producer.producer_id)
-                     : callsite_handles.at(
-                           candidate.producer.producer_id),
-                 writer_token_handles.at(candidate.writer_token_id)});
+                  integration
+                      ? integration_handles.at(
+                            candidate.producer.producer_id)
+                      : callsite_handles.at(
+                            candidate.producer.producer_id),
+                  writer_token_handles.at(candidate.writer_token_id),
+                  candidate.commit_class});
         }
         std::vector<std::uint32_t> held_slots;
         for (const auto& slot : transaction.held_slot_ids) {
@@ -9179,6 +9803,32 @@ link_complete_execution_plan(
              std::move(candidates), std::move(held_slots),
              std::move(branches)});
         conformance_handles[transaction.plan_element_id].push_back(handle);
+    }
+    for (const auto& route : plan.command_routes) {
+        image.command_routes.push_back(
+            {command_route_handles.at(route.route_id),
+             route.plan_element_id,
+             transaction_handles.at(route.transaction_id),
+             runtime_component_handles.at(route.target_occurrence_id),
+             occurrence_handles.at(route.target_occurrence_id),
+             state_block_handles.at(route.target_occurrence_id),
+             callsite_handles.at(route.reducer_callsite_id),
+             route.payload_schema_id, route.decision_authority,
+             route.queue_capacity, route.queue_policy,
+             route.supersession_policy, route.effective_point,
+             route.cutoff_policy,
+             event_delivery_handles.at(route.event_delivery_id)});
+    }
+    for (const auto& delivery : plan.event_deliveries) {
+        image.event_deliveries.push_back(
+            {event_delivery_handles.at(delivery.event_delivery_id),
+             delivery.plan_element_id,
+             command_route_handles.at(
+                 delivery.producer_command_route_id),
+             callsite_handles.at(delivery.producer_callsite_id),
+             callsite_handles.at(delivery.consumer_callsite_id),
+             delivery.event_schema_id, delivery.delivery,
+             delivery.stable_order});
     }
     for (const auto& transaction : image.transactions) {
         const auto append_safe_point =

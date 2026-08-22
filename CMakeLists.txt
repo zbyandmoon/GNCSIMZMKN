@@ -261,6 +261,19 @@ if(GNC_BUILD_TESTS)
     endif()
     gnc_enable_warnings(gnc_kernel_step_transaction_probe)
 
+    # R3 bounded command/event slice over a qualification-only ModeOwner.
+    add_executable(
+        gnc_kernel_command_event_probe
+        tests/kernel_command_event.cpp)
+    target_link_libraries(
+        gnc_kernel_command_event_probe
+        PRIVATE compiler kernel_session)
+    if(MSVC)
+        target_compile_options(
+            gnc_kernel_command_event_probe PRIVATE /bigobj)
+    endif()
+    gnc_enable_warnings(gnc_kernel_command_event_probe)
+
     # R0 validation spike: intentionally isolated from product modules and Legacy.
     add_executable(
         gnc_scientific_conventions
@@ -499,6 +512,9 @@ if(GNC_BUILD_TESTS)
     add_test(
         NAME r3.kernel-step-transaction.probe
         COMMAND gnc_kernel_step_transaction_probe --self-check)
+    add_test(
+        NAME r3.kernel-command-event.probe
+        COMMAND gnc_kernel_command_event_probe --self-check)
     add_test(
         NAME r0.scientific-conventions.properties
         COMMAND gnc_scientific_conventions --self-check)
