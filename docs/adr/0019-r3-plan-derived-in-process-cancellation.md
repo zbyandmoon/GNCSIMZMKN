@@ -6,6 +6,7 @@
 - Related tasks: R3-SCH-001, R3-TXN-001, R3-LIF-001, R3-DIA-001
 - Architecture references: 06 §3, §7, §14, §19; 07 §3, §6, §7; 14 §5–§13
 - Extends: ADR-0017 in-process run lifecycle outcomes; ADR-0018 completed-run reset and explicit dispose
+- Extended by: ADR-0020 in-process command cutoff, receipt and event commit
 
 ## Context
 
