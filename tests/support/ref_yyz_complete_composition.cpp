@@ -2,6 +2,7 @@
 
 #include <yyz/mass_commit.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <stdexcept>
@@ -669,6 +670,36 @@ gnc::compiler::CompleteOutcome<gnc::contracts::ExecutionPlanImage>
 compile_complete_image() {
     const auto package =
         gnc::packages::yyz::describe_yyz_rigid_step_package();
+    const auto implementation =
+        gnc::packages::yyz::describe_yyz_rigid_step_implementation(
+            "build.ref-yyz.release");
+    const auto source = make_complete_source(package);
+    return gnc::compiler::compile_and_link_complete_execution_plan(
+        source, {package}, {implementation});
+}
+
+gnc::compiler::CompleteOutcome<gnc::contracts::ExecutionPlanImage>
+compile_complete_image_without_reset_capability() {
+    auto package =
+        gnc::packages::yyz::describe_yyz_rigid_step_package();
+    const auto component = std::find_if(
+        package.models.begin(), package.models.end(), [](const auto& model) {
+            return model.runtime_component.has_value();
+        });
+    if (component == package.models.end()) {
+        throw std::runtime_error(
+            "REF-YYZ reset capability fixture lacks a Runtime Cell");
+    }
+    auto& lifecycle = component->runtime_component->lifecycle_capabilities;
+    const auto resettable = std::find(
+        lifecycle.begin(), lifecycle.end(),
+        gnc::model_sdk::RuntimeLifecycleCapability::Resettable);
+    if (resettable == lifecycle.end()) {
+        throw std::runtime_error(
+            "REF-YYZ reset capability fixture lacks Resettable");
+    }
+    lifecycle.erase(resettable);
+
     const auto implementation =
         gnc::packages::yyz::describe_yyz_rigid_step_implementation(
             "build.ref-yyz.release");

@@ -234,8 +234,8 @@ enum class RuntimeDiagnosticCode : std::uint8_t {
     LifecycleTransitionRejected,
     ResetRequestInvalid,
     ResetStateRebuildFailed,
-    ResetCapabilityMissing,
     ResetPrecommitFailed,
+    ResetCapabilityMissing,
 };
 
 enum class RuntimeDiagnosticStage : std::uint8_t {

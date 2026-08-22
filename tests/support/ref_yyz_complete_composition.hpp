@@ -18,4 +18,12 @@ make_complete_source(
     gnc::contracts::ExecutionPlanImage>
 compile_complete_image();
 
+// Compiles the same executable composition through the ordinary Catalog and
+// linker path while one Runtime Cell deliberately omits the optional
+// Resettable capability. The returned Image is legal and remains executable;
+// only completed-run reset is unavailable for that Session.
+[[nodiscard]] gnc::compiler::CompleteOutcome<
+    gnc::contracts::ExecutionPlanImage>
+compile_complete_image_without_reset_capability();
+
 } // namespace gnc::tests::ref_yyz

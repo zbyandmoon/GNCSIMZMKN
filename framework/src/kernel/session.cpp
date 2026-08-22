@@ -486,9 +486,9 @@ std::string_view to_string(RuntimeDiagnosticCode code) noexcept {
         return "GNC-RUN-RST-0001";
     case RuntimeDiagnosticCode::ResetStateRebuildFailed:
         return "GNC-RUN-RST-0002";
-    case RuntimeDiagnosticCode::ResetCapabilityMissing:
-        return "GNC-RUN-RST-0003";
     case RuntimeDiagnosticCode::ResetPrecommitFailed:
+        return "GNC-RUN-RST-0003";
+    case RuntimeDiagnosticCode::ResetCapabilityMissing:
         return "GNC-RUN-RST-0004";
     }
     return "GNC-RUN-INT-0001";

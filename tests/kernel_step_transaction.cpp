@@ -802,25 +802,29 @@ void require_mission_oracle(const MissionResultProbe& value) {
     return std::make_shared<const ExecutionPlanImage>(*compiled.value);
 }
 
+void verify_reset_diagnostic_code_stability() {
+    require(gnc::kernel::to_string(
+                RuntimeDiagnosticCode::ResetRequestInvalid) ==
+                "GNC-RUN-RST-0001" &&
+                gnc::kernel::to_string(
+                    RuntimeDiagnosticCode::ResetStateRebuildFailed) ==
+                    "GNC-RUN-RST-0002" &&
+                gnc::kernel::to_string(
+                    RuntimeDiagnosticCode::ResetPrecommitFailed) ==
+                    "GNC-RUN-RST-0003" &&
+                gnc::kernel::to_string(
+                    RuntimeDiagnosticCode::ResetCapabilityMissing) ==
+                    "GNC-RUN-RST-0004",
+            "reset diagnostic code compatibility changed");
+}
+
 [[nodiscard]] std::shared_ptr<const ExecutionPlanImage>
-build_image_without_reset_capability(
-    const ExecutionPlanImage& baseline) {
-    auto data = baseline.data();
-    require(!data.runtime_components.empty(),
-            "reset capability negative lacks a Runtime Cell");
-    auto& capabilities =
-        data.runtime_components.front().lifecycle_capabilities;
-    const auto found = std::find(capabilities.begin(), capabilities.end(),
-                                 "Resettable");
-    require(found != capabilities.end(),
-            "reset capability negative lacks its baseline capability");
-    capabilities.erase(found);
-    data.image_fingerprint =
-        gnc::compiler::complete_plan_detail::image_fingerprint(data);
-    require(data.image_fingerprint != baseline.fingerprint(),
-            "reset capability did not enter the Image fingerprint");
-    return std::make_shared<const ExecutionPlanImage>(
-        ExecutionPlanImage::freeze(std::move(data)));
+build_image_without_reset_capability() {
+    const auto compiled = gnc::tests::ref_yyz::
+        compile_complete_image_without_reset_capability();
+    require(compiled.succeeded(),
+            "Compiler rejected a legal non-resettable Runtime Cell");
+    return std::make_shared<const ExecutionPlanImage>(*compiled.value);
 }
 
 [[nodiscard]] gnc::kernel::InitializationRequest initialization_request(
@@ -1115,7 +1119,9 @@ void verify_initialization_identity_and_commit(
 
 void verify_reset_capability_fail_closed(
     const std::shared_ptr<const ExecutionPlanImage>& baseline) {
-    const auto image = build_image_without_reset_capability(*baseline);
+    const auto image = build_image_without_reset_capability();
+    require(image->fingerprint() != baseline->fingerprint(),
+            "Resettable capability did not enter the Image fingerprint");
     auto bundle = initialize_session(
         image, {}, "run:reset-capability-base");
     require(static_cast<bool>(bundle.session->run_to_terminal()),
@@ -3286,6 +3292,7 @@ void verify_dispose_lifecycle(
 void run() {
     const auto image = build_image();
     verify_initialization_identity_and_commit(image);
+    verify_reset_diagnostic_code_stability();
     verify_complete_step_transactions(image);
     verify_run_to_terminal(image);
     verify_failure_matrix(image);

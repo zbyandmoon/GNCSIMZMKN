@@ -547,16 +547,21 @@ inline void validate_runtime_component(
              "current-cycle freshness"});
     }
     const std::vector<gnc::model_sdk::RuntimeLifecycleCapability>
-        expected_lifecycle{
+        canonical_lifecycle{
+            gnc::model_sdk::RuntimeLifecycleCapability::Instantiate,
+            gnc::model_sdk::RuntimeLifecycleCapability::Dispose};
+    const std::vector<gnc::model_sdk::RuntimeLifecycleCapability>
+        canonical_resettable_lifecycle{
             gnc::model_sdk::RuntimeLifecycleCapability::Instantiate,
             gnc::model_sdk::RuntimeLifecycleCapability::Resettable,
             gnc::model_sdk::RuntimeLifecycleCapability::Dispose};
-    if (runtime.lifecycle_capabilities != expected_lifecycle) {
+    if (runtime.lifecycle_capabilities != canonical_lifecycle &&
+        runtime.lifecycle_capabilities != canonical_resettable_lifecycle) {
         diagnostics.push_back(
             {DiagnosticCode::InvalidCatalogDescriptor, source,
              definition.model_id,
-             "current runtime lifecycle is exactly Instantiate, "
-             "Resettable, and Dispose"});
+             "runtime lifecycle requires exactly one Instantiate followed "
+             "by optional Resettable and exactly one Dispose"});
     }
     if (evaluator) {
         if (!runtime.evaluator_history_shape.has_value()) {

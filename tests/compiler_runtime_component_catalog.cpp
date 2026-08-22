@@ -352,6 +352,53 @@ void expect_invalid_catalog(StaticPackageDescriptor package,
         std::move(invalid_lifecycle),
         "incomplete stateless lifecycle entered the Catalog");
 
+    auto non_resettable = describe_yyz_rigid_step_package();
+    find_model(non_resettable, kAltitudePitchGuidanceModelIdentity)
+        .runtime_component->lifecycle_capabilities = {
+        RuntimeLifecycleCapability::Instantiate,
+        RuntimeLifecycleCapability::Dispose};
+    require(Catalog::build({std::move(non_resettable)}).succeeded(),
+            "canonical non-resettable lifecycle was rejected");
+
+    const auto expect_invalid_lifecycle = [](auto capabilities,
+                                             std::string_view message) {
+        auto package = describe_yyz_rigid_step_package();
+        find_model(package, kAltitudePitchGuidanceModelIdentity)
+            .runtime_component->lifecycle_capabilities =
+            std::move(capabilities);
+        expect_invalid_catalog(std::move(package), message);
+    };
+    expect_invalid_lifecycle(
+        std::vector<RuntimeLifecycleCapability>{
+            RuntimeLifecycleCapability::Instantiate,
+            RuntimeLifecycleCapability::Instantiate,
+            RuntimeLifecycleCapability::Dispose},
+        "duplicate Instantiate lifecycle entered the Catalog");
+    expect_invalid_lifecycle(
+        std::vector<RuntimeLifecycleCapability>{
+            RuntimeLifecycleCapability::Instantiate,
+            RuntimeLifecycleCapability::Resettable,
+            RuntimeLifecycleCapability::Resettable,
+            RuntimeLifecycleCapability::Dispose},
+        "duplicate Resettable lifecycle entered the Catalog");
+    expect_invalid_lifecycle(
+        std::vector<RuntimeLifecycleCapability>{
+            RuntimeLifecycleCapability::Instantiate,
+            RuntimeLifecycleCapability::Dispose,
+            RuntimeLifecycleCapability::Dispose},
+        "duplicate Dispose lifecycle entered the Catalog");
+    expect_invalid_lifecycle(
+        std::vector<RuntimeLifecycleCapability>{
+            RuntimeLifecycleCapability::Dispose,
+            RuntimeLifecycleCapability::Instantiate},
+        "wrong lifecycle order entered the Catalog");
+    expect_invalid_lifecycle(
+        std::vector<RuntimeLifecycleCapability>{
+            RuntimeLifecycleCapability::Instantiate,
+            static_cast<RuntimeLifecycleCapability>(255U),
+            RuntimeLifecycleCapability::Dispose},
+        "unknown lifecycle capability entered the Catalog");
+
     auto runtime_on_query = describe_yyz_rigid_step_package();
     const auto runtime_facts =
         find_model(runtime_on_query,
@@ -463,7 +510,7 @@ void expect_invalid_catalog(StaticPackageDescriptor package,
                 has_diagnostic(unknown.diagnostics,
                                DiagnosticCode::UnknownDefinition),
             "unknown RuntimeComponent definition was accepted");
-    return 32U;
+    return 38U;
 }
 
 } // namespace
