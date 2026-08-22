@@ -23,6 +23,7 @@ enum class SessionState : std::uint8_t {
     Created,
     Initialized,
     Completed,
+    Cancelled,
     Failed,
     Disposed,
 };
@@ -115,6 +116,61 @@ class RunId final {
 
   private:
     std::shared_ptr<const std::string> value_;
+};
+
+// The caller owns the opaque spelling. The shared immutable representation
+// lets the concurrent cancellation entry retain it without copying during a
+// noexcept request.
+class CancellationRequestId final {
+  public:
+    CancellationRequestId() noexcept = default;
+    explicit CancellationRequestId(std::string value)
+        : value_(std::make_shared<const std::string>(std::move(value))) {}
+
+    [[nodiscard]] std::string_view value() const noexcept {
+        return value_ == nullptr ? std::string_view{}
+                                 : std::string_view(*value_);
+    }
+    [[nodiscard]] bool empty() const noexcept { return value().empty(); }
+
+    friend bool operator==(const CancellationRequestId& lhs,
+                           const CancellationRequestId& rhs) noexcept {
+        return lhs.value() == rhs.value();
+    }
+    friend bool operator!=(const CancellationRequestId& lhs,
+                           const CancellationRequestId& rhs) noexcept {
+        return !(lhs == rhs);
+    }
+
+  private:
+    std::shared_ptr<const std::string> value_;
+};
+
+struct CancellationRequest {
+    CancellationRequestId request_id;
+    RunId run_id;
+};
+
+enum class CancellationDisposition : std::uint8_t {
+    Accepted,
+    AlreadyRequested,
+    Rejected,
+    Superseded,
+};
+
+struct CancellationOutcome {
+    CancellationDisposition disposition =
+        CancellationDisposition::Rejected;
+    CancellationRequestId request_id;
+    RunId run_id;
+    std::uint64_t observed_committed_epoch = 0U;
+    std::int64_t observed_committed_tick = 0;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return disposition == CancellationDisposition::Accepted ||
+               disposition ==
+                   CancellationDisposition::AlreadyRequested;
+    }
 };
 
 // R3 currently freezes initial values into the Image. The exact in-process
@@ -278,6 +334,7 @@ struct ResetOutcome {
 enum class StepStatus : std::uint8_t {
     Committed,
     Terminated,
+    Cancelled,
     Failed,
 };
 
@@ -332,7 +389,23 @@ struct StepOutcome {
 
 enum class RunFinalStatus : std::uint8_t {
     Completed,
+    Cancelled,
     Failed,
+};
+
+enum class RunDriveStatus : std::uint8_t {
+    Completed,
+    Cancelled,
+    Failed,
+};
+
+struct RunDriveOutcome {
+    RunDriveStatus status = RunDriveStatus::Failed;
+    SessionResult result;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return status == RunDriveStatus::Completed && result;
+    }
 };
 
 enum class RunFinalizationStatus : std::uint8_t {
@@ -971,9 +1044,13 @@ class Session final {
     [[nodiscard]] InitializationOutcome initialize(
         InitializationRequest request) noexcept;
     [[nodiscard]] ResetOutcome reset(ResetRequest request) noexcept;
+    // The only Session mutation entry that may run concurrently with the
+    // single execution owner. Session lifetime must cover the whole call.
+    [[nodiscard]] CancellationOutcome request_cancel(
+        CancellationRequest request) noexcept;
     [[nodiscard]] SessionResult dispose() noexcept;
     [[nodiscard]] StepOutcome execute_step() noexcept;
-    [[nodiscard]] SessionResult run_to_terminal() noexcept;
+    [[nodiscard]] RunDriveOutcome run_to_terminal() noexcept;
     [[nodiscard]] const SessionResult& last_result() const noexcept;
     [[nodiscard]] const InitializationOutcome&
     last_initialization_outcome() const noexcept;

@@ -15,12 +15,51 @@
 #include <new>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 #include <typeinfo>
 #include <unordered_map>
 #include <utility>
 
 namespace gnc::tests::ref_yyz {
+
+void AdapterCoordination::arm(AdapterCoordinationPoint point,
+                              std::uint32_t subject_handle) noexcept {
+    armed_.store(false, std::memory_order_release);
+    point_.store(point, std::memory_order_relaxed);
+    subject_handle_.store(subject_handle, std::memory_order_relaxed);
+    reached_.store(false, std::memory_order_relaxed);
+    released_.store(false, std::memory_order_relaxed);
+    armed_.store(true, std::memory_order_release);
+}
+
+bool AdapterCoordination::wait_until_reached(
+    std::size_t yield_limit) const noexcept {
+    for (std::size_t attempt = 0U; attempt < yield_limit; ++attempt) {
+        if (reached_.load(std::memory_order_acquire)) return true;
+        std::this_thread::yield();
+    }
+    return reached_.load(std::memory_order_acquire);
+}
+
+void AdapterCoordination::release() noexcept {
+    released_.store(true, std::memory_order_release);
+}
+
+void AdapterCoordination::arrive(AdapterCoordinationPoint point,
+                                 std::uint32_t subject_handle) noexcept {
+    if (!armed_.load(std::memory_order_acquire) ||
+        point_.load(std::memory_order_relaxed) != point ||
+        subject_handle_.load(std::memory_order_relaxed) != subject_handle) {
+        return;
+    }
+    reached_.store(true, std::memory_order_release);
+    while (!released_.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    armed_.store(false, std::memory_order_release);
+}
+
 namespace {
 
 namespace yyz = gnc::packages::yyz;
@@ -79,6 +118,7 @@ void record(const std::shared_ptr<MaterializationTrace>& trace,
 
 class CompiledProvider final : public SessionMaterializationProvider {
   public:
+    std::shared_ptr<AdapterCoordination> coordination;
     std::unordered_map<std::uint32_t,
                        std::shared_ptr<const SessionObjectMaterializer>>
         preparations;
@@ -162,6 +202,7 @@ make_state_materializer(
     std::shared_ptr<bool> fail_next_replace,
     std::shared_ptr<bool> fail_next_validate,
     std::shared_ptr<bool> disable_nofail_swap,
+    std::shared_ptr<AdapterCoordination> coordination,
     std::size_t fail_copy_ordinal, Construct construct);
 
 template <typename Value>
@@ -638,6 +679,7 @@ void build_initial_states(
                     fail_next_state_replace,
                     fail_next_state_validation,
                     disable_state_nofail_swap,
+                    provider.coordination,
                     options.fail_state_copy_ordinal,
                     [algorithm = definition.rigid.algorithm,
                      input = std::move(input), initial, fail, trace,
@@ -688,6 +730,7 @@ void build_initial_states(
                     fail_next_state_replace,
                     fail_next_state_validation,
                     disable_state_nofail_swap,
+                    provider.coordination,
                     options.fail_state_copy_ordinal,
                     [definition = std::move(definition),
                      input = std::move(input), initial, fail, trace,
@@ -1053,6 +1096,7 @@ class StateOperations final : public InProcessObjectOperations {
                     std::shared_ptr<bool> fail_next_replace,
                     std::shared_ptr<bool> fail_next_validate,
                     std::shared_ptr<bool> disable_nofail_swap,
+                    std::shared_ptr<AdapterCoordination> coordination,
                     std::size_t fail_copy_ordinal)
         : layout_identity_(std::move(layout_identity)),
           codec_entry_handle_(codec_entry_handle), codec_(codec),
@@ -1061,6 +1105,7 @@ class StateOperations final : public InProcessObjectOperations {
           fail_next_replace_(std::move(fail_next_replace)),
           fail_next_validate_(std::move(fail_next_validate)),
           disable_nofail_swap_(std::move(disable_nofail_swap)),
+          coordination_(std::move(coordination)),
           fail_copy_ordinal_(fail_copy_ordinal) {}
 
     [[nodiscard]] InProcessObjectLayout layout() const noexcept override {
@@ -1129,6 +1174,10 @@ class StateOperations final : public InProcessObjectOperations {
     }
 
     [[nodiscard]] bool supports_nofail_swap() const noexcept override {
+        if (coordination_ != nullptr) {
+            coordination_->arrive(
+                AdapterCoordinationPoint::FinalPrecommit, handle_);
+        }
         return codec_.noexcept_swap != nullptr &&
                (disable_nofail_swap_ == nullptr ||
                 !*disable_nofail_swap_);
@@ -1137,6 +1186,10 @@ class StateOperations final : public InProcessObjectOperations {
     void nofail_swap(void* lhs, void* rhs) const noexcept override {
         codec_.noexcept_swap(*static_cast<Value*>(lhs),
                              *static_cast<Value*>(rhs));
+        if (coordination_ != nullptr) {
+            coordination_->arrive(
+                AdapterCoordinationPoint::ModelCommit, handle_);
+        }
     }
 
     void destroy(void* object) const noexcept override {
@@ -1158,6 +1211,7 @@ class StateOperations final : public InProcessObjectOperations {
     std::shared_ptr<bool> fail_next_replace_;
     std::shared_ptr<bool> fail_next_validate_;
     std::shared_ptr<bool> disable_nofail_swap_;
+    std::shared_ptr<AdapterCoordination> coordination_;
     std::size_t fail_copy_ordinal_ =
         (std::numeric_limits<std::size_t>::max)();
     mutable std::size_t copy_count_ = 0U;
@@ -1299,8 +1353,10 @@ class FixedInvocation final : public SessionInvocationEntry {
     using Invoke = std::function<SessionResult(
         const SessionInvocationContext&)>;
 
-    FixedInvocation(SessionInvocationIdentity identity, Invoke invoke)
-        : identity_(identity), invoke_(std::move(invoke)) {}
+    FixedInvocation(SessionInvocationIdentity identity, Invoke invoke,
+                    std::shared_ptr<AdapterCoordination> coordination)
+        : identity_(identity), invoke_(std::move(invoke)),
+          coordination_(std::move(coordination)) {}
 
     [[nodiscard]] SessionInvocationIdentity identity()
         const noexcept override {
@@ -1310,7 +1366,13 @@ class FixedInvocation final : public SessionInvocationEntry {
     [[nodiscard]] SessionResult invoke(
         const SessionInvocationContext& context) const noexcept override {
         try {
-            return invoke_(context);
+            auto result = invoke_(context);
+            if (coordination_ != nullptr) {
+                coordination_->arrive(
+                    AdapterCoordinationPoint::InvocationReturn,
+                    identity_.callsite_handle);
+            }
+            return result;
         } catch (...) {
             return {gnc::kernel::SessionError::InvocationFailed,
                     identity_.callsite_handle,
@@ -1321,6 +1383,7 @@ class FixedInvocation final : public SessionInvocationEntry {
   private:
     SessionInvocationIdentity identity_;
     Invoke invoke_;
+    std::shared_ptr<AdapterCoordination> coordination_;
 };
 
 class FixedIntegration final : public SessionIntegrationEntry {
@@ -1329,8 +1392,10 @@ class FixedIntegration final : public SessionIntegrationEntry {
         const SessionIntegrationContext&)>;
 
     FixedIntegration(SessionIntegrationIdentity identity,
-                     Integrate integrate)
-        : identity_(identity), integrate_(std::move(integrate)) {}
+                     Integrate integrate,
+                     std::shared_ptr<AdapterCoordination> coordination)
+        : identity_(identity), integrate_(std::move(integrate)),
+          coordination_(std::move(coordination)) {}
 
     [[nodiscard]] SessionIntegrationIdentity identity()
         const noexcept override {
@@ -1340,7 +1405,13 @@ class FixedIntegration final : public SessionIntegrationEntry {
     [[nodiscard]] SessionResult integrate(
         const SessionIntegrationContext& context) const noexcept override {
         try {
-            return integrate_(context);
+            auto result = integrate_(context);
+            if (coordination_ != nullptr) {
+                coordination_->arrive(
+                    AdapterCoordinationPoint::IntegrationReturn,
+                    identity_.integration_scope_handle);
+            }
+            return result;
         } catch (...) {
             return {gnc::kernel::SessionError::InvocationFailed,
                     identity_.integration_scope_handle,
@@ -1351,6 +1422,7 @@ class FixedIntegration final : public SessionIntegrationEntry {
   private:
     SessionIntegrationIdentity identity_;
     Integrate integrate_;
+    std::shared_ptr<AdapterCoordination> coordination_;
 };
 
 template <typename Value>
@@ -1605,13 +1677,15 @@ make_state_materializer(
     std::shared_ptr<bool> fail_next_replace,
     std::shared_ptr<bool> fail_next_validate,
     std::shared_ptr<bool> disable_nofail_swap,
+    std::shared_ptr<AdapterCoordination> coordination,
     std::size_t fail_copy_ordinal, Construct construct) {
     auto construct_trace = trace;
     auto operations = std::make_shared<StateOperations<Value, Codec>>(
         std::move(layout_identity), codec_entry_handle, codec,
         initial_binding_handle, std::move(trace), std::move(fail_next_copy),
         std::move(fail_next_replace), std::move(fail_next_validate),
-        std::move(disable_nofail_swap), fail_copy_ordinal);
+        std::move(disable_nofail_swap), std::move(coordination),
+        fail_copy_ordinal);
     return std::make_shared<FixedMaterializer>(
         operations,
         SessionMaterializerIdentity{
@@ -2414,7 +2488,7 @@ void install_invocation(
         std::make_shared<FixedInvocation>(
             SessionInvocationIdentity{
                 callsite.handle, component.handle, callsite.entry_handle},
-            std::move(invoke)));
+            std::move(invoke), provider.coordination));
 }
 
 void build_rigid_invocations(
@@ -2825,7 +2899,7 @@ void build_rigid_invocations(
                         : candidate_token;
                 return write_candidate_value(
                     context, candidate_slot, token, candidate_state);
-            }));
+            }, provider.coordination));
 }
 
 void build_mass_invocations(
@@ -3516,10 +3590,12 @@ RefYyzSessionAdapter make_session_adapter(
     result.trace = std::make_shared<MaterializationTrace>();
     result.opening_boundary = std::make_shared<OpeningBoundaryProbe>();
     result.step_execution = std::make_shared<StepExecutionProbe>();
+    result.coordination = std::make_shared<AdapterCoordination>();
     result.captured_input = std::make_shared<CapturedFrameView>();
     result.undeclared_preparation_visible = std::make_shared<bool>(false);
     try {
         auto provider = std::make_shared<CompiledProvider>();
+        provider->coordination = result.coordination;
         build_preparations(image, options, result.trace, *provider);
         build_runtime_components(image, options, result.trace, *provider);
         build_slots(image, options, result.trace, *provider, result);

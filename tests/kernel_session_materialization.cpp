@@ -713,6 +713,66 @@ void verify_metadata_failures(
         },
         SessionError::InvalidImageStructure,
         "incomplete lifecycle reached placement");
+    require_metadata_failure(
+        image, adapter.provider, adapter.trace,
+        [](auto& data) {
+            data.cancellation_policy.safe_points.front().kind =
+                static_cast<gnc::contracts::
+                                PlanImageCancellationSafePointKind>(255U);
+        },
+        SessionError::InvalidImageStructure,
+        "unknown cancellation safe-point kind reached execution");
+    require_metadata_failure(
+        image, adapter.provider, adapter.trace,
+        [](auto& data) {
+            data.cancellation_policy.safe_points.back().handle =
+                data.cancellation_policy.safe_points.front().handle;
+        },
+        SessionError::InvalidImageHandle,
+        "duplicate cancellation safe-point handle reached execution");
+    require_metadata_failure(
+        image, adapter.provider, adapter.trace,
+        [](auto& data) {
+            auto duplicate = data.cancellation_policy.safe_points.front();
+            ++duplicate.handle;
+            while (std::any_of(
+                data.cancellation_policy.safe_points.begin(),
+                data.cancellation_policy.safe_points.end(),
+                [&duplicate](const auto& point) {
+                    return point.handle == duplicate.handle;
+                })) {
+                ++duplicate.handle;
+            }
+            data.cancellation_policy.safe_points.push_back(duplicate);
+        },
+        SessionError::InvalidImageStructure,
+        "duplicate cancellation safe-point tuple reached execution");
+    require_metadata_failure(
+        image, adapter.provider, adapter.trace,
+        [](auto& data) {
+            data.cancellation_policy.safe_points.front()
+                .transaction_handle += 100000U;
+        },
+        SessionError::InvalidImageHandle,
+        "unknown cancellation transaction reached execution");
+    require_metadata_failure(
+        image, adapter.provider, adapter.trace,
+        [](auto& data) {
+            auto& point = data.cancellation_policy.safe_points.front();
+            point.kind = gnc::contracts::
+                PlanImageCancellationSafePointKind::AfterBoundaryCallsite;
+            point.subject_handle =
+                data.transactions.front().candidates.front().producer_handle;
+        },
+        SessionError::InvalidImageStructure,
+        "incompatible cancellation subject reached execution");
+    require_metadata_failure(
+        image, adapter.provider, adapter.trace,
+        [](auto& data) {
+            data.cancellation_policy.safe_points.pop_back();
+        },
+        SessionError::InvalidImageStructure,
+        "incomplete cancellation policy reached execution");
 
     AdapterOptions missing_options;
     missing_options.omit_first_slot_materializer = true;

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <limits>
+#include <mutex>
 #include <new>
 #include <utility>
 
@@ -234,7 +235,8 @@ template <typename Value>
 
 [[nodiscard]] bool has_materialized_storage(SessionState state) noexcept {
     return state == SessionState::Initialized ||
-           state == SessionState::Completed || state == SessionState::Failed;
+           state == SessionState::Completed ||
+           state == SessionState::Cancelled || state == SessionState::Failed;
 }
 
 [[nodiscard]] bool binding_matches_image(
@@ -920,6 +922,66 @@ struct Session::Impl final : SessionObjectAccess,
     std::uint64_t committed_step_count = 0U;
     std::uint32_t active_transaction_handle = 0U;
 
+    // request_cancel() only touches this synchronized mirror. Every other
+    // mutable Session field remains owned by the execution thread.
+    mutable std::mutex cancellation_mutex;
+    SessionState cancellation_lifecycle = SessionState::Created;
+    bool cancellation_has_current_run = false;
+    RunId cancellation_current_run_id;
+    std::uint64_t cancellation_committed_epoch = 0U;
+    std::int64_t cancellation_committed_tick = 0;
+    bool cancellation_accepted = false;
+    CancellationRequestId accepted_cancellation_id;
+    RunId accepted_cancellation_run_id;
+
+    void publish_cancellation_lifecycle(SessionState lifecycle) noexcept {
+        const std::lock_guard<std::mutex> lock(cancellation_mutex);
+        cancellation_lifecycle = lifecycle;
+        cancellation_committed_epoch = committed_epoch;
+        cancellation_committed_tick = committed_tick;
+        if (lifecycle == SessionState::Completed ||
+            lifecycle == SessionState::Failed) {
+            cancellation_accepted = false;
+            accepted_cancellation_id = CancellationRequestId{};
+            accepted_cancellation_run_id = RunId{};
+        }
+    }
+
+    void publish_cancellation_run_start(const RunId& run_id) noexcept {
+        const std::lock_guard<std::mutex> lock(cancellation_mutex);
+        cancellation_lifecycle = SessionState::Initialized;
+        cancellation_has_current_run = true;
+        cancellation_current_run_id = run_id;
+        cancellation_committed_epoch = committed_epoch;
+        cancellation_committed_tick = committed_tick;
+        cancellation_accepted = false;
+        accepted_cancellation_id = CancellationRequestId{};
+        accepted_cancellation_run_id = RunId{};
+    }
+
+    [[nodiscard]] bool cancellation_requested_at(
+        std::uint32_t transaction_handle,
+        contracts::PlanImageCancellationSafePointKind kind,
+        std::uint32_t subject_handle = 0U) noexcept {
+        const auto declared = std::any_of(
+            image->cancellation_policy().safe_points.begin(),
+            image->cancellation_policy().safe_points.end(),
+            [transaction_handle, kind, subject_handle](const auto& point) {
+                return point.transaction_handle == transaction_handle &&
+                       point.kind == kind &&
+                       point.subject_handle == subject_handle;
+            });
+        if (!declared) {
+            return false;
+        }
+        const std::lock_guard<std::mutex> lock(cancellation_mutex);
+        return cancellation_lifecycle == SessionState::Initialized &&
+               cancellation_accepted &&
+               cancellation_has_current_run &&
+               accepted_cancellation_run_id ==
+                   cancellation_current_run_id;
+    }
+
     [[nodiscard]] SessionResult failure(SessionError error,
                                         std::uint32_t handle,
                                         std::string_view detail) noexcept {
@@ -1054,6 +1116,27 @@ struct Session::Impl final : SessionObjectAccess,
         run_outcome_frozen = true;
     }
 
+    void freeze_cancelled_run() noexcept {
+        if (run_outcome_frozen || current_run_outcome == nullptr) return;
+        auto& outcome = *current_run_outcome;
+        if (committed_run_id.has_value()) {
+            outcome.run_id = *committed_run_id;
+        }
+        outcome.run_sequence = committed_run_sequence;
+        outcome.run_start_committed = true;
+        outcome.final_status = RunFinalStatus::Cancelled;
+        outcome.validity = contracts::EvidenceValidity::Valid;
+        outcome.final_tick = committed_tick;
+        outcome.final_committed_epoch = committed_epoch;
+        outcome.committed_step_count = committed_step_count;
+        outcome.terminal_branch_committed = false;
+        outcome.mission_result_available = false;
+        outcome.primary_diagnostic.reset();
+        outcome.related_diagnostics.clear();
+        outcome.finalization_status = RunFinalizationStatus::Succeeded;
+        run_outcome_frozen = true;
+    }
+
     [[nodiscard]] StepOutcome make_step_outcome(
         StepStatus status, SessionResult result,
         std::optional<RuntimeDiagnostic> diagnostic = {}) const noexcept {
@@ -1144,6 +1227,7 @@ struct Session::Impl final : SessionObjectAccess,
         last_result = cause;
         unwind();
         state = SessionState::Failed;
+        publish_cancellation_lifecycle(SessionState::Failed);
         has_committed_run = false;
         committed_run_id.reset();
         committed_run_binding.reset();
@@ -1213,6 +1297,7 @@ struct Session::Impl final : SessionObjectAccess,
             run_outcome_frozen = true;
         }
         state = SessionState::Failed;
+        publish_cancellation_lifecycle(SessionState::Failed);
         pending_reset_attempt.reset();
         return reset_outcome;
     }
@@ -2128,6 +2213,174 @@ struct Session::Impl final : SessionObjectAccess,
         return {};
     }
 
+    [[nodiscard]] SessionResult validate_cancellation_policy() noexcept {
+        const auto& points = image->cancellation_policy().safe_points;
+        for (std::size_t index = 0U; index < points.size(); ++index) {
+            const auto& point = points[index];
+            const auto* transaction = find_handle(
+                image->transactions(), point.transaction_handle);
+            if (transaction == nullptr) {
+                return failure(SessionError::InvalidImageHandle,
+                               point.transaction_handle,
+                               "cancellation safe point transaction is unknown");
+            }
+            bool compatible = false;
+            switch (point.kind) {
+            case contracts::PlanImageCancellationSafePointKind::
+                TransactionStart:
+            case contracts::PlanImageCancellationSafePointKind::
+                BeforeModelCommit:
+            case contracts::PlanImageCancellationSafePointKind::
+                AfterModelCommit:
+                compatible = point.subject_handle == 0U;
+                break;
+            case contracts::PlanImageCancellationSafePointKind::
+                AfterBoundaryCallsite: {
+                const auto* callsite = find_handle(
+                    image->callsites(), point.subject_handle);
+                const auto* entry = callsite == nullptr
+                                        ? nullptr
+                                        : entry_for_callsite(*callsite);
+                const auto* component = callsite == nullptr
+                                            ? nullptr
+                                            : component_for_callsite(
+                                                  callsite->handle);
+                compatible =
+                    entry != nullptr && component != nullptr &&
+                    (entry->kind ==
+                         contracts::PlanImageEntryKind::PublishProjection ||
+                     entry->kind ==
+                         contracts::PlanImageEntryKind::BoundaryEvaluation) &&
+                    std::count(component->transaction_handles.begin(),
+                               component->transaction_handles.end(),
+                               transaction->handle) == 1;
+                break;
+            }
+            case contracts::PlanImageCancellationSafePointKind::
+                AfterCandidateProducer:
+                compatible = std::count_if(
+                                 transaction->candidates.begin(),
+                                 transaction->candidates.end(),
+                                 [&point](const auto& candidate) {
+                                     return candidate.producer_handle ==
+                                            point.subject_handle;
+                                 }) == 1;
+                break;
+            default:
+                compatible = false;
+                break;
+            }
+            if (!compatible) {
+                return failure(
+                    SessionError::InvalidImageStructure, point.handle,
+                    "cancellation safe point is incompatible with execution structure");
+            }
+            for (std::size_t prior = 0U; prior < index; ++prior) {
+                if (points[prior].transaction_handle ==
+                        point.transaction_handle &&
+                    points[prior].kind == point.kind &&
+                    points[prior].subject_handle == point.subject_handle) {
+                    return failure(
+                        SessionError::InvalidImageStructure, point.handle,
+                        "cancellation safe point tuple is duplicated");
+                }
+            }
+        }
+
+        std::size_t expected_total = 0U;
+        const auto count_point = [&points](
+                                     std::uint32_t transaction_handle,
+                                     contracts::
+                                         PlanImageCancellationSafePointKind
+                                             kind,
+                                     std::uint32_t subject_handle) {
+            return static_cast<std::size_t>(std::count_if(
+                points.begin(), points.end(),
+                [transaction_handle, kind,
+                 subject_handle](const auto& point) {
+                    return point.transaction_handle == transaction_handle &&
+                           point.kind == kind &&
+                           point.subject_handle == subject_handle;
+                }));
+        };
+        for (const auto& transaction : image->transactions()) {
+            const auto require_singular = [&](
+                                              contracts::
+                                                  PlanImageCancellationSafePointKind
+                                                      kind,
+                                              std::uint32_t subject_handle) {
+                ++expected_total;
+                return count_point(transaction.handle, kind,
+                                   subject_handle) == 1U;
+            };
+            if (!require_singular(
+                    contracts::PlanImageCancellationSafePointKind::
+                        TransactionStart,
+                    0U) ||
+                !require_singular(
+                    contracts::PlanImageCancellationSafePointKind::
+                        BeforeModelCommit,
+                    0U) ||
+                !require_singular(
+                    contracts::PlanImageCancellationSafePointKind::
+                        AfterModelCommit,
+                    0U)) {
+                return failure(
+                    SessionError::InvalidImageStructure,
+                    transaction.handle,
+                    "transaction cancellation boundary set is incomplete");
+            }
+            for (const auto& component : image->runtime_components()) {
+                if (std::count(component.transaction_handles.begin(),
+                               component.transaction_handles.end(),
+                               transaction.handle) != 1) {
+                    continue;
+                }
+                for (const auto callsite_handle :
+                     component.callsite_handles) {
+                    const auto* callsite = find_handle(
+                        image->callsites(), callsite_handle);
+                    const auto* entry = callsite == nullptr
+                                            ? nullptr
+                                            : entry_for_callsite(*callsite);
+                    if (entry == nullptr ||
+                        (entry->kind != contracts::PlanImageEntryKind::
+                                            PublishProjection &&
+                         entry->kind != contracts::PlanImageEntryKind::
+                                            BoundaryEvaluation)) {
+                        continue;
+                    }
+                    if (!require_singular(
+                            contracts::
+                                PlanImageCancellationSafePointKind::
+                                    AfterBoundaryCallsite,
+                            callsite_handle)) {
+                        return failure(
+                            SessionError::InvalidImageStructure,
+                            callsite_handle,
+                            "boundary cancellation safe point is missing");
+                    }
+                }
+            }
+            for (const auto& candidate : transaction.candidates) {
+                if (!require_singular(
+                        contracts::PlanImageCancellationSafePointKind::
+                            AfterCandidateProducer,
+                        candidate.producer_handle)) {
+                    return failure(
+                        SessionError::InvalidImageStructure,
+                        candidate.producer_handle,
+                        "candidate cancellation safe point is missing");
+                }
+            }
+        }
+        if (points.size() != expected_total) {
+            return failure(SessionError::InvalidImageStructure, 0U,
+                           "cancellation safe point membership is not exact");
+        }
+        return {};
+    }
+
     [[nodiscard]] std::uint32_t region_ordinal(
         std::uint32_t callsite_handle) const noexcept {
         std::uint32_t result =
@@ -2314,6 +2567,8 @@ struct Session::Impl final : SessionObjectAccess,
             !unique_nonzero_handles(image->dag_nodes()) ||
             !unique_nonzero_handles(image->integration_scopes()) ||
             !unique_nonzero_handles(image->transactions()) ||
+            !unique_nonzero_handles(
+                image->cancellation_policy().safe_points) ||
             !unique_nonzero_handles(image->evaluator_histories())) {
             return failure(SessionError::InvalidImageHandle, 0U,
                            "Image contains a duplicate or zero handle");
@@ -2323,6 +2578,7 @@ struct Session::Impl final : SessionObjectAccess,
         if (result) result = validate_states();
         if (result) result = validate_histories();
         if (result) result = validate_transactions();
+        if (result) result = validate_cancellation_policy();
         if (result) result = validate_materializers();
         if (result) result = build_opening_schedule();
         return result;
@@ -3165,6 +3421,11 @@ struct Session::Impl final : SessionObjectAccess,
             candidate->materializer->operations().nofail_swap(
                 committed->address, candidate->address);
         }
+        // Finish the no-fail publication and its cancellation mirror under one
+        // lock. A concurrent caller therefore observes either the prior
+        // committed boundary or the complete new boundary, never stale
+        // epoch/tick metadata after ModelCommit.
+        const std::lock_guard<std::mutex> lock(cancellation_mutex);
         committed_epoch += static_cast<std::uint64_t>(branch.epoch_delta);
         committed_tick += branch.tick_delta;
         for (auto& committed : committed_state_store.blocks) {
@@ -3176,6 +3437,17 @@ struct Session::Impl final : SessionObjectAccess,
             staged_sealed_boundary.committed_epoch;
         sealed_boundary.committed_tick =
             staged_sealed_boundary.committed_tick;
+        cancellation_committed_epoch = committed_epoch;
+        cancellation_committed_tick = committed_tick;
+        if (branch.branch == contracts::TransactionBranch::Terminal) {
+            // Entering the prevalidated no-fail Terminal publication makes
+            // termination authoritative over any request that was accepted
+            // after the last precommit sample.
+            cancellation_lifecycle = SessionState::Completed;
+            cancellation_accepted = false;
+            accepted_cancellation_id = CancellationRequestId{};
+            accepted_cancellation_run_id = RunId{};
+        }
     }
 
     void close_frame() noexcept {
@@ -3216,7 +3488,27 @@ struct Session::Impl final : SessionObjectAccess,
         step_outcome = make_step_outcome(
             StepStatus::Failed, result, diagnostic);
         freeze_failed_run(diagnostic);
+        publish_cancellation_lifecycle(SessionState::Failed);
         return step_outcome;
+    }
+
+    [[nodiscard]] StepOutcome cancel_execution_precommit() noexcept {
+        close_frame();
+        last_result = {};
+        state = SessionState::Cancelled;
+        step_summary.committed = false;
+        step_summary.committed_epoch = committed_epoch;
+        step_summary.committed_tick = committed_tick;
+        step_outcome = make_step_outcome(StepStatus::Cancelled, {});
+        freeze_cancelled_run();
+        publish_cancellation_lifecycle(SessionState::Cancelled);
+        return step_outcome;
+    }
+
+    void cancel_at_committed_boundary() noexcept {
+        state = SessionState::Cancelled;
+        freeze_cancelled_run();
+        publish_cancellation_lifecycle(SessionState::Cancelled);
     }
 
     [[nodiscard]] StepOutcome fail_execution(
@@ -3847,7 +4139,9 @@ struct Session::Impl final : SessionObjectAccess,
         return {};
     }
 
-    [[nodiscard]] SessionResult execute_boundary_calls() noexcept {
+    [[nodiscard]] SessionResult execute_boundary_calls(
+        std::uint32_t transaction_handle = 0U,
+        bool* cancellation_observed = nullptr) noexcept {
         const auto boundary_time =
             static_cast<double>(committed_tick) *
             image->clock().base_step_seconds;
@@ -3867,6 +4161,15 @@ struct Session::Impl final : SessionObjectAccess,
                 !history_ready(callsite->handle)) {
                 boundary_summary.skipped_callsite_handles.push_back(
                     callsite->handle);
+                if (cancellation_observed != nullptr &&
+                    cancellation_requested_at(
+                        transaction_handle,
+                        contracts::PlanImageCancellationSafePointKind::
+                            AfterBoundaryCallsite,
+                        callsite->handle)) {
+                    *cancellation_observed = true;
+                    break;
+                }
                 continue;
             }
             const auto* entry = provider->invocation(callsite->handle);
@@ -3924,6 +4227,15 @@ struct Session::Impl final : SessionObjectAccess,
             }
             boundary_summary.executed_callsite_handles.push_back(
                 callsite->handle);
+            if (cancellation_observed != nullptr &&
+                cancellation_requested_at(
+                    transaction_handle,
+                    contracts::PlanImageCancellationSafePointKind::
+                        AfterBoundaryCallsite,
+                    callsite->handle)) {
+                *cancellation_observed = true;
+                break;
+            }
         }
         boundary_summary.output_write_count = cycle_frame.write_count;
         return {};
@@ -4145,6 +4457,7 @@ InitializationOutcome Session::initialize(
         impl.has_committed_run = true;
         impl.committed_step_count = 0U;
         impl.state = SessionState::Initialized;
+        impl.publish_cancellation_run_start(*impl.committed_run_id);
         impl.last_result = {};
         impl.prepare_run_start(*impl.current_run_outcome,
                                *impl.committed_run_id, 0U,
@@ -4338,6 +4651,7 @@ ResetOutcome Session::reset(ResetRequest request) noexcept {
         impl.run_outcome_frozen = false;
         impl.has_committed_run = true;
         impl.state = SessionState::Initialized;
+        impl.publish_cancellation_run_start(*impl.committed_run_id);
         impl.last_result = {};
         impl.current_diagnostic_stage = RuntimeDiagnosticStage::Lifecycle;
 
@@ -4366,17 +4680,60 @@ ResetOutcome Session::reset(ResetRequest request) noexcept {
     }
 }
 
+CancellationOutcome Session::request_cancel(
+    CancellationRequest request) noexcept {
+    auto& impl = *implementation_;
+    CancellationOutcome outcome;
+    outcome.request_id = request.request_id;
+    outcome.run_id = request.run_id;
+    const std::lock_guard<std::mutex> lock(impl.cancellation_mutex);
+    outcome.observed_committed_epoch =
+        impl.cancellation_committed_epoch;
+    outcome.observed_committed_tick = impl.cancellation_committed_tick;
+
+    if (request.request_id.empty() || request.run_id.empty()) {
+        outcome.disposition = CancellationDisposition::Rejected;
+        return outcome;
+    }
+    if (impl.cancellation_accepted) {
+        outcome.disposition =
+            request.request_id == impl.accepted_cancellation_id &&
+                    request.run_id == impl.accepted_cancellation_run_id
+                ? CancellationDisposition::AlreadyRequested
+                : CancellationDisposition::Superseded;
+        return outcome;
+    }
+    if (impl.cancellation_lifecycle == SessionState::Initialized &&
+        impl.cancellation_has_current_run &&
+        request.run_id == impl.cancellation_current_run_id) {
+        impl.cancellation_accepted = true;
+        impl.accepted_cancellation_id = request.request_id;
+        impl.accepted_cancellation_run_id = request.run_id;
+        outcome.disposition = CancellationDisposition::Accepted;
+        return outcome;
+    }
+    outcome.disposition =
+        impl.cancellation_lifecycle == SessionState::Created ||
+                impl.cancellation_lifecycle == SessionState::Initialized ||
+                impl.cancellation_lifecycle == SessionState::Completed
+            ? CancellationDisposition::Rejected
+            : CancellationDisposition::Superseded;
+    return outcome;
+}
+
 SessionResult Session::dispose() noexcept {
     auto& impl = *implementation_;
     if (impl.state != SessionState::Created &&
         impl.state != SessionState::Completed &&
+        impl.state != SessionState::Cancelled &&
         impl.state != SessionState::Failed) {
         return impl.failure(
             SessionError::InvalidLifecycleTransition, 0U,
-            "dispose requires Created, Completed, or Failed Session");
+            "dispose requires Created, Completed, Cancelled, or Failed Session");
     }
     impl.unwind();
     impl.state = SessionState::Disposed;
+    impl.publish_cancellation_lifecycle(SessionState::Disposed);
     impl.last_result = {};
     return {};
 }
@@ -4470,6 +4827,12 @@ StepOutcome Session::execute_step() noexcept {
     impl.step_summary.histories.clear();
     impl.step_summary.seals.clear();
     try {
+        if (impl.cancellation_requested_at(
+                transaction.handle,
+                contracts::PlanImageCancellationSafePointKind::
+                    TransactionStart)) {
+            return impl.cancel_execution_precommit();
+        }
         impl.current_diagnostic_stage = RuntimeDiagnosticStage::Schedule;
         auto result = impl.begin_frame(transaction.handle);
         if (!result) {
@@ -4494,7 +4857,9 @@ StepOutcome Session::execute_step() noexcept {
         }
         impl.current_diagnostic_stage =
             RuntimeDiagnosticStage::BoundaryInvocation;
-        result = impl.execute_boundary_calls();
+        bool cancellation_observed = false;
+        result = impl.execute_boundary_calls(transaction.handle,
+                                             &cancellation_observed);
         impl.step_summary.executed_callsite_handles =
             impl.boundary_summary.executed_callsite_handles;
         impl.step_summary.skipped_callsite_handles =
@@ -4503,6 +4868,9 @@ StepOutcome Session::execute_step() noexcept {
         if (!result) {
             return impl.fail_execution(result, transaction.handle,
                                        "boundary execution failed");
+        }
+        if (cancellation_observed) {
+            return impl.cancel_execution_precommit();
         }
 
         if (branch_kind == contracts::TransactionBranch::Continue) {
@@ -4623,6 +4991,13 @@ StepOutcome Session::execute_step() noexcept {
                 }
                 impl.step_summary.candidate_slot_handles.push_back(
                     member.candidate_state_slot_handle);
+                if (impl.cancellation_requested_at(
+                        transaction.handle,
+                        contracts::PlanImageCancellationSafePointKind::
+                            AfterCandidateProducer,
+                        member.producer_handle)) {
+                    return impl.cancel_execution_precommit();
+                }
             }
         }
 
@@ -4638,6 +5013,12 @@ StepOutcome Session::execute_step() noexcept {
         if (!result) {
             return impl.fail_execution(result, transaction.handle,
                                        "transaction prevalidation failed");
+        }
+        if (impl.cancellation_requested_at(
+                transaction.handle,
+                contracts::PlanImageCancellationSafePointKind::
+                    BeforeModelCommit)) {
+            return impl.cancel_execution_precommit();
         }
         impl.commit_transaction_noexcept(*branch);
         ++impl.committed_step_count;
@@ -4655,6 +5036,14 @@ StepOutcome Session::execute_step() noexcept {
             impl.current_diagnostic_stage =
                 RuntimeDiagnosticStage::Finalization;
             impl.freeze_completed_run();
+            impl.publish_cancellation_lifecycle(SessionState::Completed);
+            return impl.step_outcome;
+        }
+        if (impl.cancellation_requested_at(
+                transaction.handle,
+                contracts::PlanImageCancellationSafePointKind::
+                    AfterModelCommit)) {
+            impl.cancel_at_committed_boundary();
         }
         return impl.step_outcome;
     } catch (const std::bad_alloc&) {
@@ -4668,20 +5057,29 @@ StepOutcome Session::execute_step() noexcept {
     }
 }
 
-SessionResult Session::run_to_terminal() noexcept {
+RunDriveOutcome Session::run_to_terminal() noexcept {
     auto& impl = *implementation_;
     if (impl.state != SessionState::Initialized) {
-        return impl.failure(
-            SessionError::InvalidLifecycleTransition, 0U,
-            "run_to_terminal requires an Initialized Session");
+        return {RunDriveStatus::Failed,
+                impl.failure(
+                    SessionError::InvalidLifecycleTransition, 0U,
+                    "run_to_terminal requires an Initialized Session")};
     }
     while (impl.state == SessionState::Initialized) {
         const auto step = execute_step();
-        if (!step) return step.result;
-        if (step.status == StepStatus::Terminated) return {};
+        if (step.status == StepStatus::Cancelled ||
+            impl.state == SessionState::Cancelled) {
+            return {RunDriveStatus::Cancelled, {}};
+        }
+        if (!step) return {RunDriveStatus::Failed, step.result};
+        if (step.status == StepStatus::Terminated) {
+            return {RunDriveStatus::Completed, {}};
+        }
     }
-    return impl.failure(SessionError::InternalFailure, 0U,
-                        "run_to_terminal left the executable lifecycle");
+    return {RunDriveStatus::Failed,
+            impl.failure(
+                SessionError::InternalFailure, 0U,
+                "run_to_terminal left the executable lifecycle")};
 }
 
 std::size_t Session::preparation_count() const noexcept {

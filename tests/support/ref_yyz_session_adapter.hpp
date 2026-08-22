@@ -5,6 +5,7 @@
 #include <yyz/mass_commit.hpp>
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -238,11 +239,40 @@ struct MaterializationTrace {
         TraceObjectKind kind) const;
 };
 
+enum class AdapterCoordinationPoint : std::uint8_t {
+    InvocationReturn,
+    IntegrationReturn,
+    FinalPrecommit,
+    ModelCommit,
+};
+
+// Deterministic test-only rendezvous. Production Kernel code sees only the
+// ordinary adapter operation return and samples its Image-declared safe point.
+class AdapterCoordination final {
+  public:
+    void arm(AdapterCoordinationPoint point,
+             std::uint32_t subject_handle) noexcept;
+    [[nodiscard]] bool wait_until_reached(
+        std::size_t yield_limit = 10000000U) const noexcept;
+    void release() noexcept;
+    void arrive(AdapterCoordinationPoint point,
+                std::uint32_t subject_handle) noexcept;
+
+  private:
+    std::atomic<AdapterCoordinationPoint> point_{
+        AdapterCoordinationPoint::InvocationReturn};
+    std::atomic<std::uint32_t> subject_handle_{0U};
+    std::atomic<bool> armed_{false};
+    std::atomic<bool> reached_{false};
+    std::atomic<bool> released_{false};
+};
+
 struct RefYyzSessionAdapter {
     std::shared_ptr<const kernel::SessionMaterializationProvider> provider;
     std::shared_ptr<MaterializationTrace> trace;
     std::shared_ptr<OpeningBoundaryProbe> opening_boundary;
     std::shared_ptr<StepExecutionProbe> step_execution;
+    std::shared_ptr<AdapterCoordination> coordination;
     std::shared_ptr<CapturedFrameView> captured_input;
     std::shared_ptr<bool> undeclared_preparation_visible;
     std::shared_ptr<bool> fail_next_initial_state_construct;

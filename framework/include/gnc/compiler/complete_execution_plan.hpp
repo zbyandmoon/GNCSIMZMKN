@@ -8001,6 +8001,12 @@ namespace complete_plan_detail {
             encoder.integer(branch.tick_delta);
         }
     });
+    encode_ids(image.cancellation_policy.safe_points, [&](const auto& value) {
+        encoder.uint32(value.handle);
+        encoder.uint32(value.transaction_handle);
+        encoder.uint32(static_cast<std::uint32_t>(value.kind));
+        encoder.uint32(value.subject_handle);
+    });
     encode_ids(image.evaluator_histories, [&](const auto& value) {
         encoder.uint32(value.handle);
         encoder.string(value.plan_element_id);
@@ -9173,6 +9179,57 @@ link_complete_execution_plan(
              std::move(candidates), std::move(held_slots),
              std::move(branches)});
         conformance_handles[transaction.plan_element_id].push_back(handle);
+    }
+    for (const auto& transaction : image.transactions) {
+        const auto append_safe_point =
+            [&](gnc::contracts::PlanImageCancellationSafePointKind kind,
+                std::uint32_t subject_handle) {
+                image.cancellation_policy.safe_points.push_back(
+                    {next_handle++, transaction.handle, kind,
+                     subject_handle});
+            };
+        append_safe_point(
+            gnc::contracts::PlanImageCancellationSafePointKind::
+                TransactionStart,
+            0U);
+        for (const auto& component : image.runtime_components) {
+            if (std::find(component.transaction_handles.begin(),
+                          component.transaction_handles.end(),
+                          transaction.handle) ==
+                component.transaction_handles.end()) {
+                continue;
+            }
+            for (const auto callsite_handle : component.callsite_handles) {
+                const auto callsite = std::find_if(
+                    image.callsites.begin(), image.callsites.end(),
+                    [callsite_handle](const auto& candidate) {
+                        return candidate.handle == callsite_handle;
+                    });
+                if (callsite != image.callsites.end() &&
+                    (callsite->obligation == "PublishProjection" ||
+                     callsite->obligation == "BoundaryEvaluation")) {
+                    append_safe_point(
+                        gnc::contracts::
+                            PlanImageCancellationSafePointKind::
+                                AfterBoundaryCallsite,
+                        callsite_handle);
+                }
+            }
+        }
+        for (const auto& candidate : transaction.candidates) {
+            append_safe_point(
+                gnc::contracts::PlanImageCancellationSafePointKind::
+                    AfterCandidateProducer,
+                candidate.producer_handle);
+        }
+        append_safe_point(
+            gnc::contracts::PlanImageCancellationSafePointKind::
+                BeforeModelCommit,
+            0U);
+        append_safe_point(
+            gnc::contracts::PlanImageCancellationSafePointKind::
+                AfterModelCommit,
+            0U);
     }
     for (const auto& history : plan.evaluator_histories) {
         const auto handle = evaluator_history_handles.at(

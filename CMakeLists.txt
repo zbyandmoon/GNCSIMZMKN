@@ -12,6 +12,7 @@ option(GNC_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 include(cmake/GncWarnings.cmake)
 
 find_package(Eigen3 3.4.0 EXACT CONFIG REQUIRED)
+find_package(Threads REQUIRED)
 
 add_library(gnc_build_options INTERFACE)
 target_compile_features(gnc_build_options INTERFACE cxx_std_17)
@@ -41,7 +42,7 @@ gnc_add_interface_module(kernel)
 target_link_libraries(kernel INTERFACE foundation contracts)
 
 add_library(kernel_session STATIC framework/src/kernel/session.cpp)
-target_link_libraries(kernel_session PUBLIC kernel)
+target_link_libraries(kernel_session PUBLIC kernel Threads::Threads)
 gnc_enable_warnings(kernel_session)
 add_library(gnc::kernel_session ALIAS kernel_session)
 

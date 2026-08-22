@@ -1036,6 +1036,91 @@ void verify_complete_ref_graph() {
                 image.transactions().front().branches.size() == 3U,
             "atomic rigid+mass transaction table shape changed");
     const auto& transaction = image.transactions().front();
+    const auto& cancellation = image.cancellation_policy().safe_points;
+    std::vector<std::uint32_t> boundary_safe_subjects;
+    for (const auto& component : image.runtime_components()) {
+        if (std::find(component.transaction_handles.begin(),
+                      component.transaction_handles.end(),
+                      transaction.handle) ==
+            component.transaction_handles.end()) {
+            continue;
+        }
+        for (const auto handle : component.callsite_handles) {
+            const auto callsite = std::find_if(
+                image.callsites().begin(), image.callsites().end(),
+                [handle](const auto& value) {
+                    return value.handle == handle;
+                });
+            if (callsite != image.callsites().end() &&
+                (callsite->obligation == "PublishProjection" ||
+                 callsite->obligation == "BoundaryEvaluation")) {
+                boundary_safe_subjects.push_back(handle);
+            }
+        }
+    }
+    const auto safe_point_count = [&](
+                                      gnc::contracts::
+                                          PlanImageCancellationSafePointKind
+                                              kind,
+                                      std::uint32_t subject) {
+        return static_cast<std::size_t>(std::count_if(
+            cancellation.begin(), cancellation.end(),
+            [&](const auto& point) {
+                return point.transaction_handle == transaction.handle &&
+                       point.kind == kind &&
+                       point.subject_handle == subject;
+            }));
+    };
+    require(cancellation.size() ==
+                    3U + boundary_safe_subjects.size() +
+                        transaction.candidates.size() &&
+                safe_point_count(
+                    gnc::contracts::PlanImageCancellationSafePointKind::
+                        TransactionStart,
+                    0U) == 1U &&
+                safe_point_count(
+                    gnc::contracts::PlanImageCancellationSafePointKind::
+                        BeforeModelCommit,
+                    0U) == 1U &&
+                safe_point_count(
+                    gnc::contracts::PlanImageCancellationSafePointKind::
+                        AfterModelCommit,
+                    0U) == 1U &&
+                std::all_of(
+                    boundary_safe_subjects.begin(),
+                    boundary_safe_subjects.end(), [&](auto handle) {
+                        return safe_point_count(
+                                   gnc::contracts::
+                                       PlanImageCancellationSafePointKind::
+                                           AfterBoundaryCallsite,
+                                   handle) == 1U;
+                    }) &&
+                std::all_of(
+                    transaction.candidates.begin(),
+                    transaction.candidates.end(), [&](const auto& member) {
+                        return safe_point_count(
+                                   gnc::contracts::
+                                       PlanImageCancellationSafePointKind::
+                                           AfterCandidateProducer,
+                                   member.producer_handle) == 1U;
+                    }),
+            "linked cancellation policy is not an exact transaction fact");
+    std::vector<std::uint32_t> cancellation_handles;
+    for (const auto& point : cancellation) {
+        cancellation_handles.push_back(point.handle);
+    }
+    std::sort(cancellation_handles.begin(), cancellation_handles.end());
+    require(!cancellation_handles.empty() &&
+                cancellation_handles.front() != 0U &&
+                std::adjacent_find(cancellation_handles.begin(),
+                                   cancellation_handles.end()) ==
+                    cancellation_handles.end(),
+            "linked cancellation policy handles are zero or duplicated");
+    auto cancellation_mutation = image.data();
+    ++cancellation_mutation.cancellation_policy.safe_points.front().handle;
+    require(gnc::compiler::complete_plan_detail::image_fingerprint(
+                cancellation_mutation) != image.fingerprint(),
+            "cancellation policy was absent from the Image fingerprint");
     const auto& continue_branch = transaction.branches.at(0U);
     const auto& terminal_branch = transaction.branches.at(1U);
     const auto& failure_branch = transaction.branches.at(2U);

@@ -45,6 +45,14 @@ enum class PlanImageDagNodeKind : std::uint8_t {
     IntegrationScope,
 };
 
+enum class PlanImageCancellationSafePointKind : std::uint8_t {
+    TransactionStart,
+    AfterBoundaryCallsite,
+    AfterCandidateProducer,
+    BeforeModelCommit,
+    AfterModelCommit,
+};
+
 enum class PlanImageValueKind : std::uint8_t {
     String,
     Enum,
@@ -455,6 +463,21 @@ struct PlanImageTransaction {
     std::vector<PlanImageTransactionBranch> branches;
 };
 
+// Cancellation remains an in-process control operation. These immutable facts
+// identify the exact execution boundaries where the Kernel may observe a
+// request; no callback, serializer, or package-specific dispatch is implied.
+struct PlanImageCancellationSafePoint {
+    std::uint32_t handle = 0U;
+    std::uint32_t transaction_handle = 0U;
+    PlanImageCancellationSafePointKind kind =
+        PlanImageCancellationSafePointKind::TransactionStart;
+    std::uint32_t subject_handle = 0U;
+};
+
+struct PlanImageCancellationPolicy {
+    std::vector<PlanImageCancellationSafePoint> safe_points;
+};
+
 [[nodiscard]] inline const PlanImageTransactionBranch*
 find_transaction_branch(const PlanImageTransaction& transaction,
                         TransactionBranch branch) noexcept {
@@ -579,6 +602,7 @@ struct ExecutionPlanImageData {
     std::vector<PlanImageDagEdge> dag_edges;
     std::vector<PlanImageIntegrationScope> integration_scopes;
     std::vector<PlanImageTransaction> transactions;
+    PlanImageCancellationPolicy cancellation_policy;
     std::vector<PlanImageEvaluatorHistory> evaluator_histories;
     PlanImageLifecycle lifecycle;
     std::vector<PlanImageConformance> conformance;
@@ -685,6 +709,10 @@ class ExecutionPlanImage final {
     }
     [[nodiscard]] const std::vector<PlanImageTransaction>& transactions() const noexcept {
         return data_.transactions;
+    }
+    [[nodiscard]] const PlanImageCancellationPolicy& cancellation_policy()
+        const noexcept {
+        return data_.cancellation_policy;
     }
     [[nodiscard]] const std::vector<PlanImageEvaluatorHistory>& evaluator_histories() const noexcept {
         return data_.evaluator_histories;

@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -25,6 +26,7 @@ using gnc::kernel::SessionError;
 using gnc::kernel::RuntimeDiagnosticCode;
 using gnc::kernel::RuntimeDiagnosticStage;
 using gnc::tests::ref_yyz::AdapterOptions;
+using gnc::tests::ref_yyz::AdapterCoordinationPoint;
 using gnc::tests::ref_yyz::CommittedRigidMassProbe;
 using gnc::tests::ref_yyz::FailurePhase;
 using gnc::tests::ref_yyz::MissionResultProbe;
@@ -834,6 +836,34 @@ build_image_without_reset_capability(
             gnc::kernel::exact_run_binding(image)};
 }
 
+[[nodiscard]] gnc::kernel::CancellationRequest cancellation_request(
+    std::string request_id, std::string run_id) {
+    return {gnc::kernel::CancellationRequestId{std::move(request_id)},
+            gnc::kernel::RunId{std::move(run_id)}};
+}
+
+[[nodiscard]] std::uint32_t initial_binding_handle_for_candidate(
+    const ExecutionPlanImage& image,
+    const gnc::contracts::PlanImageTransactionCandidateMember& member) {
+    const auto block = std::find_if(
+        image.state_blocks().begin(), image.state_blocks().end(),
+        [&member](const auto& value) {
+            return value.candidate_slot_handle ==
+                   member.candidate_state_slot_handle;
+        });
+    require(block != image.state_blocks().end(),
+            "candidate has no state block");
+    const auto binding = std::find_if(
+        image.initial_bindings().begin(), image.initial_bindings().end(),
+        [&block](const auto& value) {
+            return value.committed_state_slot_handle ==
+                   block->committed_slot_handle;
+        });
+    require(binding != image.initial_bindings().end(),
+            "candidate has no initial binding");
+    return binding->handle;
+}
+
 struct SessionBundle {
     gnc::tests::ref_yyz::RefYyzSessionAdapter adapter;
     std::unique_ptr<gnc::kernel::Session> session;
@@ -872,6 +902,37 @@ struct SessionBundle {
                 creation.session->committed_step_count() == 0U,
             "InitializationCommit did not publish the exact run context");
     return {std::move(adapter), std::move(creation.session)};
+}
+
+void require_cancelled_run(const gnc::kernel::Session& session,
+                           std::string_view run_id,
+                           std::uint64_t epoch,
+                           std::int64_t tick,
+                           std::uint64_t committed_steps) {
+    const auto* outcome = session.run_outcome();
+    require(session.state() == gnc::kernel::SessionState::Cancelled &&
+                session.last_result().error == SessionError::None &&
+                session.committed_epoch() == epoch &&
+                session.committed_tick() == tick &&
+                session.committed_step_count() == committed_steps &&
+                session.last_committed_run_id() != nullptr &&
+                session.last_committed_run_id()->value() == run_id &&
+                outcome != nullptr && outcome->run_id.value() == run_id &&
+                outcome->run_start_committed &&
+                outcome->final_status ==
+                    gnc::kernel::RunFinalStatus::Cancelled &&
+                outcome->validity ==
+                    gnc::contracts::EvidenceValidity::Valid &&
+                outcome->final_committed_epoch == epoch &&
+                outcome->final_tick == tick &&
+                outcome->committed_step_count == committed_steps &&
+                !outcome->terminal_branch_committed &&
+                !outcome->mission_result_available &&
+                !outcome->primary_diagnostic.has_value() &&
+                outcome->related_diagnostics.empty() &&
+                outcome->finalization_status ==
+                    gnc::kernel::RunFinalizationStatus::Succeeded,
+            "cancelled run lost committed evidence or gained an error diagnostic");
 }
 
 [[nodiscard]] CommittedRigidMassProbe committed_probe(
@@ -1024,7 +1085,7 @@ void verify_initialization_identity_and_commit(
                     mismatch.session->last_step_outcome(),
                     mismatch_id, 0U, 0U, 0) &&
                 !rejected_run &&
-                rejected_run.error ==
+                rejected_run.result.error ==
                     SessionError::InvalidLifecycleTransition &&
                 frozen_mismatch.finalization_status ==
                     gnc::kernel::RunFinalizationStatus::NotStarted &&
@@ -1427,7 +1488,7 @@ void verify_complete_step_transactions(
                     bundle.session->last_step_outcome(),
                     terminal.run_id, 0U, 3U, 2) &&
                 !rejected_run &&
-                rejected_run.error ==
+                rejected_run.result.error ==
                     SessionError::InvalidLifecycleTransition &&
                 bundle.session->state() == gnc::kernel::SessionState::Completed &&
                 bundle.session->committed_epoch() == 3U &&
@@ -1447,6 +1508,8 @@ void verify_run_to_terminal(
     const auto completed = bundle.session->run_to_terminal();
     const auto* outcome = bundle.session->run_outcome();
     require(completed &&
+                completed.status ==
+                    gnc::kernel::RunDriveStatus::Completed &&
                 bundle.session->state() ==
                     gnc::kernel::SessionState::Completed &&
                 bundle.session->last_step_outcome().status ==
@@ -1480,7 +1543,7 @@ void verify_run_to_terminal(
     const auto frozen = *outcome;
     const auto repeated = bundle.session->run_to_terminal();
     require(!repeated &&
-                repeated.error ==
+                repeated.result.error ==
                     SessionError::InvalidLifecycleTransition &&
                 exactly_same(*bundle.session->run_outcome(), frozen),
             "repeated run_to_terminal changed the completed outcome");
@@ -1573,7 +1636,8 @@ void verify_precommit_rollback(
                     bundle.session->last_step_outcome(),
                     failed.run_id, 0U, 0U, 0) &&
                 !rerun &&
-                rerun.error == SessionError::InvalidLifecycleTransition &&
+                rerun.result.error ==
+                    SessionError::InvalidLifecycleTransition &&
                 bundle.session->state() == gnc::kernel::SessionState::Failed &&
                 bundle.session->committed_epoch() == 0U &&
                 bundle.session->committed_tick() == 0 &&
@@ -1895,7 +1959,8 @@ void verify_terminal_failure(
                 rejected.result.error ==
                     SessionError::InvalidLifecycleTransition &&
                 !rerun &&
-                rerun.error == SessionError::InvalidLifecycleTransition &&
+                rerun.result.error ==
+                    SessionError::InvalidLifecycleTransition &&
                 bundle.session->state() == gnc::kernel::SessionState::Failed &&
                 exactly_same(*bundle.session->run_outcome(),
                              frozen_outcome),
@@ -2606,6 +2671,482 @@ void verify_reset_failure_matrix(
             "fresh Session did not recover after reset failure injection");
 }
 
+void verify_cancel_before_first_step_idempotence_and_dispose(
+    const std::shared_ptr<const ExecutionPlanImage>& image) {
+    constexpr std::string_view run_id = "run:cancel-before-first";
+    constexpr std::string_view request_id = "cancel:before-first";
+    auto bundle = initialize_session(image, {}, std::string(run_id));
+    const auto before_state = committed_probe(*bundle.session,
+                                               bundle.adapter);
+    const auto before_blocks = bundle.session->state_blocks();
+    const auto before_histories = bundle.session->committed_histories();
+    const auto before_outputs = bundle.session->committed_outputs();
+    const auto live_before = bundle.adapter.trace->live_object_count();
+
+    const auto empty_id = bundle.session->request_cancel(
+        cancellation_request("", std::string(run_id)));
+    const auto wrong_run = bundle.session->request_cancel(
+        cancellation_request("cancel:wrong-run", "run:other"));
+    const auto accepted = bundle.session->request_cancel(
+        cancellation_request(std::string(request_id),
+                             std::string(run_id)));
+    const auto repeated = bundle.session->request_cancel(
+        cancellation_request(std::string(request_id),
+                             std::string(run_id)));
+    const auto superseded = bundle.session->request_cancel(
+        cancellation_request("cancel:before-first:other",
+                             std::string(run_id)));
+    const auto driven = bundle.session->run_to_terminal();
+    const auto& step = bundle.session->last_step_outcome();
+    require(!empty_id &&
+                empty_id.disposition ==
+                    gnc::kernel::CancellationDisposition::Rejected &&
+                !wrong_run &&
+                wrong_run.disposition ==
+                    gnc::kernel::CancellationDisposition::Rejected &&
+                accepted &&
+                accepted.disposition ==
+                    gnc::kernel::CancellationDisposition::Accepted &&
+                accepted.observed_committed_epoch == 0U &&
+                accepted.observed_committed_tick == 0 && repeated &&
+                repeated.disposition ==
+                    gnc::kernel::CancellationDisposition::AlreadyRequested &&
+                !superseded &&
+                superseded.disposition ==
+                    gnc::kernel::CancellationDisposition::Superseded &&
+                !driven && driven.result &&
+                driven.status == gnc::kernel::RunDriveStatus::Cancelled &&
+                step.status == gnc::kernel::StepStatus::Cancelled &&
+                step.result && !step.primary_diagnostic.has_value() &&
+                step.base_epoch == 0U && step.committed_epoch == 0U &&
+                step.tick_before == 0 && step.tick_after == 0 &&
+                !step.histories.staged &&
+                !step.observation_seal.staged &&
+                !step.result_seal.staged &&
+                exactly_same(committed_probe(*bundle.session,
+                                             bundle.adapter),
+                             before_state) &&
+                same_state_blocks(bundle.session->state_blocks(),
+                                  before_blocks) &&
+                exactly_same(bundle.session->committed_histories(),
+                             before_histories) &&
+                same_committed_outputs(bundle.session->committed_outputs(),
+                                       before_outputs) &&
+                all_frame_slots_absent(*bundle.session) &&
+                bundle.adapter.trace->live_object_count() == live_before,
+            "pre-step cancellation changed committed evidence or request idempotence");
+    require_cancelled_run(*bundle.session, run_id, 0U, 0, 0U);
+
+    const auto* frozen = bundle.session->run_outcome();
+    const auto frozen_copy = *frozen;
+    const auto after_cancel_retry = bundle.session->request_cancel(
+        cancellation_request(std::string(request_id),
+                             std::string(run_id)));
+    require(after_cancel_retry &&
+                after_cancel_retry.disposition ==
+                    gnc::kernel::CancellationDisposition::AlreadyRequested &&
+                bundle.session->run_outcome() == frozen &&
+                exactly_same(*frozen, frozen_copy),
+            "idempotent cancellation retry changed the frozen outcome");
+
+    const auto last_run_id = *bundle.session->last_committed_run_id();
+    require(bundle.session->dispose() &&
+                bundle.session->state() ==
+                    gnc::kernel::SessionState::Disposed &&
+                bundle.session->preparation_count() == 0U &&
+                bundle.session->runtime_cell_count() == 0U &&
+                bundle.session->committed_state_count() == 0U &&
+                bundle.adapter.trace->live_object_count() == 0U &&
+                bundle.session->last_committed_run_id() != nullptr &&
+                *bundle.session->last_committed_run_id() == last_run_id &&
+                bundle.session->run_outcome() == frozen &&
+                exactly_same(*frozen, frozen_copy) &&
+                &bundle.session->image() == image.get(),
+            "cancelled Session dispose lost identity/outcome or leaked resources");
+    const auto event_count = bundle.adapter.trace->events.size();
+    bundle.session.reset();
+    require(bundle.adapter.trace->events.size() == event_count,
+            "cancelled Session destructor repeated explicit cleanup");
+}
+
+void verify_cancel_between_boundary_callsites(
+    const std::shared_ptr<const ExecutionPlanImage>& image) {
+    auto discovery = initialize_session(
+        image, {}, "run:cancel-boundary-discovery");
+    require(discovery.session->execute_step() &&
+                !discovery.session->last_boundary_summary()
+                     .executed_callsite_handles.empty(),
+            "boundary cancellation discovery step failed");
+    const auto full_call_count =
+        discovery.session->last_boundary_summary()
+            .executed_callsite_handles.size();
+    const auto first_callsite =
+        discovery.session->last_boundary_summary()
+            .executed_callsite_handles.front();
+    require(full_call_count > 1U &&
+                std::count_if(
+                    image->cancellation_policy().safe_points.begin(),
+                    image->cancellation_policy().safe_points.end(),
+                    [first_callsite](const auto& point) {
+                        return point.kind ==
+                                   gnc::contracts::
+                                       PlanImageCancellationSafePointKind::
+                                           AfterBoundaryCallsite &&
+                               point.subject_handle == first_callsite;
+                    }) == 1,
+            "first boundary callsite lacks a declared cancellation point");
+
+    constexpr std::string_view run_id = "run:cancel-between-boundaries";
+    auto bundle = initialize_session(image, {}, std::string(run_id));
+    const auto before_state = committed_probe(*bundle.session,
+                                               bundle.adapter);
+    const auto live_before = bundle.adapter.trace->live_object_count();
+    bundle.adapter.coordination->arm(
+        AdapterCoordinationPoint::InvocationReturn, first_callsite);
+    gnc::kernel::StepOutcome step;
+    std::thread execution([&] { step = bundle.session->execute_step(); });
+    const auto reached =
+        bundle.adapter.coordination->wait_until_reached();
+    if (!reached) {
+        bundle.adapter.coordination->release();
+        execution.join();
+        require(false, "boundary cancellation rendezvous was not reached");
+    }
+    const auto accepted = bundle.session->request_cancel(
+        cancellation_request("cancel:between-boundaries",
+                             std::string(run_id)));
+    bundle.adapter.coordination->release();
+    execution.join();
+
+    const auto& boundary = bundle.session->last_boundary_summary();
+    require(accepted &&
+                accepted.disposition ==
+                    gnc::kernel::CancellationDisposition::Accepted &&
+                step.status == gnc::kernel::StepStatus::Cancelled &&
+                step.result && !step.primary_diagnostic.has_value() &&
+                boundary.executed_callsite_handles.size() == 1U &&
+                boundary.executed_callsite_handles.front() ==
+                    first_callsite &&
+                bundle.adapter.opening_boundary->call_order.size() == 1U &&
+                bundle.adapter.opening_boundary->call_order.front() ==
+                    first_callsite &&
+                bundle.adapter.opening_boundary->call_order.size() <
+                    full_call_count &&
+                exactly_same(committed_probe(*bundle.session,
+                                             bundle.adapter),
+                             before_state) &&
+                bundle.session->committed_outputs().empty() &&
+                all_frame_slots_absent(*bundle.session) &&
+                bundle.adapter.trace->live_object_count() == live_before,
+            "boundary cancellation ran a later callsite or retained frame output");
+    require_history(*bundle.session, 0U, 0, 0);
+    require_cancelled_run(*bundle.session, run_id, 0U, 0, 0U);
+}
+
+void verify_cancel_between_candidate_producers(
+    const std::shared_ptr<const ExecutionPlanImage>& image) {
+    const auto& transaction = image->transactions().front();
+    const auto integration = std::find_if(
+        transaction.candidates.begin(), transaction.candidates.end(),
+        [](const auto& member) {
+            return member.producer_kind == "IntegrationScope";
+        });
+    require(integration != transaction.candidates.end(),
+            "candidate cancellation lacks an IntegrationScope member");
+    constexpr std::string_view run_id = "run:cancel-between-candidates";
+    auto bundle = initialize_session(image, {}, std::string(run_id));
+    const auto before_state = committed_probe(*bundle.session,
+                                               bundle.adapter);
+    const auto live_before = bundle.adapter.trace->live_object_count();
+    const auto held_handle = transaction.held_slot_handles.front();
+    const auto initial_slot_constructs =
+        bundle.adapter.trace->constructed_handles(
+            gnc::tests::ref_yyz::TraceObjectKind::Slot);
+    const auto initial_slot_destroys =
+        bundle.adapter.trace->destroyed_handles(
+            gnc::tests::ref_yyz::TraceObjectKind::Slot);
+    const auto before_held_constructs = static_cast<std::size_t>(std::count(
+        initial_slot_constructs.begin(), initial_slot_constructs.end(),
+        held_handle));
+    const auto before_held_destroys = static_cast<std::size_t>(std::count(
+        initial_slot_destroys.begin(), initial_slot_destroys.end(),
+        held_handle));
+
+    bundle.adapter.coordination->arm(
+        AdapterCoordinationPoint::IntegrationReturn,
+        integration->producer_handle);
+    gnc::kernel::StepOutcome step;
+    std::thread execution([&] { step = bundle.session->execute_step(); });
+    const auto reached =
+        bundle.adapter.coordination->wait_until_reached();
+    if (!reached) {
+        bundle.adapter.coordination->release();
+        execution.join();
+        require(false, "candidate cancellation rendezvous was not reached");
+    }
+    const auto accepted = bundle.session->request_cancel(
+        cancellation_request("cancel:between-candidates",
+                             std::string(run_id)));
+    bundle.adapter.coordination->release();
+    execution.join();
+
+    const auto held_constructs =
+        bundle.adapter.trace->constructed_handles(
+            gnc::tests::ref_yyz::TraceObjectKind::Slot);
+    const auto held_destroys =
+        bundle.adapter.trace->destroyed_handles(
+            gnc::tests::ref_yyz::TraceObjectKind::Slot);
+    require(accepted &&
+                step.status == gnc::kernel::StepStatus::Cancelled &&
+                step.result && !step.primary_diagnostic.has_value() &&
+                step.candidates.planned_count ==
+                    transaction.candidates.size() &&
+                step.candidates.present_count == 0U &&
+                step.candidates.valid_count == 0U &&
+                bundle.session->last_step_journal()
+                        .candidate_slot_handles.size() == 1U &&
+                bundle.adapter.step_execution->integration_attempts == 1U &&
+                bundle.adapter.step_execution->mass_evolution_attempts ==
+                    0U &&
+                exactly_same(committed_probe(*bundle.session,
+                                             bundle.adapter),
+                             before_state) &&
+                bundle.session->committed_outputs().empty() &&
+                all_frame_slots_absent(*bundle.session) &&
+                bundle.adapter.trace->live_object_count() == live_before &&
+                static_cast<std::size_t>(std::count(
+                    held_constructs.begin(), held_constructs.end(),
+                    held_handle)) == before_held_constructs + 1U &&
+                static_cast<std::size_t>(std::count(
+                    held_destroys.begin(), held_destroys.end(),
+                    held_handle)) == before_held_destroys + 1U,
+            "candidate cancellation retained candidate/held staging or changed state");
+    require_history(*bundle.session, 0U, 0, 0);
+    require_cancelled_run(*bundle.session, run_id, 0U, 0, 0U);
+}
+
+void verify_cancel_at_final_precommit(
+    const std::shared_ptr<const ExecutionPlanImage>& image) {
+    const auto& transaction = image->transactions().front();
+    const auto subject = initial_binding_handle_for_candidate(
+        *image, transaction.candidates.front());
+    constexpr std::string_view run_id = "run:cancel-final-precommit";
+    auto bundle = initialize_session(image, {}, std::string(run_id));
+    const auto before_state = committed_probe(*bundle.session,
+                                               bundle.adapter);
+    const auto before_history = bundle.session->committed_histories();
+    const auto live_before = bundle.adapter.trace->live_object_count();
+    bundle.adapter.coordination->arm(
+        AdapterCoordinationPoint::FinalPrecommit, subject);
+    gnc::kernel::StepOutcome step;
+    std::thread execution([&] { step = bundle.session->execute_step(); });
+    const auto reached =
+        bundle.adapter.coordination->wait_until_reached();
+    if (!reached) {
+        bundle.adapter.coordination->release();
+        execution.join();
+        require(false, "final-precommit cancellation rendezvous was not reached");
+    }
+    const auto accepted = bundle.session->request_cancel(
+        cancellation_request("cancel:final-precommit",
+                             std::string(run_id)));
+    bundle.adapter.coordination->release();
+    execution.join();
+    require(accepted &&
+                step.status == gnc::kernel::StepStatus::Cancelled &&
+                step.result &&
+                bundle.session->last_step_journal().prevalidated &&
+                !bundle.session->last_step_journal().committed &&
+                exactly_same(committed_probe(*bundle.session,
+                                             bundle.adapter),
+                             before_state) &&
+                exactly_same(bundle.session->committed_histories(),
+                             before_history) &&
+                bundle.session->committed_outputs().empty() &&
+                all_frame_slots_absent(*bundle.session) &&
+                bundle.adapter.trace->live_object_count() == live_before,
+            "final-precommit cancellation crossed ModelCommit");
+    require_cancelled_run(*bundle.session, run_id, 0U, 0, 0U);
+}
+
+void verify_cancel_at_postcommit_boundary(
+    const std::shared_ptr<const ExecutionPlanImage>& image) {
+    const auto& transaction = image->transactions().front();
+    const auto subject = initial_binding_handle_for_candidate(
+        *image, transaction.candidates.back());
+    constexpr std::string_view run_id = "run:cancel-postcommit";
+    auto bundle = initialize_session(image, {}, std::string(run_id));
+    bundle.adapter.coordination->arm(
+        AdapterCoordinationPoint::ModelCommit, subject);
+    gnc::kernel::RunDriveOutcome drive;
+    std::thread execution(
+        [&] { drive = bundle.session->run_to_terminal(); });
+    const auto reached =
+        bundle.adapter.coordination->wait_until_reached();
+    if (!reached) {
+        bundle.adapter.coordination->release();
+        execution.join();
+        require(false, "postcommit cancellation rendezvous was not reached");
+    }
+    const auto accepted = bundle.session->request_cancel(
+        cancellation_request("cancel:postcommit", std::string(run_id)));
+    bundle.adapter.coordination->release();
+    execution.join();
+    const auto& step = bundle.session->last_step_outcome();
+    require(accepted &&
+                accepted.observed_committed_epoch == 0U &&
+                accepted.observed_committed_tick == 0 &&
+                !drive && drive.result &&
+                drive.status == gnc::kernel::RunDriveStatus::Cancelled &&
+                step.status == gnc::kernel::StepStatus::Committed &&
+                step.result && !step.primary_diagnostic.has_value() &&
+                step.committed_epoch == 1U && step.tick_after == 1 &&
+                bundle.session->last_step_journal().committed &&
+                all_frame_slots_absent(*bundle.session),
+            "postcommit cancellation rewrote the committed StepOutcome");
+    require_tick_one_oracle(committed_probe(*bundle.session,
+                                            bundle.adapter));
+    require_history(*bundle.session, 1U, 0, 0);
+    require_cancelled_run(*bundle.session, run_id, 1U, 1, 1U);
+}
+
+void verify_cancel_after_first_continue_before_next_boundary(
+    const std::shared_ptr<const ExecutionPlanImage>& image) {
+    constexpr std::string_view run_id = "run:cancel-after-one-commit";
+    auto bundle = initialize_session(image, {}, std::string(run_id));
+    const auto first = bundle.session->execute_step();
+    require(first.status == gnc::kernel::StepStatus::Committed && first,
+            "one-commit cancellation fixture could not commit step one");
+    const auto committed_state = committed_probe(*bundle.session,
+                                                  bundle.adapter);
+    const auto committed_history = bundle.session->committed_histories();
+    const auto committed_seal = sealed_snapshot(*bundle.session);
+    const auto call_count =
+        bundle.adapter.opening_boundary->call_order.size();
+    const auto accepted = bundle.session->request_cancel(
+        cancellation_request("cancel:after-one-commit",
+                             std::string(run_id)));
+    const auto cancelled = bundle.session->execute_step();
+    require(accepted &&
+                accepted.observed_committed_epoch == 1U &&
+                accepted.observed_committed_tick == 1 &&
+                cancelled.status ==
+                    gnc::kernel::StepStatus::Cancelled &&
+                cancelled.result &&
+                bundle.adapter.opening_boundary->call_order.size() ==
+                    call_count &&
+                exactly_same(committed_probe(*bundle.session,
+                                             bundle.adapter),
+                             committed_state) &&
+                exactly_same(bundle.session->committed_histories(),
+                             committed_history) &&
+                exact_sealed_observation_snapshot(
+                    sealed_snapshot(*bundle.session), committed_seal) &&
+                all_frame_slots_absent(*bundle.session),
+            "next-transaction cancellation changed the first committed boundary");
+    require_cancelled_run(*bundle.session, run_id, 1U, 1, 1U);
+}
+
+void verify_terminal_and_failure_precedence_over_cancellation(
+    const std::shared_ptr<const ExecutionPlanImage>& image) {
+    {
+        constexpr std::string_view run_id =
+            "run:cancel-after-terminal";
+        auto bundle = initialize_session(image, {}, std::string(run_id));
+        const auto drive = bundle.session->run_to_terminal();
+        const auto* outcome = bundle.session->run_outcome();
+        require(drive && outcome != nullptr,
+                "terminal cancellation fixture did not complete");
+        const auto frozen = *outcome;
+        const auto rejected = bundle.session->request_cancel(
+            cancellation_request("cancel:after-terminal",
+                                 std::string(run_id)));
+        require(!rejected &&
+                    rejected.disposition ==
+                        gnc::kernel::CancellationDisposition::Rejected &&
+                    rejected.observed_committed_epoch == 3U &&
+                    rejected.observed_committed_tick == 2 &&
+                    bundle.session->state() ==
+                        gnc::kernel::SessionState::Completed &&
+                    bundle.session->run_outcome() == outcome &&
+                    outcome->final_status ==
+                        gnc::kernel::RunFinalStatus::Completed &&
+                    outcome->validity ==
+                        gnc::contracts::EvidenceValidity::Valid &&
+                    exactly_same(*outcome, frozen),
+                "post-Terminal cancellation overrode Completed outcome");
+    }
+
+    {
+        constexpr std::string_view run_id =
+            "run:cancel-after-failure";
+        AdapterOptions options;
+        options.failure = {FailurePhase::Boundary, 0U};
+        auto bundle = initialize_session(image, options,
+                                         std::string(run_id));
+        const auto failed = bundle.session->execute_step();
+        const auto* outcome = bundle.session->run_outcome();
+        require(!failed && outcome != nullptr &&
+                    outcome->final_status ==
+                        gnc::kernel::RunFinalStatus::Failed &&
+                    outcome->primary_diagnostic.has_value(),
+                "failure precedence fixture did not freeze its failure");
+        const auto frozen = *outcome;
+        const auto superseded = bundle.session->request_cancel(
+            cancellation_request("cancel:after-failure",
+                                 std::string(run_id)));
+        require(!superseded &&
+                    superseded.disposition ==
+                        gnc::kernel::CancellationDisposition::Superseded &&
+                    bundle.session->state() ==
+                        gnc::kernel::SessionState::Failed &&
+                    bundle.session->run_outcome() == outcome &&
+                    exactly_same(*outcome, frozen),
+                "later cancellation replaced the primary execution failure");
+    }
+}
+
+void verify_cancellation_session_isolation(
+    const std::shared_ptr<const ExecutionPlanImage>& image) {
+    auto adapter = gnc::tests::ref_yyz::make_session_adapter(*image);
+    require(static_cast<bool>(adapter), adapter.error);
+    auto first = gnc::kernel::create_session(image, adapter.provider);
+    auto second = gnc::kernel::create_session(image, adapter.provider);
+    require(first && second &&
+                first.session->initialize(initialization_request(
+                    *image, "run:cancel-isolation-first")) &&
+                second.session->initialize(initialization_request(
+                    *image, "run:cancel-isolation-second")),
+            "cancellation isolation Sessions could not initialize");
+    const auto second_before = committed_probe(*second.session, adapter);
+    const auto accepted = first.session->request_cancel(
+        cancellation_request("cancel:isolation-first",
+                             "run:cancel-isolation-first"));
+    const auto cancelled = first.session->execute_step();
+    const auto completed = second.session->run_to_terminal();
+    require(accepted &&
+                cancelled.status ==
+                    gnc::kernel::StepStatus::Cancelled &&
+                completed &&
+                first.session->state() ==
+                    gnc::kernel::SessionState::Cancelled &&
+                first.session->committed_epoch() == 0U &&
+                first.session->committed_tick() == 0 &&
+                exactly_same(committed_probe(*first.session, adapter),
+                             second_before) &&
+                second.session->state() ==
+                    gnc::kernel::SessionState::Completed &&
+                second.session->committed_epoch() == 3U &&
+                second.session->committed_tick() == 2 &&
+                second.session->run_outcome() != nullptr &&
+                second.session->run_outcome()->final_status ==
+                    gnc::kernel::RunFinalStatus::Completed,
+            "one Session cancellation crossed the shared Image/provider boundary");
+    require_cancelled_run(*first.session, "run:cancel-isolation-first",
+                          0U, 0, 0U);
+    require_mission_oracle(mission_result_probe(*second.session, adapter));
+}
+
 void verify_dispose_lifecycle(
     const std::shared_ptr<const ExecutionPlanImage>& image) {
     {
@@ -2755,6 +3296,14 @@ void run() {
     verify_completed_run_reset(image);
     verify_reset_capability_fail_closed(image);
     verify_reset_failure_matrix(image);
+    verify_cancel_before_first_step_idempotence_and_dispose(image);
+    verify_cancel_between_boundary_callsites(image);
+    verify_cancel_between_candidate_producers(image);
+    verify_cancel_at_final_precommit(image);
+    verify_cancel_at_postcommit_boundary(image);
+    verify_cancel_after_first_continue_before_next_boundary(image);
+    verify_terminal_and_failure_precedence_over_cancellation(image);
+    verify_cancellation_session_isolation(image);
     verify_dispose_lifecycle(image);
 }
 
