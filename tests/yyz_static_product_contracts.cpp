@@ -351,7 +351,7 @@ void verify_catalog_and_descriptors() {
         }
     }
     require(catalog.succeeded(), "Catalog rejected YYZ static products");
-    require(package.models.size() == 10U,
+    require(package.models.size() == 11U,
             "Wave A package model inventory changed");
     for (const auto& model : package.models) {
         require(std::is_sorted(
@@ -460,6 +460,44 @@ void verify_catalog_and_descriptors() {
                 propulsion_entry.input_port_ids.empty(),
             "fixed supplied propulsion ceased to be config-driven");
 
+    const auto& navigation =
+        find_model(package, kTruthPassthroughNavigationModelIdentity);
+    const auto& navigation_runtime = *navigation.runtime_component;
+    const auto& navigation_entry = find_entry(
+        navigation, RuntimeExecutionObligation::BoundaryEvaluation);
+    require(navigation.definition.execution_form ==
+                gnc::model_sdk::ModelExecutionForm::RuntimeComponent &&
+                navigation.placement ==
+                    gnc::model_sdk::ModelPlacement::VehicleProcess &&
+                navigation.ports.size() == 2U &&
+                navigation.ports[0U].port_id ==
+                    "committed-rigid-observation" &&
+                navigation.ports[0U].contract_id ==
+                    kCommittedRigidObservationContractIdentity &&
+                navigation.ports[0U].temporal_relation ==
+                    gnc::model_sdk::TemporalRelation::CurrentCycle &&
+                navigation.ports[1U].port_id == "navigation-estimate" &&
+                navigation.ports[1U].contract_id ==
+                    kTruthPassthroughNavigationOutputContractIdentity &&
+                navigation.ports[1U].slot_codec.has_value() &&
+                navigation_runtime.recipe_id ==
+                    kTruthPassthroughNavigationRecipeIdentity &&
+                navigation_runtime.profile ==
+                    gnc::model_sdk::RuntimeCellProfile::SampledTransform &&
+                navigation_runtime.schedule.trigger ==
+                    gnc::model_sdk::StaticScheduleTrigger::EveryBoundary &&
+                navigation_runtime.schedule.step_interval == 1U &&
+                navigation_runtime.schedule.offset == 0U &&
+                navigation_runtime.schedule.max_input_age_steps == 0U &&
+                navigation_entry.phase == CoarsePhase::Process &&
+                navigation_entry.entry_id ==
+                    kTruthPassthroughNavigationKernelIdentity.id &&
+                navigation_entry.request_contract_id ==
+                    kCommittedRigidObservationContractIdentity &&
+                navigation_entry.result_contract_id ==
+                    kTruthPassthroughNavigationOutputContractIdentity,
+            "truth-passthrough navigation descriptor changed");
+
     const auto& evaluator =
         find_model(package, kCommittedMissionResultModelIdentity);
     const auto& evaluator_entry = find_entry(
@@ -508,7 +546,7 @@ void verify_implementation_table() {
                 implementation.package_version == package.package_version &&
                 implementation.build_fingerprint ==
                     "yyz-static-contract-test" &&
-                implementation.entries.size() == 44U &&
+                implementation.entries.size() == 48U &&
                 implementation.state_layouts.size() == 2U &&
                 implementation.value_layouts.size() == 10U,
             "static implementation inventory changed");
@@ -707,6 +745,11 @@ void verify_implementation_table() {
         StaticEntryKind::RuntimeCellFactory,
         &create_scalar_burn_mass_runtime_cell,
         "mass runtime-cell factory changed");
+    require_exact_callable(
+        kTruthPassthroughNavigationRuntimeCellFactoryIdentity,
+        StaticEntryKind::RuntimeCellFactory,
+        &create_truth_passthrough_navigation_runtime_cell,
+        "navigation runtime-cell factory changed");
     require_exact_callable(
         kAltitudePitchGuidanceRuntimeCellFactoryIdentity,
         StaticEntryKind::RuntimeCellFactory,
@@ -1259,11 +1302,65 @@ void verify_guidance_control_actuation_definition_builders() {
 
     const auto observation = project_committed_rigid_observation(
         sample_context(kInertialFrame), rigid_input().committed_state);
+
+    TruthPassthroughNavigationDefinition navigation_definition;
+    navigation_definition.model_id =
+        std::string(kTruthPassthroughNavigationModelIdentity);
+    navigation_definition.model_version =
+        std::string(kTruthPassthroughNavigationModelVersion);
+    navigation_definition.inertial_frame =
+        FrameIdentity{std::string(kInertialFrame)};
+    navigation_definition.clock_domain =
+        ClockDomainIdentity{std::string(kClock)};
+    navigation_definition.configuration_revision = 11;
+    const auto navigation_configuration =
+        canonical_truth_passthrough_navigation_config(
+            navigation_definition);
+    const auto rebuilt_navigation =
+        build_truth_passthrough_navigation_definition(
+            navigation_configuration);
+    require(rebuilt_navigation.has_value() &&
+                canonical_truth_passthrough_navigation_config(
+                    rebuilt_navigation.value()) ==
+                    navigation_configuration,
+            "navigation runtime config did not round-trip");
+    require_rejects_truncated_definition(
+        navigation_configuration,
+        &build_truth_passthrough_navigation_definition,
+        kTruthPassthroughNavigationDefinitionBuilderIdentity,
+        "navigation builder accepted an incomplete config");
+    const auto original_navigation =
+        TruthPassthroughNavigationKernel::evaluate(
+            navigation_definition, observation);
+    const auto rebuilt_navigation_output =
+        TruthPassthroughNavigationKernel::evaluate(
+            rebuilt_navigation.value(), observation);
+    require(original_navigation.has_value() &&
+                rebuilt_navigation_output.has_value() &&
+                rebuilt_navigation_output.status() ==
+                    original_navigation.status() &&
+                rebuilt_navigation_output.evidence().flags ==
+                    original_navigation.evidence().flags &&
+                exactly(rebuilt_navigation_output.value().context,
+                        observation.context) &&
+                exactly(rebuilt_navigation_output.value().state,
+                        observation.state),
+            "navigation definition builder changed pass-through output");
+    auto invalid_navigation_observation = observation;
+    invalid_navigation_observation.context.quality = DataQuality::Invalid;
+    const auto rejected_navigation =
+        TruthPassthroughNavigationKernel::evaluate(
+            rebuilt_navigation.value(), invalid_navigation_observation);
+    require(!rejected_navigation.has_value() &&
+                rejected_navigation.status() ==
+                    gnc::foundation::NumericalStatus::DomainError,
+            "navigation accepted an invalid observation context");
+
     const auto original_guidance = AltitudePitchGuidanceKernel::evaluate(
-        guidance_definition, observation);
+        guidance_definition, original_navigation.value());
     const auto rebuilt_guidance_output =
         AltitudePitchGuidanceKernel::evaluate(rebuilt_guidance.value(),
-                                              observation);
+                                              rebuilt_navigation_output.value());
     require(original_guidance.has_value() &&
                 rebuilt_guidance_output.has_value() &&
                 rebuilt_guidance_output.status() ==

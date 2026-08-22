@@ -276,6 +276,21 @@ if(GNC_BUILD_TESTS)
     endif()
     gnc_enable_warnings(gnc_kernel_multirate_held_output_probe)
 
+    # R3 YYZ 00A target-rate conformance chain and long-run evidence.
+    add_executable(
+        gnc_kernel_yyz_target_rate_probe
+        tests/kernel_yyz_target_rate.cpp
+        tests/support/ref_yyz_complete_composition.cpp
+        tests/support/ref_yyz_session_adapter.cpp)
+    target_link_libraries(
+        gnc_kernel_yyz_target_rate_probe
+        PRIVATE compiler kernel_session yyz_rigid_step)
+    if(MSVC)
+        target_compile_options(
+            gnc_kernel_yyz_target_rate_probe PRIVATE /bigobj)
+    endif()
+    gnc_enable_warnings(gnc_kernel_yyz_target_rate_probe)
+
     # R3 bounded command/event slice over a qualification-only ModeOwner.
     add_executable(
         gnc_kernel_command_event_probe
@@ -530,6 +545,9 @@ if(GNC_BUILD_TESTS)
     add_test(
         NAME r3.kernel-multirate-held-output.probe
         COMMAND gnc_kernel_multirate_held_output_probe --self-check)
+    add_test(
+        NAME r3.kernel-yyz-target-rate.probe
+        COMMAND gnc_kernel_yyz_target_rate_probe --self-check)
     add_test(
         NAME r3.kernel-command-event.probe
         COMMAND gnc_kernel_command_event_probe --self-check)

@@ -436,8 +436,11 @@ void append_configuration_provenance(
 
 } // namespace
 
-[[nodiscard]] CompleteStaticCompositionSource make_complete_source(
-    const StaticPackageDescriptor& package) {
+namespace {
+
+[[nodiscard]] CompleteStaticCompositionSource make_source(
+    const StaticPackageDescriptor& package, bool include_navigation,
+    double base_step_seconds, std::int64_t terminal_tick) {
     CompleteStaticCompositionSource source;
     source.source_version =
         std::string(gnc::compiler::kCompleteStaticCompositionSourceVersion);
@@ -445,7 +448,8 @@ void append_configuration_provenance(
         "mission.fixture.yyz.lookup-altitude-hold@1";
     source.plan_id = "plan.ref-yyz.complete";
     source.mission_source = ref("mission");
-    source.clock = {std::string(kClock), 0.1, 0, 2, ref("clock")};
+    source.clock = {std::string(kClock), base_step_seconds, 0,
+                    terminal_tick, ref("clock")};
     source.entities.push_back(
         {std::string(kEntity),
          gnc::compiler::EntityLifecycle::ActiveAtInitialize,
@@ -455,8 +459,17 @@ void append_configuration_provenance(
                                  std::string(kEntity)};
     source.scopes.push_back({vehicle_scope, ref("scopes/vehicle")});
 
-    std::map<std::string, std::string> occurrence_by_model;
+    std::vector<std::size_t> selected_model_indices;
     for (std::size_t index = 0U; index < package.models.size(); ++index) {
+        if (include_navigation ||
+            package.models[index].definition.model_id !=
+                gnc::packages::yyz::
+                    kTruthPassthroughNavigationModelIdentity) {
+            selected_model_indices.push_back(index);
+        }
+    }
+
+    for (const auto index : selected_model_indices) {
         const auto& model = package.models[index];
         CompleteSourceOccurrence occurrence;
         occurrence.occurrence_id = occurrence_id(index);
@@ -481,6 +494,11 @@ void append_configuration_provenance(
             model,
             "occurrences/" + occurrence.occurrence_id + "/config/fields",
             occurrence.configuration_field_sources);
+        for (auto& field : occurrence.configuration.fields) {
+            if (field.field_id.find("fixed_step") != std::string::npos) {
+                field.value = base_step_seconds;
+            }
+        }
         for (const auto& asset : model.asset_slots) {
             require(asset.role == "aerodynamics",
                     "REF graph contains an unmapped product asset role");
@@ -490,8 +508,6 @@ void append_configuration_provenance(
                  ref("occurrences/" + occurrence.occurrence_id +
                      "/assets/" + asset.role)});
         }
-        occurrence_by_model.emplace(model.definition.model_id,
-                                    occurrence.occurrence_id);
         source.occurrences.push_back(std::move(occurrence));
 
         if (model.runtime_component.has_value() &&
@@ -512,8 +528,7 @@ void append_configuration_provenance(
     }
 
     std::size_t binding_index = 0U;
-    for (std::size_t consumer_index = 0U;
-         consumer_index < package.models.size(); ++consumer_index) {
+    for (const auto consumer_index : selected_model_indices) {
         const auto& consumer = package.models[consumer_index];
         if (is_terminal_evaluator(consumer)) {
             continue;
@@ -525,11 +540,33 @@ void append_configuration_provenance(
             }
             std::vector<std::pair<std::size_t, const gnc::model_sdk::StaticPortDescriptor*>>
                 providers;
-            for (std::size_t provider_index = 0U;
-                 provider_index < package.models.size(); ++provider_index) {
+            for (const auto provider_index : selected_model_indices) {
+                const auto& provider_model =
+                    package.models[provider_index];
                 for (const auto& output :
-                     package.models[provider_index].ports) {
-                    if (output.direction ==
+                     provider_model.ports) {
+                    bool target_provider = true;
+                    if (include_navigation &&
+                        input.contract_id ==
+                            gnc::packages::yyz::
+                                kCommittedRigidObservationContractIdentity) {
+                        if (consumer.definition.model_id ==
+                            gnc::packages::yyz::
+                                kTruthPassthroughNavigationModelIdentity) {
+                            target_provider =
+                                provider_model.definition.model_id ==
+                                gnc::packages::yyz::
+                                    kRigidStepModelIdentity;
+                        } else if (consumer.definition.model_id ==
+                                   gnc::packages::yyz::
+                                       kAltitudePitchGuidanceModelIdentity) {
+                            target_provider =
+                                provider_model.definition.model_id ==
+                                gnc::packages::yyz::
+                                    kTruthPassthroughNavigationModelIdentity;
+                        }
+                    }
+                    if (target_provider && output.direction ==
                             gnc::model_sdk::StaticPortDirection::Output &&
                         output.contract_id == input.contract_id &&
                         output.binding_kind == input.binding_kind &&
@@ -554,8 +591,7 @@ void append_configuration_provenance(
     std::size_t invocation_index = 0U;
     std::string continuous_owner;
     std::string closure_invocation;
-    for (std::size_t caller_index = 0U;
-         caller_index < package.models.size(); ++caller_index) {
+    for (const auto caller_index : selected_model_indices) {
         const auto& caller = package.models[caller_index];
         if (!caller.runtime_component.has_value()) {
             continue;
@@ -569,8 +605,7 @@ void append_configuration_provenance(
             for (const auto& requirement :
                  entry.invocation_requirements) {
                 std::vector<std::size_t> providers;
-                for (std::size_t provider_index = 0U;
-                     provider_index < package.models.size(); ++provider_index) {
+                for (const auto provider_index : selected_model_indices) {
                     const auto& provider = package.models[provider_index];
                     const bool query =
                         requirement.kind == StaticInvocationKind::PureQuery &&
@@ -624,7 +659,7 @@ void append_configuration_provenance(
         owner_by_schema_layout;
     const gnc::model_sdk::StaticEvaluatorHistoryShapeDescriptor*
         evaluator_shape = nullptr;
-    for (std::size_t index = 0U; index < package.models.size(); ++index) {
+    for (const auto index : selected_model_indices) {
         const auto& model = package.models[index];
         if (model.runtime_component.has_value() &&
             model.runtime_component->state_owner.has_value()) {
@@ -664,6 +699,44 @@ void append_configuration_provenance(
         {package.package_id, package.package_version,
          "build.ref-yyz.release", ref("packages/yyz/build")});
     return source;
+}
+
+[[nodiscard]] CompleteSourceOccurrence& occurrence_for(
+    CompleteStaticCompositionSource& source, std::string_view model_id) {
+    const auto found = std::find_if(
+        source.occurrences.begin(), source.occurrences.end(),
+        [&](const auto& occurrence) {
+            return occurrence.model_id == model_id;
+        });
+    require(found != source.occurrences.end(),
+            "target-rate source model occurrence is missing");
+    return *found;
+}
+
+[[nodiscard]] const gnc::compiler::CompleteSourceBinding& binding_for(
+    const CompleteStaticCompositionSource& source,
+    const CompleteSourceOccurrence& provider,
+    std::string_view provider_port,
+    const CompleteSourceOccurrence& consumer,
+    std::string_view consumer_port) {
+    const auto found = std::find_if(
+        source.bindings.begin(), source.bindings.end(),
+        [&](const auto& binding) {
+            return binding.provider_occurrence_id == provider.occurrence_id &&
+                   binding.provider_port_id == provider_port &&
+                   binding.consumer_occurrence_id == consumer.occurrence_id &&
+                   binding.consumer_port_id == consumer_port;
+        });
+    require(found != source.bindings.end(),
+            "target-rate source binding is missing");
+    return *found;
+}
+
+} // namespace
+
+[[nodiscard]] CompleteStaticCompositionSource make_complete_source(
+    const StaticPackageDescriptor& package) {
+    return make_source(package, false, 0.1, 2);
 }
 
 gnc::compiler::CompleteOutcome<gnc::contracts::ExecutionPlanImage>
@@ -742,6 +815,85 @@ compile_multirate_held_output_qualification_image() {
             "build.ref-yyz.release");
     const auto source =
         make_multirate_held_output_qualification_source(package);
+    return gnc::compiler::compile_and_link_complete_execution_plan(
+        source, {package}, {implementation});
+}
+
+gnc::compiler::CompleteStaticCompositionSource
+make_00a_target_rate_source(
+    const gnc::model_sdk::StaticPackageDescriptor& package,
+    std::int64_t terminal_tick) {
+    auto source = make_source(package, true, 0.01, terminal_tick);
+    source.mission_id =
+        "mission.qualification.yyz.00a-target-rate@1";
+    source.plan_id = "plan.qualification.yyz.00a-target-rate";
+
+    const auto& navigation = occurrence_for(
+        source,
+        gnc::packages::yyz::kTruthPassthroughNavigationModelIdentity);
+    const auto& guidance = occurrence_for(
+        source, gnc::packages::yyz::kAltitudePitchGuidanceModelIdentity);
+    const auto& controller = occurrence_for(
+        source, gnc::packages::yyz::kPitchMomentControllerModelIdentity);
+    const auto& actuator = occurrence_for(
+        source, gnc::packages::yyz::kIdealBodyMomentActuatorModelIdentity);
+
+    source.occurrence_schedule_overrides = {
+        {navigation.occurrence_id, 1U, 0U, 0U,
+         ref("target-rate/schedules/navigation")},
+        {guidance.occurrence_id, 5U, 0U, 0U,
+         ref("target-rate/schedules/guidance")},
+        {controller.occurrence_id, 2U, 0U, 4U,
+         ref("target-rate/schedules/controller")},
+        {actuator.occurrence_id, 1U, 0U, 1U,
+         ref("target-rate/schedules/actuator")},
+    };
+
+    const auto& guidance_to_controller = binding_for(
+        source, guidance, "guidance-output", controller,
+        "guidance-output");
+    const auto& controller_to_actuator = binding_for(
+        source, controller, "controller-output", actuator,
+        "controller-output");
+    source.binding_temporal_overrides = {
+        {guidance_to_controller.binding_id,
+         guidance_to_controller.provider_occurrence_id,
+         guidance_to_controller.provider_port_id,
+         guidance_to_controller.consumer_occurrence_id,
+         guidance_to_controller.consumer_port_id,
+         std::string(
+             gnc::packages::yyz::
+                 kAltitudePitchGuidanceOutputContractIdentity),
+         gnc::model_sdk::BindingKind::SampledSignal,
+         gnc::model_sdk::TemporalRelation::HeldLatest,
+         ref("target-rate/temporal/guidance-to-controller")},
+        {controller_to_actuator.binding_id,
+         controller_to_actuator.provider_occurrence_id,
+         controller_to_actuator.provider_port_id,
+         controller_to_actuator.consumer_occurrence_id,
+         controller_to_actuator.consumer_port_id,
+         std::string(
+             gnc::packages::yyz::
+                 kPitchMomentControllerOutputContractIdentity),
+         gnc::model_sdk::BindingKind::SampledSignal,
+         gnc::model_sdk::TemporalRelation::HeldLatest,
+         ref("target-rate/temporal/controller-to-actuator")},
+    };
+    source.observation_schedules.push_back(
+        {"observation.00a.committed-rigid-mass", 4U, 0U,
+         ref("target-rate/observations/committed-rigid-mass")});
+    return source;
+}
+
+gnc::compiler::CompleteOutcome<gnc::contracts::ExecutionPlanImage>
+compile_00a_target_rate_image(std::int64_t terminal_tick) {
+    const auto package =
+        gnc::packages::yyz::describe_yyz_rigid_step_package();
+    const auto implementation =
+        gnc::packages::yyz::describe_yyz_rigid_step_implementation(
+            "build.ref-yyz.release");
+    const auto source =
+        make_00a_target_rate_source(package, terminal_tick);
     return gnc::compiler::compile_and_link_complete_execution_plan(
         source, {package}, {implementation});
 }

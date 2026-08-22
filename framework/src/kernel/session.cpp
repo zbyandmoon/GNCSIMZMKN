@@ -5,6 +5,7 @@
 #include <limits>
 #include <mutex>
 #include <new>
+#include <set>
 #include <utility>
 
 namespace gnc::kernel {
@@ -3809,6 +3810,36 @@ struct Session::Impl final : SessionObjectAccess,
         return {};
     }
 
+    [[nodiscard]] SessionResult validate_observation_schedules() noexcept {
+        std::set<std::string> observation_ids;
+        std::string previous_id;
+        const auto tick_span =
+            image->clock().terminal_tick >= image->clock().initial_tick
+                ? static_cast<std::uint64_t>(
+                      image->clock().terminal_tick -
+                      image->clock().initial_tick)
+                : 0U;
+        for (const auto& schedule : image->observation_schedules()) {
+            const bool canonical_order =
+                previous_id.empty() || previous_id < schedule.observation_id;
+            const bool valid =
+                !schedule.observation_id.empty() && canonical_order &&
+                observation_ids.insert(schedule.observation_id).second &&
+                schedule.plan_element_id ==
+                    "observation-schedule/" + schedule.observation_id &&
+                schedule.step_interval != 0U &&
+                schedule.offset < schedule.step_interval &&
+                static_cast<std::uint64_t>(schedule.offset) <= tick_span;
+            if (!valid) {
+                return failure(
+                    SessionError::InvalidSchedule, schedule.handle,
+                    "observation cadence identity or clock-grid facts are invalid");
+            }
+            previous_id = schedule.observation_id;
+        }
+        return {};
+    }
+
     [[nodiscard]] SessionResult validate_image() {
         if (image->revision() != kSupportedImageRevision) {
             return failure(SessionError::UnsupportedImageRevision,
@@ -3832,6 +3863,7 @@ struct Session::Impl final : SessionObjectAccess,
             !unique_nonzero_handles(image->integration_scopes()) ||
             !unique_nonzero_handles(image->transactions()) ||
             !unique_nonzero_handles(image->held_outputs()) ||
+            !unique_nonzero_handles(image->observation_schedules()) ||
             !unique_nonzero_handles(image->command_routes()) ||
             !unique_nonzero_handles(image->event_deliveries()) ||
             !unique_nonzero_handles(
@@ -3843,6 +3875,7 @@ struct Session::Impl final : SessionObjectAccess,
         auto result = validate_lifecycle();
         if (result) result = validate_storage();
         if (result) result = validate_held_outputs();
+        if (result) result = validate_observation_schedules();
         if (result) result = validate_states();
         if (result) result = validate_histories();
         if (result) result = validate_transactions();
@@ -4998,7 +5031,8 @@ struct Session::Impl final : SessionObjectAccess,
             image->clock().base_step_seconds;
         for (const auto& persistent : evaluator_histories) {
             if (persistent.plan == nullptr ||
-                persistent.samples.size() >=
+                persistent.plan->history_depth == 0U ||
+                persistent.samples.size() >
                     persistent.plan->history_depth) {
                 return failure(SessionError::HistoryValidationFailed,
                                persistent.plan == nullptr
@@ -5009,13 +5043,18 @@ struct Session::Impl final : SessionObjectAccess,
             EvaluatorHistoryStore staged;
             staged.plan = persistent.plan;
             staged.samples.reserve(persistent.plan->history_depth);
-            for (std::size_t sample_index = 0U;
+            const std::size_t first_retained_sample =
+                persistent.samples.size() ==
+                        persistent.plan->history_depth
+                    ? 1U
+                    : 0U;
+            for (std::size_t sample_index = first_retained_sample;
                  sample_index < persistent.samples.size(); ++sample_index) {
                 const auto& source_sample =
                     persistent.samples[sample_index];
                 if (source_sample.members.size() !=
                         persistent.plan->ordered_members.size() ||
-                    (sample_index > 0U &&
+                    (sample_index > first_retained_sample &&
                      source_sample.tick !=
                          persistent.samples[sample_index - 1U].tick + 1)) {
                     return failure(SessionError::HistoryValidationFailed,
@@ -6040,6 +6079,32 @@ struct Session::Impl final : SessionObjectAccess,
             frame->interval_end_seconds = value->interval_end_seconds;
             frame->quality = value->quality;
             guard.release();
+        }
+        return {};
+    }
+
+    [[nodiscard]] SessionResult inject_held_seal_outputs(
+        const contracts::PlanImageTransactionBranch& branch) noexcept {
+        for (const auto& held : image->held_outputs()) {
+            if (std::find(branch.sealed_output_slot_handles.begin(),
+                          branch.sealed_output_slot_handles.end(),
+                          held.source_slot_handle) ==
+                branch.sealed_output_slot_handles.end()) {
+                continue;
+            }
+            const auto* frame = frame_slot(held.source_slot_handle);
+            if (frame != nullptr && frame->present &&
+                frame->generation == cycle_frame.generation) {
+                continue;
+            }
+            if (held.consumer_callsite_handles.empty()) {
+                return failure(
+                    SessionError::InvalidImageStructure, held.handle,
+                    "HeldLatest seal authority has no typed consumer");
+            }
+            auto result =
+                inject_held_inputs(held.consumer_callsite_handles.front());
+            if (!result) return result;
         }
         return {};
     }
@@ -8292,6 +8357,12 @@ StepOutcome Session::execute_step() noexcept {
         impl.current_diagnostic_stage =
             RuntimeDiagnosticStage::ObservationSeal;
         allow_command_retry_on_exception = true;
+        result = impl.inject_held_seal_outputs(*branch);
+        if (!result) {
+            return impl.fail_execution(
+                result, transaction.handle,
+                "HeldLatest observation seal injection failed", true);
+        }
         result = impl.stage_seals(*branch);
         if (!result) {
             return impl.fail_execution(result, transaction.handle,

@@ -642,15 +642,15 @@
       "id": "R3-YYZ-001",
       "stage": "R3",
       "title": "Run the YYZ package through the generic Compiler and Session",
-      "status": "in_progress",
+      "status": "ready",
       "priority": "P0",
       "size": "XL",
       "owner_role": "runtime_numerics_lead",
-      "assignee": "codex",
+      "assignee": null,
       "depends_on": ["R3-CON-001", "R3-TXN-001", "R3-SCH-001", "R3-LIF-001", "R1-YYZ-001", "R2-LINK-001"],
       "deliverables": ["End-to-end YYZ run", "difference report", "terminal outcome"],
       "acceptance": ["All differences trace to approved model, time, numerical or defect decisions"],
-      "evidence": ["r3.kernel-step-transaction.probe drives the frozen REF-YYZ Image through caller-bound InitializationCommit and two Completed-run ResetCommits; sequence 0, 1 and 2 each follow Continue, Continue, Terminal, empty finalization and immutable Completed RunOutcome while exact science/sealed payload/result replay matches ORACLE-YYZ-MISSION-COMPOSITION-001", "r3.kernel-multirate-held-output.probe removes the public qualification schedule profile and proves exact programmatic source-owned occurrence/binding overrides over the stable YYZ package. Guidance interval 2, controller interval 1 and HeldLatest age 1 enter source/descriptor/proof/Image identities while the interval-1 fingerprint remains fixed", "ADR-0023 records the repository-owner 00A target-conformance choice: 0.01 s base, navigation/guidance/controller/actuator/observation intervals 1/5/2/1/4, HeldLatest ages 4/1 and zero offsets. The executable target chain is the active work product; canonical science, real assets/geodetic mapping, difference report and terminal verdict remain open"],
+      "evidence": ["r3.kernel-step-transaction.probe drives the frozen REF-YYZ Image through caller-bound InitializationCommit and two Completed-run ResetCommits; sequence 0, 1 and 2 each follow Continue, Continue, Terminal, empty finalization and immutable Completed RunOutcome while exact science/sealed payload/result replay matches ORACLE-YYZ-MISSION-COMPOSITION-001", "r3.kernel-multirate-held-output.probe removes the public qualification schedule profile and proves exact programmatic source-owned occurrence/binding overrides over the stable YYZ package. Guidance interval 2, controller interval 1 and HeldLatest age 1 enter source/descriptor/proof/Image identities while the interval-1 fingerprint remains fixed", "ADR-0023 records the repository-owner 00A target-conformance choice: 0.01 s base, navigation/guidance/controller/actuator/observation intervals 1/5/2/1/4, HeldLatest ages 4/1 and zero offsets", "r3.kernel-yyz-target-rate.probe links the production TruthPassthroughNavigation through real guidance, controller and ideal actuator entries. The tick-31 run verifies exact invocation/source/age sequences, controlled-versus-zero-control distinction, bit determinism and two-Session isolation; observation interval 4 enters Source, Plan, Proof and Image identity while the empty-extension baseline fingerprint remains fixed", "Two independent 3000-tick target executions reach terminal tick 3000 with bit-identical state, rolling history and mission result; all compared RunOutcome fields match while the caller-owned RunIds deliberately differ. The frozen mission result is Aborted with remaining-mass-floor at priority 300 and 85 kg remaining mass, and is explicitly labelled target_conformance/science_verdict_pending", "R3-YYZ-001 returns to ready with no assignee because canonical science inputs, real assets/geodetic mapping, the difference report and the terminal science verdict remain open"],
       "architecture_refs": ["00A", "15 §2–§9", "ADR-0023"]
     },
     {

@@ -1902,6 +1902,43 @@ fixed_runtime_materializer(
         });
 }
 
+void build_navigation_runtime(
+    const ExecutionPlanImage& image,
+    const PlanImageRuntimeComponent& component, bool fail,
+    const std::shared_ptr<MaterializationTrace>& trace,
+    CompiledProvider& provider) {
+    const auto config = canonical_configuration(
+        component_occurrence(image, component).canonical_configuration);
+    const auto builder = exact_call<
+        yyz::TruthPassthroughNavigationDefinitionBuilderCall>(
+        image, component.definition_builder_entry_handle);
+    auto definition = require_outcome(
+        builder(config), "navigation definition rejected Image config");
+    const auto factory = exact_call<
+        yyz::TruthPassthroughNavigationRuntimeCellFactoryCall>(
+        image, component.runtime_cell_factory_entry_handle);
+    const auto& callsite = component_callsite<
+        yyz::TruthPassthroughNavigationCall>(image, component);
+    if (callsite.input_slot_handles.size() != 1U) {
+        throw std::runtime_error("navigation callsite input shape changed");
+    }
+    yyz::TruthPassthroughNavigationRuntimeCellBindings bindings;
+    bindings.boundary_evaluation_callsite_handle = callsite.handle;
+    bindings.observation_input_slot_handle =
+        callsite.input_slot_handles[0U];
+    bindings.navigation_output =
+        output_writer<yyz::CommittedRigidObservation>(callsite, 0U);
+    bindings.boundary_evaluation =
+        exact_call<yyz::TruthPassthroughNavigationCall>(
+            image, callsite.entry_handle);
+    provider.runtime_components.emplace(
+        component.handle,
+        fixed_runtime_materializer<
+            yyz::TruthPassthroughNavigationRuntimeCell>(
+            component, factory_context(image, component), factory,
+            std::move(definition), std::move(bindings), fail, trace));
+}
+
 void build_guidance_runtime(
     const ExecutionPlanImage& image,
     const PlanImageRuntimeComponent& component, bool fail,
@@ -2338,6 +2375,11 @@ void build_runtime_components(
         } else if (entry_is<yyz::ScalarBurnMassRuntimeCellFactoryCall>(
                        image, entry_handle)) {
             build_mass_runtime(image, *component, fail, trace, provider);
+        } else if (entry_is<
+                       yyz::TruthPassthroughNavigationRuntimeCellFactoryCall>(
+                       image, entry_handle)) {
+            build_navigation_runtime(image, *component, fail, trace,
+                                     provider);
         } else if (entry_is<
                        yyz::AltitudePitchGuidanceRuntimeCellFactoryCall>(
                        image, entry_handle)) {
@@ -3047,6 +3089,73 @@ void build_mass_invocations(
         });
 }
 
+void build_navigation_invocations(
+    const ExecutionPlanImage& image,
+    const PlanImageRuntimeComponent& component,
+    const AdapterOptions& options,
+    const std::shared_ptr<MaterializationTrace>& trace,
+    const std::shared_ptr<OpeningBoundaryProbe>& probe,
+    CompiledProvider& provider) {
+    const auto& callsite = component_callsite<
+        yyz::TruthPassthroughNavigationCall>(image, component);
+    const auto factory = component.runtime_cell_factory_entry_handle;
+    install_invocation<yyz::TruthPassthroughNavigationRuntimeCell>(
+        provider, component, callsite,
+        [options, trace, probe, factory](
+            const SessionInvocationContext& context) -> SessionResult {
+            std::size_t ordinal = 0U;
+            auto result = begin_boundary_invocation(
+                context, options, trace, probe, ordinal);
+            if (!result) return result;
+            const auto* cell = checked_runtime<
+                yyz::TruthPassthroughNavigationRuntimeCell>(
+                context, factory);
+            if (cell == nullptr) {
+                return {gnc::kernel::SessionError::ObjectTypeMismatch,
+                        context.component_handle(),
+                        "navigation Runtime Cell type mismatch"};
+            }
+            gnc::kernel::SessionFrameAccess::SampleInfo sample;
+            result = context.inputs().sample_info(
+                cell->bindings.observation_input_slot_handle, sample);
+            if (!result) return result;
+            probe->navigation_input_samples.push_back(
+                {sample.sequence, context.tick(), sample.sample_tick,
+                 sample.age_steps, sample.sample_time_seconds,
+                 sample.interval_start_seconds,
+                 sample.interval_end_seconds,
+                 sample.quality == gnc::contracts::DataQuality::Valid,
+                 sample.fresh});
+            const auto* observation =
+                checked_input<yyz::CommittedRigidObservation>(
+                    context,
+                    cell->bindings.observation_input_slot_handle,
+                    result);
+            if (observation == nullptr) return result;
+            const auto output = cell->bindings.boundary_evaluation(
+                cell->definition, *observation);
+            if (!output.succeeded() || !output.has_value()) {
+                return {gnc::kernel::SessionError::InvocationFailed,
+                        context.callsite_handle(),
+                        "navigation evaluation failed"};
+            }
+            const auto& value = output.value();
+            probe->navigation_output_ticks.push_back(context.tick());
+            probe->navigation_source_ticks.push_back(
+                value.context.sample_time.tick);
+            probe->contexts.push_back(context_probe(
+                value.context, context.interval_start_seconds(),
+                context.interval_end_seconds()));
+            if (options.omit_output_boundary_ordinal == ordinal) return {};
+            return write_value(
+                context, cell->bindings.navigation_output.slot_handle,
+                selected_writer_token(
+                    options, ordinal,
+                    cell->bindings.navigation_output.writer_token.value),
+                value);
+        });
+}
+
 void build_guidance_invocations(
     const ExecutionPlanImage& image,
     const PlanImageRuntimeComponent& component,
@@ -3220,6 +3329,17 @@ void build_actuator_invocations(
                         context.component_handle(),
                         "actuator Runtime Cell type mismatch"};
             }
+            gnc::kernel::SessionFrameAccess::SampleInfo sample;
+            result = context.inputs().sample_info(
+                cell->bindings.controller_input_slot_handle, sample);
+            if (!result) return result;
+            probe->actuator_controller_samples.push_back(
+                {sample.sequence, context.tick(), sample.sample_tick,
+                 sample.age_steps, sample.sample_time_seconds,
+                 sample.interval_start_seconds,
+                 sample.interval_end_seconds,
+                 sample.quality == gnc::contracts::DataQuality::Valid,
+                 sample.fresh});
             const auto* controller =
                 checked_input<yyz::PitchMomentControllerOutput>(
                     context, cell->bindings.controller_input_slot_handle,
@@ -3239,6 +3359,9 @@ void build_actuator_invocations(
             const auto& value = output.value();
             probe->actuator_moment =
                 vector3(value.moment_about_center_of_mass.value);
+            probe->actuator_output_ticks.push_back(context.tick());
+            probe->actuator_pitch_moments.push_back(
+                value.moment_about_center_of_mass.value(1));
             probe->contexts.push_back(context_probe(
                 value.context.sample,
                 value.context.validity.effective_from.seconds,
@@ -3394,7 +3517,12 @@ void build_evaluator_invocations(
                 info.history_depth != yyz::kCommittedMissionHistoryDepth ||
                 info.sample_count != yyz::kCommittedMissionHistoryDepth ||
                 info.member_count != history.ordered_members.size() ||
-                info.first_tick != 0 || info.last_tick != 2) {
+                info.first_tick !=
+                    context.tick() -
+                        static_cast<std::int64_t>(
+                            yyz::kCommittedMissionHistoryDepth) +
+                        1 ||
+                info.last_tick != context.tick()) {
                 return {gnc::kernel::SessionError::HistoryValidationFailed,
                         history.handle,
                         "terminal evaluator history is incomplete"};
@@ -3453,7 +3581,9 @@ void build_evaluator_invocations(
                 if (!rigid_type_matches || !mass_type_matches ||
                     options.wrong_terminal_history_member_type ||
                     rigid_tick != mass_tick ||
-                    rigid_tick != static_cast<std::int64_t>(sample_index)) {
+                    rigid_tick !=
+                        info.first_tick +
+                            static_cast<std::int64_t>(sample_index)) {
                     return {gnc::kernel::SessionError::ObjectTypeMismatch,
                             history.handle,
                             "terminal evaluator history member type or order mismatch"};
@@ -3549,6 +3679,11 @@ void build_invocations(
                        image, factory)) {
             build_mass_invocations(image, *component, options, trace, probe,
                                    step, provider);
+        } else if (entry_is<
+                       yyz::TruthPassthroughNavigationRuntimeCellFactoryCall>(
+                       image, factory)) {
+            build_navigation_invocations(
+                image, *component, options, trace, probe, provider);
         } else if (entry_is<
                        yyz::AltitudePitchGuidanceRuntimeCellFactoryCall>(
                        image, factory)) {

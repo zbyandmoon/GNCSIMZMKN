@@ -18,6 +18,15 @@ make_complete_source(
 make_multirate_held_output_qualification_source(
     const gnc::model_sdk::StaticPackageDescriptor& package);
 
+// 00A target-rate composition: 100 Hz truth navigation, 20 Hz guidance,
+// 50 Hz control, 100 Hz actuation, and a source-owned 25 Hz observation fact
+// on a 0.01 s base clock. Science and difference verdicts remain external to
+// this executable conformance fixture.
+[[nodiscard]] gnc::compiler::CompleteStaticCompositionSource
+make_00a_target_rate_source(
+    const gnc::model_sdk::StaticPackageDescriptor& package,
+    std::int64_t terminal_tick);
+
 // Full fixture facade for Kernel tests. Its implementation owns the package
 // dependency, leaving the consumer translation unit free of YYZ concrete
 // headers, identifiers, and catalog calls.
@@ -28,6 +37,10 @@ compile_complete_image();
 [[nodiscard]] gnc::compiler::CompleteOutcome<
     gnc::contracts::ExecutionPlanImage>
 compile_multirate_held_output_qualification_image();
+
+[[nodiscard]] gnc::compiler::CompleteOutcome<
+    gnc::contracts::ExecutionPlanImage>
+compile_00a_target_rate_image(std::int64_t terminal_tick);
 
 // Compiles the same executable composition through the ordinary Catalog and
 // linker path while one Runtime Cell deliberately omits the optional

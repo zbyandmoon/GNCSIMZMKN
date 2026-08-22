@@ -133,6 +133,9 @@ struct OpeningBoundaryProbe {
     double guidance_command = 0.0;
     double guidance_limit = 0.0;
     bool guidance_saturated = false;
+    std::vector<std::int64_t> navigation_output_ticks;
+    std::vector<std::int64_t> navigation_source_ticks;
+    std::vector<InputSampleProbe> navigation_input_samples;
     std::vector<std::int64_t> guidance_output_ticks;
     std::vector<double> guidance_commands;
     double controller_pitch_error = 0.0;
@@ -146,6 +149,9 @@ struct OpeningBoundaryProbe {
     std::vector<double> controller_moments;
     std::vector<InputSampleProbe> controller_guidance_samples;
     std::array<double, 3U> actuator_moment{};
+    std::vector<std::int64_t> actuator_output_ticks;
+    std::vector<InputSampleProbe> actuator_controller_samples;
+    std::vector<double> actuator_pitch_moments;
     std::array<double, 3U> propulsion_force{};
     std::array<double, 3U> propulsion_application_from_com{};
     std::array<double, 3U> propulsion_intrinsic_moment{};

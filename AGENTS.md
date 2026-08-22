@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本仓库是 GNCZMKN 目标架构的全新实现。G0/G1/G2/G3 已通过，当前处于 R3；产品代码已完成 R1 Foundation/Contracts/YYZ/CAVH 模型切片、R2 静态 Compiler、Image-backed formal REF-YYZ run、Completed-run reset、plan-derived cancellation、explicit dispose、route-free process-local checkpoint/branch restore、plan-declared `HeldLatest` committed-output 生命周期，以及 qualification-only ModeOwner 的 CommandLedger/cutoff/receipt/event 原子事务切片。蓝图描述目标语义，已交付能力只以当前源码、fixture、oracle 和自动测试为准。
+本仓库是 GNCZMKN 目标架构的全新实现。G0/G1/G2/G3 已通过，当前处于 R3；产品代码已完成 R1 Foundation/Contracts/YYZ/CAVH 模型切片、R2 静态 Compiler、Image-backed formal REF-YYZ run、Completed-run reset、plan-derived cancellation、explicit dispose、route-free process-local checkpoint/branch restore、plan-declared `HeldLatest` committed-output 生命周期、qualification-only ModeOwner 的 CommandLedger/cutoff/receipt/event 原子事务切片，以及 `target_conformance/science_verdict_pending` 的 00A target-rate YYZ 产品运行。蓝图描述目标语义，已交付能力只以当前源码、fixture、oracle 和自动测试为准。
 
 ## 每次开始
 
@@ -27,7 +27,7 @@
 ## 当前阶段
 
 - 当前 gate 为 R3。
-- R2 已通过 G3；当前已交付冻结 Image 到 Session 的 InitializationCommit、两次 RK4 Continue、Terminal commit、冻结 RunOutcome、Completed-only ResetCommit、plan-derived in-process cancellation、稳定历史 outcome 查询、一次性 dispose、route-free process-local checkpoint/branch restore、plan-declared `HeldLatest` committed-output store，以及 qualification-only ModeOwner 的 per-Session CommandLedger/queue、transaction-start cutoff、InstantPatch/application receipt/same-tick event 原子提交。生产 command consumer、通用多 route/多 transaction scheduler、command-bearing checkpoint、active-run truncating reset、完整 RunResource hooks、durable checkpoint serialization/compatibility 和完整诊断 pipeline 仍待后续 R3 切片；完整 00A YYZ 产品运行与科学判定仍由 `R3-YYZ-001` 推进。
+- R2 已通过 G3；当前已交付冻结 Image 到 Session 的 InitializationCommit、两次 RK4 Continue、Terminal commit、冻结 RunOutcome、Completed-only ResetCommit、plan-derived in-process cancellation、稳定历史 outcome 查询、一次性 dispose、route-free process-local checkpoint/branch restore、plan-declared `HeldLatest` committed-output store、qualification-only ModeOwner 的 per-Session CommandLedger/queue、transaction-start cutoff、InstantPatch/application receipt/same-tick event 原子提交，以及 00A interval `1/5/2/1/4` target-rate 链的短跑和 3000-tick 运行。生产 command consumer、通用多 route/多 transaction scheduler、command-bearing checkpoint、active-run truncating reset、完整 RunResource hooks、durable checkpoint serialization/compatibility 和完整诊断 pipeline 仍待后续 R3 切片；完整科学输入、真实资产/geodetic mapping、difference report 与 terminal science verdict 仍由 `R3-YYZ-001` 推进。
 - 仅 backlog 中进入 `ready` 的 R3 工作已解锁；R4～R8 保持锁定，直到对应 gate 通过。
 - 文档中的 `V1` 表示目标范围，不代表当前实现状态。
 

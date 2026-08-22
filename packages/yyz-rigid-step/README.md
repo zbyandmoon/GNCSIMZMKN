@@ -1,6 +1,6 @@
 # YYZ rigid step and mass boundary
 
-本 package 目前包含两个连续的 R1 YYZ 产品切片：单段刚体 candidate，以及两段刚体/标量燃耗的 typed atomic-boundary composition。两条产品 model identity 分别为 `gnc.package.yyz.rigid-step.frozen-interval.experimental@1` 和 `gnc.package.yyz.two-interval-mass-commit.experimental@1`。
+本 package 目前包含两个连续的 R1 YYZ 产品切片和一个 R3 target-conformance 导航组件：单段刚体 candidate、两段刚体/标量燃耗的 typed atomic-boundary composition，以及 `TruthPassthroughNavigation`。对应 model identity 包括 `gnc.package.yyz.rigid-step.frozen-interval.experimental@1`、`gnc.package.yyz.two-interval-mass-commit.experimental@1` 和 `gnc.package.yyz.navigation.truth-passthrough.experimental@1`。
 
 单段刚体调用链：
 
@@ -22,11 +22,13 @@ typed committed rigid state
 
 package descriptor 将 AerodynamicTable 声明为 `vehicle.output + PureQuery`，ForceMomentClosure 声明为 `interaction/closure + ContinuousClosureLink + IntervalModel`，并提供各自 canonical config schema。RigidStep 的两个 required input 分别要求 exact PureQuery 与 closure contract。对应 builder 从稳定 block 重建 typed definition；aero asset slot 以 exactly-one `AssetBinding` 接受 `gnc.asset.yyz.aerodynamic-table.multiaffine@1`。这些字段由通用 Compiler 读取，package id 不进入 Compiler 分支。
 
-同一 package contribution 现在也把真实 `AltitudePitchGuidanceKernel` 描述为首个 RuntimeComponent Catalog 候选。该 kernel 对每份 committed rigid observation 做独立求值，正式 output 被 `PitchMomentControllerKernel` 消费；descriptor 因而冻结 stateless `SampledTransform + BoundaryEvaluation`、process phase 每个 committed boundary 的 schedule、current-cycle sampled ports、zero-order hold、instantiate/dispose 和 exact kernel identity，并且不开放 state schema。canonical config builder 保留 frame、clock、revision、三项 guidance 参数与完整 quaternion policy。
+同一 package contribution 现在把 `TruthPassthroughNavigationKernel` 与真实 `AltitudePitchGuidanceKernel` 描述为 stateless RuntimeComponent Catalog 候选。navigation 对 frame、clock、revision、quality 与 finite rigid state 做 exact 检查，随后逐位保留 committed truth observation，并用独立的 `navigation-estimate` output port 与 codec entry 供 guidance 消费；值 contract/layout 继续复用 committed rigid observation。guidance 对每份 navigation estimate 做独立求值，正式 output 被 `PitchMomentControllerKernel` 消费。两个 descriptor 均冻结 `SampledTransform + BoundaryEvaluation`、process phase、package-owned interval-1/current-cycle sampled ports、zero-order hold、lifecycle 和 exact kernel identity，且不开放 state schema。canonical config builder 分别保留 navigation 的 frame/clock/revision，以及 guidance 的 frame/clock/revision、三项参数与完整 quaternion policy。
 
 R2 package contribution 进一步冻结了真实 uniform-environment PureQuery、RigidBody/Mass 两个 StateOwner、initial/projection/derivative/evolution entries，以及 guidance/controller/actuator/fixed supplied-propulsion/terminal evaluator 的静态合同。Mass 的既有 `NumericalPolicy` 已进入 canonical Definition/config，runtime-facing initial/evolution entries 不要求 Session 另行生成策略。`ControlledPropelledRigidMassStepKernel` 等 R1 wrapper 仍只作为科学/oracle compatibility composition，不被登记为 StateOwner 或 RuntimeComponent。
 
-package 现在为七个 RuntimeComponent 提供各自 package-specific typed `RuntimeCellFactory`，并为RigidBody/Mass state与真实stored value提供窄进程内codec。R2 exact-link这些entry、call shape、独立C++ type witness及numeric handle，factory binding压缩为稳定的state/input/output/writer/invocation/provider/interval/integration/transaction/history handle。uniform environment与aero的正式query output走授权caller的局部typed return，不分配CycleFrame result slot；ForceMomentClosure的正式output由唯一Closure Coordinator writer写入held interval slot。未来R3由仍掌握精确package类型的composition boundary恢复并调用已链接entry；Kernel不按model id/type switch重建invocation set，telemetry也不成为environment/aero/closure的权威result flow。
+package 现在为八个 RuntimeComponent 提供各自 package-specific typed `RuntimeCellFactory`，并为 RigidBody/Mass state 与真实 stored value 提供窄进程内 codec。R2/R3 exact-link 这些 entry、call shape、独立 C++ type witness 及 numeric handle，factory binding 压缩为稳定的 state/input/output/writer/invocation/provider/interval/integration/transaction/history handle。uniform environment 与 aero 的正式 query output 走授权 caller 的局部 typed return，不分配 CycleFrame result slot；ForceMomentClosure 的正式 output 由唯一 Closure Coordinator writer 写入 held interval slot。显式 composition adapter 负责恢复 package 类型并调用已链接 entry；Kernel 不按 model id/type switch 重建 invocation set，telemetry 也不成为 environment/aero/closure 的权威 result flow。
+
+00A target-rate composition 通过 programmatic source override 选择 `0.01 s` base、navigation/guidance/controller/actuator interval `1/5/2/1`、observation interval `4`、全零 offset 与 HeldLatest age `4/1`。`r3.kernel-yyz-target-rate.probe` 对 tick-31 短跑验证完整调用、source tick 和 age 序列，并以两次 3000-tick 运行验证 bit determinism；该结果保持 `target_conformance/science_verdict_pending`。
 
 两段边界调用链：
 
@@ -53,6 +55,7 @@ ctest --preset dev -R '^r1\.yyz-two-interval-mass-commit\.(probe|oracle)$'
 ctest --preset dev -R '^r2\.compiler-runtime-component-catalog\.probe$'
 ctest --preset dev -R '^r2\.yyz-static-product-contracts\.probe$'
 ctest --preset dev -R '^r2\.compiler-complete-yyz-plan\.probe$'
+ctest --preset dev -R '^r3\.kernel-yyz-target-rate\.probe$'
 ```
 
 首条 oracle 检查直接读取 `REF-YYZ-FROZEN-INTERVAL-001`；第二条读取 `REF-YYZ-TWO-INTERVAL-MASS-COMMIT-001`。两者都使用原 fixture 声明的容差，reference 与产品 model identity 保持分离。

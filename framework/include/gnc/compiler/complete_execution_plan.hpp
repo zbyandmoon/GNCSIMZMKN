@@ -42,6 +42,8 @@ inline constexpr std::string_view kNumericalPolicyIdentity =
 inline constexpr std::string_view
     kSourceScheduleTemporalOverrideEncodingDomain =
         "gnc.complete-static-source.schedule-temporal-override@1";
+inline constexpr std::string_view kSourceObservationScheduleEncodingDomain =
+    "gnc.complete-static-source.observation-schedule@1";
 
 enum class CompleteDiagnosticCode : std::uint8_t {
     InvalidCatalog,
@@ -259,6 +261,16 @@ struct CompleteSourceClock {
     SourceRef source;
 };
 
+// A source-owned observation cadence is a static conformance fact. It freezes
+// when a named observation is due on the mission clock without introducing an
+// observation sink or any Session-owned runtime callback.
+struct CompleteSourceObservationSchedule {
+    std::string observation_id;
+    std::uint32_t step_interval = 0U;
+    std::uint32_t offset = 0U;
+    SourceRef source;
+};
+
 struct CompleteSourceInitialBinding {
     std::string owner_occurrence_id;
     gnc::model_sdk::CanonicalConfigBlock builder_inputs;
@@ -353,6 +365,7 @@ struct CompleteStaticCompositionSource {
         occurrence_schedule_overrides;
     std::vector<CompleteSourceBindingTemporalOverride>
         binding_temporal_overrides;
+    std::vector<CompleteSourceObservationSchedule> observation_schedules;
 };
 
 struct CompleteCanonicalOccurrence {
@@ -401,6 +414,7 @@ struct CompleteCanonicalMissionIr {
         occurrence_schedule_overrides;
     std::vector<CompleteSourceBindingTemporalOverride>
         binding_temporal_overrides;
+    std::vector<CompleteSourceObservationSchedule> observation_schedules;
 };
 
 struct CompletePortPlan {
@@ -924,6 +938,14 @@ struct ClockPlan {
     SourceRef source;
 };
 
+struct ObservationSchedulePlan {
+    std::string plan_element_id;
+    std::string observation_id;
+    std::uint32_t step_interval = 0U;
+    std::uint32_t offset = 0U;
+    SourceRef source;
+};
+
 struct EvaluatorCommittedHistoryMemberPlan {
     std::string member_id;
     std::string owner_occurrence_id;
@@ -966,6 +988,7 @@ struct CompleteExecutionPlanDescriptor {
     std::string source_semantic_hash;
     std::string descriptor_semantic_hash;
     ClockPlan clock;
+    std::vector<ObservationSchedulePlan> observation_schedules;
     std::vector<PackageLock> dependency_lock;
     std::vector<CompleteOccurrencePlan> occurrences;
     std::vector<CompletePortPlan> ports;
@@ -1053,6 +1076,11 @@ namespace complete_plan_detail {
 
 [[nodiscard]] inline std::string occurrence_element(std::string_view id) {
     return "occurrence/" + std::string(id);
+}
+
+[[nodiscard]] inline std::string observation_schedule_element(
+    std::string_view id) {
+    return "observation-schedule/" + std::string(id);
 }
 
 [[nodiscard]] inline std::string port_element(std::string_view occurrence,
@@ -1425,6 +1453,15 @@ inline void encode_config(semantic_hash_detail::Encoder& encoder,
     encoder.float64(ir.clock.base_step_seconds);
     encoder.integer(ir.clock.initial_tick);
     encoder.integer(ir.clock.terminal_tick);
+    if (!ir.observation_schedules.empty()) {
+        encoder.string(kSourceObservationScheduleEncodingDomain);
+        encoder.collection(ir.observation_schedules.size());
+        for (const auto& schedule : ir.observation_schedules) {
+            encoder.string(schedule.observation_id);
+            encoder.uint32(schedule.step_interval);
+            encoder.uint32(schedule.offset);
+        }
+    }
     encoder.collection(ir.entities.size());
     for (const auto& entity : ir.entities) {
         encoder.string(entity.entity_id);
@@ -1688,7 +1725,6 @@ lower_complete_static_source(
                    ir.clock.source, ir.clock.clock_id,
                    "clock requires an identity, finite positive base step, ordered ticks, and provenance");
     }
-
     auto entities = source.entities;
     std::sort(entities.begin(), entities.end(),
               [](const auto& lhs, const auto& rhs) {
@@ -1927,6 +1963,33 @@ lower_complete_static_source(
         });
         return values;
     };
+    ir.observation_schedules = canonicalize_by_id(
+        source.observation_schedules,
+        [](const auto& value) -> const std::string& {
+            return value.observation_id;
+        });
+    std::set<std::string> observation_ids;
+    const auto observation_tick_span =
+        ir.clock.terminal_tick >= ir.clock.initial_tick
+            ? static_cast<std::uint64_t>(ir.clock.terminal_tick -
+                                         ir.clock.initial_tick)
+            : 0U;
+    for (const auto& schedule : ir.observation_schedules) {
+        const bool valid =
+            !schedule.observation_id.empty() &&
+            observation_ids.insert(schedule.observation_id).second &&
+            valid_source_ref(schedule.source) &&
+            schedule.step_interval != 0U &&
+            schedule.offset < schedule.step_interval &&
+            static_cast<std::uint64_t>(schedule.offset) <=
+                observation_tick_span;
+        if (!valid) {
+            diagnostic(
+                outcome.diagnostics, CompleteDiagnosticCode::InvalidSource,
+                schedule.source, schedule.observation_id,
+                "observation schedule must have one unique identity, a nonzero interval, an in-grid canonical offset, and provenance");
+        }
+    }
     ir.initial_bindings = canonicalize_by_id(
         source.initial_bindings,
         [](const auto& value) -> const std::string& {
@@ -2436,6 +2499,15 @@ inline void add_entry_requirement(
         }
     }
     return result;
+}
+
+inline void lower_observation_schedules(LoweringContext& context) {
+    for (const auto& schedule : context.ir.observation_schedules) {
+        context.plan.observation_schedules.push_back(
+            {observation_schedule_element(schedule.observation_id),
+             schedule.observation_id, schedule.step_interval,
+             schedule.offset, schedule.source});
+    }
 }
 
 inline void lower_occurrences(LoweringContext& context) {
@@ -4737,6 +4809,7 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
             result.emplace_back(value.plan_element_id, value.source);
         }
     };
+    append(plan.observation_schedules);
     append(plan.occurrences);
     append(plan.ports);
     append(plan.slots);
@@ -4771,6 +4844,9 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
     std::string_view element) noexcept {
     if (element.rfind("occurrence/", 0U) == 0U) {
         return PlanProofKind::ExactCatalogResolution;
+    }
+    if (element.rfind("observation-schedule/", 0U) == 0U) {
+        return PlanProofKind::TemporalCompatibility;
     }
     if (element.rfind("port/", 0U) == 0U ||
         element.rfind("slot/", 0U) == 0U ||
@@ -4935,6 +5011,17 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
              "initial-tick=" + std::to_string(plan.clock.initial_tick),
              "terminal-tick=" + std::to_string(plan.clock.terminal_tick)},
             {plan.clock.plan_element_id}, plan.clock.source);
+    }
+
+    for (const auto& schedule : plan.observation_schedules) {
+        add("proof/observation-schedule/" + schedule.observation_id,
+            PlanProofKind::TemporalCompatibility,
+            schedule.plan_element_id,
+            {"observation-id=" + schedule.observation_id,
+             "step-interval=" + std::to_string(schedule.step_interval),
+             "offset=" + std::to_string(schedule.offset),
+             "clock=" + plan.clock.clock_id},
+            {schedule.plan_element_id}, schedule.source);
     }
 
     for (const auto& occurrence : plan.occurrences) {
@@ -5663,6 +5750,16 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
     encoder.float64(plan.clock.base_step_seconds);
     encoder.integer(plan.clock.initial_tick);
     encoder.integer(plan.clock.terminal_tick);
+    if (!plan.observation_schedules.empty()) {
+        encoder.string("gnc.complete-plan.observation-schedule@1");
+        encoder.collection(plan.observation_schedules.size());
+        for (const auto& schedule : plan.observation_schedules) {
+            encoder.string(schedule.plan_element_id);
+            encoder.string(schedule.observation_id);
+            encoder.uint32(schedule.step_interval);
+            encoder.uint32(schedule.offset);
+        }
+    }
     const auto elements = all_plan_elements(plan);
     encoder.collection(elements.size());
     for (const auto& [element, source] : elements) {
@@ -5867,6 +5964,42 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
     // over facts not repeated in the compact legacy loops above.
     encoder.string(derive_proofs(plan).proof_index_hash);
     return hash_bytes(encoder);
+}
+
+[[nodiscard]] inline bool validate_observation_schedules(
+    const CompleteExecutionPlanDescriptor& plan,
+    std::vector<CompleteDiagnostic>& diagnostics) {
+    std::set<std::string> observation_ids;
+    std::set<std::string> element_ids;
+    const auto tick_span =
+        plan.clock.terminal_tick >= plan.clock.initial_tick
+            ? static_cast<std::uint64_t>(plan.clock.terminal_tick -
+                                         plan.clock.initial_tick)
+            : 0U;
+    std::string previous_id;
+    for (const auto& schedule : plan.observation_schedules) {
+        const bool canonical_order =
+            previous_id.empty() || previous_id < schedule.observation_id;
+        const bool valid =
+            !schedule.observation_id.empty() && canonical_order &&
+            observation_ids.insert(schedule.observation_id).second &&
+            schedule.plan_element_id ==
+                observation_schedule_element(schedule.observation_id) &&
+            element_ids.insert(schedule.plan_element_id).second &&
+            schedule.step_interval != 0U &&
+            schedule.offset < schedule.step_interval &&
+            static_cast<std::uint64_t>(schedule.offset) <= tick_span &&
+            valid_source_ref(schedule.source);
+        if (!valid) {
+            diagnostic(
+                diagnostics,
+                CompleteDiagnosticCode::SourceImageConformanceFailure,
+                schedule.source, schedule.observation_id,
+                "observation schedule plan facts are invalid, duplicated, or non-canonical");
+        }
+        previous_id = schedule.observation_id;
+    }
+    return diagnostics.empty();
 }
 
 [[nodiscard]] inline bool validate_command_event_routes(
@@ -6141,6 +6274,7 @@ compile_complete_execution_plan(
                           context.ir.clock.terminal_tick,
                           context.ir.clock.source};
     context.plan.source_semantic_hash = source_semantic_hash(context.ir);
+    lower_observation_schedules(context);
     lower_occurrences(context);
     lower_bindings(context);
     lower_regions(context);
@@ -9461,6 +9595,16 @@ namespace complete_plan_detail {
             encoder.uint32(member.committed_state_slot_handle);
         }
     });
+    if (!image.observation_schedules.empty()) {
+        encoder.string("gnc.execution-plan-image.observation-schedule@1");
+        encode_ids(image.observation_schedules, [&](const auto& value) {
+            encoder.uint32(value.handle);
+            encoder.string(value.plan_element_id);
+            encoder.string(value.observation_id);
+            encoder.uint32(value.step_interval);
+            encoder.uint32(value.offset);
+        });
+    }
     // Keep the established interval-1 REF-YYZ fingerprint byte-for-byte
     // stable when no explicit HeldLatest edge exists.
     if (!image.held_outputs.empty()) {
@@ -9541,6 +9685,8 @@ link_complete_execution_plan(
     static_cast<void>(
         validate_storage_resources_transactions_lifecycle(
             plan, outcome.diagnostics));
+    static_cast<void>(
+        validate_observation_schedules(plan, outcome.diagnostics));
     static_cast<void>(
         validate_command_event_routes(plan, outcome.diagnostics));
     if (!outcome.diagnostics.empty()) {
@@ -9757,6 +9903,13 @@ link_complete_execution_plan(
     std::map<std::string, std::vector<std::uint32_t>> conformance_handles;
     conformance_handles[plan.clock.plan_element_id].push_back(
         image.clock.handle);
+    for (const auto& schedule : plan.observation_schedules) {
+        const auto handle = next_handle++;
+        image.observation_schedules.push_back(
+            {handle, schedule.plan_element_id, schedule.observation_id,
+             schedule.step_interval, schedule.offset});
+        conformance_handles[schedule.plan_element_id].push_back(handle);
+    }
     for (const auto& occurrence : plan.occurrences) {
         const auto handle = next_handle++;
         occurrence_handles.emplace(occurrence.occurrence_id, handle);

@@ -852,6 +852,83 @@ describe_yyz_rigid_step_package() {
         gnc::model_sdk::StaticWorkspaceRequirement::None;
     mass.runtime_component = std::move(mass_runtime);
 
+    gnc::model_sdk::StaticModelDescriptor navigation;
+    navigation.definition = {
+        std::string(kTruthPassthroughNavigationModelIdentity),
+        std::string(kTruthPassthroughNavigationModelVersion),
+        gnc::model_sdk::ModelExecutionForm::RuntimeComponent};
+    navigation.placement =
+        gnc::model_sdk::ModelPlacement::VehicleProcess;
+    navigation.configuration.schema_id =
+        std::string(kTruthPassthroughNavigationConfigSchemaIdentity);
+    navigation.configuration.schema_version =
+        kTruthPassthroughNavigationConfigSchemaVersion;
+    navigation.configuration.fields = {
+        {"clock_domain_id",
+         gnc::model_sdk::CanonicalConfigValueKind::String},
+        {"configuration_revision",
+         gnc::model_sdk::CanonicalConfigValueKind::Integer},
+        {"inertial_frame_id",
+         gnc::model_sdk::CanonicalConfigValueKind::String},
+    };
+    navigation.ports = {
+        {"committed-rigid-observation",
+         std::string(kCommittedRigidObservationContractIdentity),
+         gnc::model_sdk::StaticPortDirection::Input,
+         gnc::model_sdk::BindingKind::SampledSignal,
+         gnc::model_sdk::PortCardinality::ExactlyOne,
+         gnc::model_sdk::TemporalRelation::CurrentCycle},
+        {"navigation-estimate",
+         std::string(kTruthPassthroughNavigationOutputContractIdentity),
+         gnc::model_sdk::StaticPortDirection::Output,
+         gnc::model_sdk::BindingKind::SampledSignal,
+         gnc::model_sdk::PortCardinality::OneOrMore,
+         gnc::model_sdk::TemporalRelation::CurrentCycle,
+         make_yyz_slot_codec_descriptor(
+             kNavigationEstimateSlotCodecIdentity,
+             kNavigationEstimateSlotCodecCallShapeIdentity,
+             kRigidObservationLayoutIdentity,
+             "gnc.operation.yyz.navigation-estimate")},
+    };
+    gnc::model_sdk::StaticRuntimeComponentDescriptor navigation_runtime;
+    navigation_runtime.recipe_id =
+        std::string(kTruthPassthroughNavigationRecipeIdentity);
+    navigation_runtime.profile =
+        gnc::model_sdk::RuntimeCellProfile::SampledTransform;
+    navigation_runtime.obligations = {
+        gnc::model_sdk::RuntimeExecutionObligation::BoundaryEvaluation};
+    navigation_runtime.obligation_entries = {
+        {gnc::model_sdk::RuntimeExecutionObligation::BoundaryEvaluation,
+         gnc::model_sdk::CoarsePhase::Process,
+         std::string(kTruthPassthroughNavigationKernelIdentity.id),
+         std::string(kTruthPassthroughNavigationKernelIdentity.version),
+         std::string(kCommittedRigidObservationContractIdentity),
+         std::string(kTruthPassthroughNavigationOutputContractIdentity),
+         gnc::model_sdk::StaticWorkspaceRequirement::None,
+         {"committed-rigid-observation"}, {"navigation-estimate"},
+         gnc::model_sdk::StaticStateReadKind::None,
+         gnc::model_sdk::StaticStateWriteKind::None, {},
+         std::string(kTruthPassthroughNavigationCallShapeIdentity)}};
+    navigation_runtime.schedule = periodic_schedule();
+    navigation_runtime.lifecycle_capabilities = lifecycle;
+    navigation_runtime.definition_builder_id = std::string(
+        kTruthPassthroughNavigationDefinitionBuilderIdentity.id);
+    navigation_runtime.definition_builder_version = std::string(
+        kTruthPassthroughNavigationDefinitionBuilderIdentity.version);
+    navigation_runtime.definition_builder_call_shape_id = std::string(
+        kTruthPassthroughNavigationDefinitionBuilderCallShapeIdentity);
+    navigation_runtime.runtime_cell_factory_id = std::string(
+        kTruthPassthroughNavigationRuntimeCellFactoryIdentity.id);
+    navigation_runtime.runtime_cell_factory_version = std::string(
+        kTruthPassthroughNavigationRuntimeCellFactoryIdentity.version);
+    navigation_runtime.runtime_cell_factory_call_shape_id = std::string(
+        kTruthPassthroughNavigationRuntimeCellFactoryCallShapeIdentity);
+    navigation_runtime.resource_plan_id =
+        std::string(kYyzNoWorkspaceResourcePlanIdentity);
+    navigation_runtime.resource_workspace_requirement =
+        gnc::model_sdk::StaticWorkspaceRequirement::None;
+    navigation.runtime_component = std::move(navigation_runtime);
+
     gnc::model_sdk::StaticModelDescriptor guidance;
     guidance.definition = {
         std::string(kAltitudePitchGuidanceModelIdentity),
@@ -1406,6 +1483,7 @@ describe_yyz_rigid_step_package() {
     package.models.push_back(std::move(actuator));
     package.models.push_back(std::move(propulsion));
     package.models.push_back(std::move(evaluator));
+    package.models.push_back(std::move(navigation));
     return package;
 }
 
@@ -1583,6 +1661,34 @@ describe_yyz_rigid_step_implementation(
                     MassPropertiesSlotCodec>,
                 &gnc::model_sdk::typed_in_process_slot_codec<
                     MassPropertiesInput>>(implementation, *mass, *output);
+        }
+    }
+
+    if (const auto* navigation = find_static_model(
+            package, kTruthPassthroughNavigationModelIdentity);
+        navigation != nullptr) {
+        append_definition_builder_entry<
+            TruthPassthroughNavigationDefinitionBuilderCall,
+            &build_truth_passthrough_navigation_definition>(implementation,
+                                                             *navigation);
+        append_runtime_cell_factory_entry<
+            TruthPassthroughNavigationRuntimeCellFactoryCall,
+            &create_truth_passthrough_navigation_runtime_cell>(
+                implementation, *navigation);
+        append_runtime_entry<TruthPassthroughNavigationCall,
+                             &TruthPassthroughNavigationKernel::evaluate>(
+            implementation, *navigation,
+            gnc::model_sdk::RuntimeExecutionObligation::BoundaryEvaluation,
+            gnc::model_sdk::StaticEntryKind::BoundaryEvaluation);
+        if (const auto* output =
+                find_static_port(*navigation, "navigation-estimate");
+            output != nullptr && output->slot_codec.has_value()) {
+            append_slot_codec_entry<
+                gnc::model_sdk::InProcessCodecGetter<
+                    NavigationEstimateSlotCodec>,
+                &gnc::model_sdk::typed_in_process_slot_codec<
+                    CommittedRigidObservation>>(
+                implementation, *navigation, *output);
         }
     }
 
@@ -1867,6 +1973,30 @@ create_scalar_burn_mass_runtime_cell(
         ScalarBurnMassRuntimeCell{definition, context, bindings},
         mass_commit_evidence(kScalarBurnMassRuntimeCellFactoryIdentity,
                              "runtime-cell"));
+}
+
+NumericalOutcome<TruthPassthroughNavigationRuntimeCell>
+create_truth_passthrough_navigation_runtime_cell(
+    const TruthPassthroughNavigationDefinition& definition,
+    const gnc::model_sdk::RuntimeCellFactoryContext& context,
+    const TruthPassthroughNavigationRuntimeCellBindings& bindings) {
+    if (!valid_runtime_cell_factory_context(context) ||
+        bindings.boundary_evaluation_callsite_handle == 0U ||
+        bindings.observation_input_slot_handle == 0U ||
+        bindings.navigation_output.slot_handle == 0U ||
+        bindings.navigation_output.writer_token.value == 0U ||
+        bindings.boundary_evaluation == nullptr) {
+        return mass_commit_failure<TruthPassthroughNavigationRuntimeCell>(
+            kTruthPassthroughNavigationRuntimeCellFactoryIdentity,
+            NumericalStatus::DomainError, "compiled-bindings");
+    }
+    return NumericalOutcome<
+        TruthPassthroughNavigationRuntimeCell>::with_value(
+        NumericalStatus::Success,
+        TruthPassthroughNavigationRuntimeCell{definition, context, bindings},
+        mass_commit_evidence(
+            kTruthPassthroughNavigationRuntimeCellFactoryIdentity,
+            "runtime-cell"));
 }
 
 NumericalOutcome<AltitudePitchGuidanceRuntimeCell>
@@ -2556,6 +2686,69 @@ build_controlled_rigid_boundary_definition(
             mass_commit_evidence(
                 kControlledRigidDefinitionBuilderIdentity,
                 "canonical-config"));
+}
+
+gnc::model_sdk::CanonicalConfigBlock
+canonical_truth_passthrough_navigation_config(
+    const TruthPassthroughNavigationDefinition& definition) {
+    return {
+        std::string(kTruthPassthroughNavigationConfigSchemaIdentity),
+        kTruthPassthroughNavigationConfigSchemaVersion,
+        {
+            {"clock_domain_id", definition.clock_domain.id},
+            {"configuration_revision", definition.configuration_revision},
+            {"inertial_frame_id", definition.inertial_frame.id},
+        },
+    };
+}
+
+NumericalOutcome<TruthPassthroughNavigationDefinition>
+build_truth_passthrough_navigation_definition(
+    const gnc::model_sdk::CanonicalConfigBlock& configuration) {
+    const auto failure = [] {
+        return NumericalOutcome<
+            TruthPassthroughNavigationDefinition>::failure(
+            NumericalStatus::DomainError,
+            mass_commit_evidence(
+                kTruthPassthroughNavigationDefinitionBuilderIdentity,
+                "canonical-config"));
+    };
+    static constexpr std::array<std::string_view, 3U> kFields{
+        "clock_domain_id",
+        "configuration_revision",
+        "inertial_frame_id",
+    };
+    if (!exact_config_fields(
+            configuration,
+            kTruthPassthroughNavigationConfigSchemaIdentity,
+            kTruthPassthroughNavigationConfigSchemaVersion, kFields)) {
+        return failure();
+    }
+    const auto* clock_domain =
+        std::get_if<std::string>(&configuration.fields[0U].value);
+    const auto* revision =
+        std::get_if<std::int64_t>(&configuration.fields[1U].value);
+    const auto* inertial_frame =
+        std::get_if<std::string>(&configuration.fields[2U].value);
+    if (clock_domain == nullptr || clock_domain->empty() ||
+        revision == nullptr || *revision < 0 || inertial_frame == nullptr ||
+        inertial_frame->empty()) {
+        return failure();
+    }
+    TruthPassthroughNavigationDefinition definition;
+    definition.model_id =
+        std::string(kTruthPassthroughNavigationModelIdentity);
+    definition.model_version =
+        std::string(kTruthPassthroughNavigationModelVersion);
+    definition.inertial_frame = {*inertial_frame};
+    definition.clock_domain = {*clock_domain};
+    definition.configuration_revision = *revision;
+    return NumericalOutcome<
+        TruthPassthroughNavigationDefinition>::with_value(
+        NumericalStatus::Success, std::move(definition),
+        mass_commit_evidence(
+            kTruthPassthroughNavigationDefinitionBuilderIdentity,
+            "canonical-config"));
 }
 
 gnc::model_sdk::CanonicalConfigBlock
@@ -3260,6 +3453,49 @@ evaluate_scalar_burn_mass_interval(
     const MassFlowIntervalInput& flow) {
     return ScalarBurnMassKernel::evaluate(
         definition, committed_state, flow, definition.numerical_policy);
+}
+
+NumericalOutcome<CommittedRigidObservation>
+TruthPassthroughNavigationKernel::evaluate(
+    const TruthPassthroughNavigationDefinition& definition,
+    const CommittedRigidObservation& observation) {
+    const double attitude_norm_squared =
+        observation.state.attitude.value.squaredNorm();
+    if (definition.model_id !=
+            kTruthPassthroughNavigationModelIdentity ||
+        definition.model_version !=
+            kTruthPassthroughNavigationModelVersion ||
+        definition.inertial_frame.id.empty() ||
+        definition.clock_domain.id.empty() ||
+        definition.configuration_revision < 0 ||
+        observation.context.frame != definition.inertial_frame ||
+        observation.context.clock_domain != definition.clock_domain ||
+        observation.context.configuration_revision !=
+            definition.configuration_revision ||
+        observation.context.quality != DataQuality::Valid ||
+        observation.context.sample_time.tick < 0 ||
+        !std::isfinite(observation.context.sample_time.seconds)) {
+        return mass_commit_failure<CommittedRigidObservation>(
+            kTruthPassthroughNavigationKernelIdentity,
+            NumericalStatus::DomainError, "definition-or-context");
+    }
+    if (!finite(observation.state.position.value) ||
+        !finite(observation.state.velocity.value) ||
+        !finite(observation.state.angular_rate.value) ||
+        !finite(observation.state.attitude.value) ||
+        !std::isfinite(attitude_norm_squared) ||
+        attitude_norm_squared <= 0.0) {
+        return mass_commit_failure<CommittedRigidObservation>(
+            kTruthPassthroughNavigationKernelIdentity,
+            NumericalStatus::NonFiniteInput,
+            "committed-rigid-observation");
+    }
+    NumericalEvidence evidence = mass_commit_evidence(
+        kTruthPassthroughNavigationKernelIdentity,
+        "truth-passthrough-navigation");
+    evidence.evaluations = 1U;
+    return NumericalOutcome<CommittedRigidObservation>::with_value(
+        NumericalStatus::Success, observation, std::move(evidence));
 }
 
 NumericalOutcome<AltitudePitchGuidanceOutput>
@@ -4551,7 +4787,9 @@ CommittedMissionResultKernel::evaluate(
                 selected = &predicate;
             }
         }
-        if (selected != nullptr) {
+        const bool is_latest_committed_sample =
+            sample_index + 1U == input.committed_samples.size();
+        if (selected != nullptr && is_latest_committed_sample) {
             CommittedMissionResultOutput output;
             output.status = selected->action == MissionAction::Complete
                                 ? MissionResultStatus::Completed
@@ -4572,7 +4810,7 @@ CommittedMissionResultKernel::evaluate(
             output.terminal_boundary = sample;
             NumericalEvidence evidence = mass_commit_evidence(
                 kCommittedMissionResultKernelIdentity,
-                "first-terminal-committed-sample", validation_flags);
+                "latest-terminal-committed-sample", validation_flags);
             evidence.evaluations = validation_evaluations +
                                    summary.evaluated_sample_count *
                                        definition.predicates.size();

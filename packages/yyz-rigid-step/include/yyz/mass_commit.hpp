@@ -64,6 +64,20 @@ inline constexpr std::string_view
         "gnc.contract.yyz.supplied-propulsion-body-wrench@1";
 inline constexpr std::string_view kSuppliedPropulsionOutputContractIdentity =
     "gnc.contract.yyz.supplied-propulsion-output@1";
+inline constexpr std::string_view kTruthPassthroughNavigationModelIdentity =
+    "gnc.package.yyz.navigation.truth-passthrough.experimental@1";
+inline constexpr std::string_view kTruthPassthroughNavigationModelVersion =
+    "0.1.0";
+inline constexpr std::string_view
+    kTruthPassthroughNavigationConfigSchemaIdentity =
+        "gnc.package.yyz.navigation.truth-passthrough.config@1";
+inline constexpr std::uint32_t
+    kTruthPassthroughNavigationConfigSchemaVersion = 1U;
+inline constexpr std::string_view kTruthPassthroughNavigationRecipeIdentity =
+    "gnc.package.yyz.navigation.truth-passthrough.recipe@1";
+inline constexpr std::string_view
+    kTruthPassthroughNavigationOutputContractIdentity =
+        kRigidObservationContractIdentity;
 inline constexpr std::string_view kAltitudePitchGuidanceModelIdentity =
     "gnc.package.yyz.guidance.altitude-pitch.experimental@1";
 inline constexpr std::string_view kAltitudePitchGuidanceModelVersion =
@@ -187,6 +201,9 @@ inline constexpr gnc::foundation::AlgorithmIdentity
         "gnc.package.yyz.rigid-mass.propelled-frozen-step.kernel@1",
         "0.1.0"};
 inline constexpr gnc::foundation::AlgorithmIdentity
+    kTruthPassthroughNavigationKernelIdentity{
+        "gnc.package.yyz.navigation.truth-passthrough.kernel@1", "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
     kAltitudePitchGuidanceKernelIdentity{
         "gnc.package.yyz.guidance.altitude-pitch.kernel@1", "0.1.0"};
 inline constexpr gnc::foundation::AlgorithmIdentity
@@ -223,6 +240,10 @@ inline constexpr gnc::foundation::AlgorithmIdentity
     kScalarBurnMassDefinitionBuilderIdentity{
         "gnc.package.yyz.mass.scalar-burn.definition-builder@1", "0.1.0"};
 inline constexpr gnc::foundation::AlgorithmIdentity
+    kTruthPassthroughNavigationDefinitionBuilderIdentity{
+        "gnc.package.yyz.navigation.truth-passthrough.definition-builder@1",
+        "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
     kAltitudePitchGuidanceDefinitionBuilderIdentity{
         "gnc.package.yyz.guidance.altitude-pitch.definition-builder@1",
         "0.1.0"};
@@ -249,6 +270,10 @@ inline constexpr gnc::foundation::AlgorithmIdentity
     kScalarBurnMassRuntimeCellFactoryIdentity{
         "gnc.package.yyz.mass.scalar-burn.runtime-cell-factory@1", "0.1.0"};
 inline constexpr gnc::foundation::AlgorithmIdentity
+    kTruthPassthroughNavigationRuntimeCellFactoryIdentity{
+        "gnc.package.yyz.navigation.truth-passthrough.runtime-cell-factory@1",
+        "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
     kAltitudePitchGuidanceRuntimeCellFactoryIdentity{
         "gnc.package.yyz.guidance.altitude-pitch.runtime-cell-factory@1",
         "0.1.0"};
@@ -273,6 +298,9 @@ inline constexpr gnc::foundation::AlgorithmIdentity kMassStateCodecIdentity{
 inline constexpr gnc::foundation::AlgorithmIdentity
     kMassPropertiesSlotCodecIdentity{
         "gnc.package.yyz.mass-properties.slot-codec@1", "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
+    kNavigationEstimateSlotCodecIdentity{
+        "gnc.package.yyz.navigation-estimate.slot-codec@1", "0.1.0"};
 inline constexpr gnc::foundation::AlgorithmIdentity
     kGuidanceOutputSlotCodecIdentity{
         "gnc.package.yyz.altitude-pitch-guidance-output.slot-codec@1",
@@ -311,6 +339,9 @@ inline constexpr std::string_view kControlledRigidBoundaryCallShapeIdentity =
 inline constexpr std::string_view
     kControlledRigidBoundaryRuntimeCallShapeIdentity =
         "gnc.cpp-call-shape.yyz.rigid.controlled-boundary-with-invocation-results@1";
+inline constexpr std::string_view
+    kTruthPassthroughNavigationCallShapeIdentity =
+        "gnc.cpp-call-shape.yyz.navigation.truth-passthrough@1";
 inline constexpr std::string_view kAltitudePitchGuidanceCallShapeIdentity =
     "gnc.cpp-call-shape.yyz.guidance.altitude-pitch@1";
 inline constexpr std::string_view kPitchMomentControllerCallShapeIdentity =
@@ -330,6 +361,9 @@ inline constexpr std::string_view
 inline constexpr std::string_view
     kScalarBurnMassDefinitionBuilderCallShapeIdentity =
         "gnc.cpp-call-shape.yyz.mass.definition-builder@1";
+inline constexpr std::string_view
+    kTruthPassthroughNavigationDefinitionBuilderCallShapeIdentity =
+        "gnc.cpp-call-shape.yyz.navigation.truth-passthrough.definition-builder@1";
 inline constexpr std::string_view
     kAltitudePitchGuidanceDefinitionBuilderCallShapeIdentity =
         "gnc.cpp-call-shape.yyz.guidance.altitude-pitch.definition-builder@1";
@@ -352,6 +386,9 @@ inline constexpr std::string_view
     kScalarBurnMassRuntimeCellFactoryCallShapeIdentity =
         "gnc.cpp-call-shape.yyz.mass.runtime-cell-factory@1";
 inline constexpr std::string_view
+    kTruthPassthroughNavigationRuntimeCellFactoryCallShapeIdentity =
+        "gnc.cpp-call-shape.yyz.navigation.truth-passthrough.runtime-cell-factory@1";
+inline constexpr std::string_view
     kAltitudePitchGuidanceRuntimeCellFactoryCallShapeIdentity =
         "gnc.cpp-call-shape.yyz.guidance.altitude-pitch.runtime-cell-factory@1";
 inline constexpr std::string_view
@@ -370,6 +407,9 @@ inline constexpr std::string_view kMassStateCodecCallShapeIdentity =
     "gnc.cpp-call-shape.yyz.mass.state-codec.getter@1";
 inline constexpr std::string_view kMassPropertiesSlotCodecCallShapeIdentity =
     "gnc.cpp-call-shape.yyz.mass-properties.slot-codec.getter@1";
+inline constexpr std::string_view
+    kNavigationEstimateSlotCodecCallShapeIdentity =
+        "gnc.cpp-call-shape.yyz.navigation-estimate.slot-codec.getter@1";
 inline constexpr std::string_view kGuidanceOutputSlotCodecCallShapeIdentity =
     "gnc.cpp-call-shape.yyz.guidance-output.slot-codec.getter@1";
 inline constexpr std::string_view kControllerOutputSlotCodecCallShapeIdentity =
@@ -621,6 +661,31 @@ class PropelledFrozenRigidMassStepKernel {
                  const SuppliedPropulsionDefinition& propulsion_definition,
                  const CommittedRigidMassBoundary& opening_boundary,
                  const PropelledRigidMassIntervalInput& interval);
+};
+
+struct TruthPassthroughNavigationDefinition {
+    std::string model_id;
+    std::string model_version;
+    gnc::contracts::FrameIdentity inertial_frame;
+    gnc::contracts::ClockDomainIdentity clock_domain;
+    std::int64_t configuration_revision = 0;
+};
+
+[[nodiscard]] gnc::model_sdk::CanonicalConfigBlock
+canonical_truth_passthrough_navigation_config(
+    const TruthPassthroughNavigationDefinition& definition);
+
+[[nodiscard]] gnc::foundation::NumericalOutcome<
+    TruthPassthroughNavigationDefinition>
+build_truth_passthrough_navigation_definition(
+    const gnc::model_sdk::CanonicalConfigBlock& configuration);
+
+class TruthPassthroughNavigationKernel {
+  public:
+    [[nodiscard]] static gnc::foundation::NumericalOutcome<
+        CommittedRigidObservation>
+    evaluate(const TruthPassthroughNavigationDefinition& definition,
+             const CommittedRigidObservation& observation);
 };
 
 struct AltitudePitchGuidanceDefinition {
@@ -1092,6 +1157,10 @@ using ControlledRigidDefinitionBuilderCall =
 using ScalarBurnMassDefinitionBuilderCall =
     gnc::foundation::NumericalOutcome<ScalarBurnMassDefinition> (*)(
         const gnc::model_sdk::CanonicalConfigBlock&);
+using TruthPassthroughNavigationDefinitionBuilderCall =
+    gnc::foundation::NumericalOutcome<
+        TruthPassthroughNavigationDefinition> (*)(
+        const gnc::model_sdk::CanonicalConfigBlock&);
 using AltitudePitchGuidanceDefinitionBuilderCall =
     gnc::foundation::NumericalOutcome<AltitudePitchGuidanceDefinition> (*)(
         const gnc::model_sdk::CanonicalConfigBlock&);
@@ -1128,6 +1197,10 @@ using ControlledRigidBoundaryRuntimeCall =
         const ControlledRigidBoundaryEvaluationDefinition&,
         const ControlledRigidBoundaryInvocationSet&,
         const ControlledRigidBoundaryEvaluationInput&);
+using TruthPassthroughNavigationCall =
+    gnc::foundation::NumericalOutcome<CommittedRigidObservation> (*)(
+        const TruthPassthroughNavigationDefinition&,
+        const CommittedRigidObservation&);
 using AltitudePitchGuidanceCall =
     gnc::foundation::NumericalOutcome<AltitudePitchGuidanceOutput> (*)(
         const AltitudePitchGuidanceDefinition&,
@@ -1227,6 +1300,33 @@ using ScalarBurnMassRuntimeCellFactoryCall =
     gnc::model_sdk::RuntimeCellFactoryCall<
         ScalarBurnMassRuntimeCell, ScalarBurnMassDefinition,
         ScalarBurnMassRuntimeCellBindings>;
+
+struct TruthPassthroughNavigationRuntimeCellBindings {
+    std::uint32_t boundary_evaluation_callsite_handle = 0U;
+    std::uint32_t observation_input_slot_handle = 0U;
+    gnc::model_sdk::CompiledOutputWriter<CommittedRigidObservation>
+        navigation_output;
+    TruthPassthroughNavigationCall boundary_evaluation = nullptr;
+};
+
+struct TruthPassthroughNavigationRuntimeCell {
+    const TruthPassthroughNavigationDefinition definition;
+    const gnc::model_sdk::RuntimeCellFactoryContext context;
+    const TruthPassthroughNavigationRuntimeCellBindings bindings;
+};
+
+[[nodiscard]] gnc::foundation::NumericalOutcome<
+    TruthPassthroughNavigationRuntimeCell>
+create_truth_passthrough_navigation_runtime_cell(
+    const TruthPassthroughNavigationDefinition& definition,
+    const gnc::model_sdk::RuntimeCellFactoryContext& context,
+    const TruthPassthroughNavigationRuntimeCellBindings& bindings);
+
+using TruthPassthroughNavigationRuntimeCellFactoryCall =
+    gnc::model_sdk::RuntimeCellFactoryCall<
+        TruthPassthroughNavigationRuntimeCell,
+        TruthPassthroughNavigationDefinition,
+        TruthPassthroughNavigationRuntimeCellBindings>;
 
 struct AltitudePitchGuidanceRuntimeCellBindings {
     std::uint32_t boundary_evaluation_callsite_handle = 0U;
@@ -1385,6 +1485,8 @@ void swap_mass_state(MassState& lhs, MassState& rhs) noexcept;
 
 using MassPropertiesSlotCodec =
     gnc::model_sdk::TypedInProcessSlotCodec<MassPropertiesInput>;
+using NavigationEstimateSlotCodec =
+    gnc::model_sdk::TypedInProcessSlotCodec<CommittedRigidObservation>;
 using GuidanceOutputSlotCodec =
     gnc::model_sdk::TypedInProcessSlotCodec<AltitudePitchGuidanceOutput>;
 using ControllerOutputSlotCodec =

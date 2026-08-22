@@ -288,6 +288,17 @@ struct PlanImageHeldOutput {
     std::uint32_t max_age_steps = 0U;
 };
 
+// Static source-to-image evidence for one named observation cadence. Session
+// does not execute this table; a later observation sink may consume it through
+// an approved contract without changing the frozen target-rate evidence.
+struct PlanImageObservationSchedule {
+    std::uint32_t handle = 0U;
+    std::string plan_element_id;
+    std::string observation_id;
+    std::uint32_t step_interval = 0U;
+    std::uint32_t offset = 0U;
+};
+
 struct PlanImageCallsite {
     std::uint32_t handle = 0U;
     std::string plan_element_id;
@@ -645,6 +656,7 @@ struct ExecutionPlanImageData {
     std::vector<PlanImageInitialBinding> initial_bindings;
     std::vector<PlanImageBinding> bindings;
     std::vector<PlanImageHeldOutput> held_outputs;
+    std::vector<PlanImageObservationSchedule> observation_schedules;
     std::vector<PlanImageCallsite> callsites;
     std::vector<PlanImageRuntimeComponent> runtime_components;
     std::vector<PlanImageResourcePlan> resource_plans;
@@ -740,6 +752,10 @@ class ExecutionPlanImage final {
     [[nodiscard]] const std::vector<PlanImageHeldOutput>& held_outputs()
         const noexcept {
         return data_.held_outputs;
+    }
+    [[nodiscard]] const std::vector<PlanImageObservationSchedule>&
+    observation_schedules() const noexcept {
+        return data_.observation_schedules;
     }
     [[nodiscard]] const std::vector<PlanImageCallsite>& callsites() const noexcept {
         return data_.callsites;

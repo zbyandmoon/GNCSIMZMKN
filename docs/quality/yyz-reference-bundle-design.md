@@ -1,7 +1,7 @@
 # REF-YYZ-001 科学、行为与 target conformance bundle 设计
 
-- 文档状态：R0 qualification implemented；target architecture 与 runtime conformance 保持后续阶段范围
-- 实现成熟度：`REF-YYZ-001` fixture-local R0 qualification bundle 已达到 `executable`；它不作为 G1、production YYZ model 或 Session pass evidence
+- 文档状态：R0 qualification implemented；R3 target-rate runtime conformance 已形成可执行切片，完整科学输入、差异报告与 science verdict 保持开放
+- 实现成熟度：`REF-YYZ-001` fixture-local R0 qualification bundle 已达到 `executable`；R3 另有 `target_conformance/science_verdict_pending` 产品运行证据，该证据不构成完整 00A 科学验收或 R3 gate 结论
 - 任务：`R0-SCI-003`（backlog 为 `done`）
 - 日期：2026-08-10
 - Authority owner role：Scientific Authority
@@ -24,7 +24,7 @@
 
 | Lane | 回答的问题 | Authority | 可产生的事实 | 不能声称 |
 | --- | --- | --- | --- | --- |
-| `target-conformance` | 00A/15 的架构对象和关系能否被 schema/validator 表达 | Design/Plan + Artifact | source arithmetic、plan proof、transaction ordering、observation/diagnostic/lineage shape | 物理轨迹正确；target runtime 已执行 |
+| `target-conformance` | 00A/15 的架构对象和关系能否被 schema/validator 表达并由 target runtime 执行 | Design/Plan + Artifact | source arithmetic、plan proof、精确速率与 age、transaction ordering、确定性与 Session 隔离 | 物理轨迹正确；完整 science verdict 已通过 |
 | `legacy-behavior` | 冻结 archive 在固定输入/环境下做了什么 | Artifact observation + approved migration disposition | raw trace/dataset、终止、双跑一致性、旧公式/时序观测 | 00A 30 s 结果；旧算法有科学权威 |
 | `independent-science` | 批准的模型在声明工况和数值策略下应产生什么 | Model + Artifact | 公式 intermediates、解析/高精度 expected、trajectory、terminal、metric、convergence | 证明 target transaction/encoding 已实现 |
 
@@ -37,7 +37,7 @@
 - `approved_expected`：有 owner approval、source/input hash、validity 和 tolerance 的可验收事实；
 - `observed_legacy`：隔离运行中观察到且 provenance 闭合的旧行为；
 - `illustrative`：蓝图为解释对象关系给出的值或短 id，尚无科学来源；
-- `target_pending`：schema fixture 可表达，但所需 R1–R3 runtime 尚不存在；
+- `target_pending`：schema fixture 可表达，但对应 runtime、source 或证据仍未闭合；
 - `needs_decision`：缺少有权 owner 的模型、scenario、classification 或 tolerance 决策；
 - `rejected`：来源、完整性、domain 或 policy 已明确不允许成为 expected。
 
@@ -119,13 +119,13 @@ R0-LEG-001 的 YYZ 双跑观察为：
 
 `REF-YYZ-6DOF-CORE-001` 已实现并接受 fixture-local 惯性笛卡尔刚体核心：supplied uniform gravity、常正质量、常对称正定体轴惯量、质心处总力、质心总力矩、被动 Hamilton `q_I_B`、固定步长经典 RK4，以及每次导数求值前和提交前归一化。独立 60 位 Decimal reference 与 C++17 probe 覆盖公式 intermediates、解析匀速平移、解析主轴自旋、非主轴无外力矩高精度轨迹、姿态与角速度四阶收敛、转动能与角动量模守恒、ExactGrid 终止、阶段失败整候选丢弃和七类输入域拒绝。
 
-`REF-YYZ-001` 现已在已接受的 fixture-local applicability domain 内提供 canonical R0 qualification source、uniform environment、coefficient lookup 与适用域、propulsion、mass evolution、制导控制、两区间闭环轨迹、terminal 和逐叶 tolerance/difference report。该资格剖面只覆盖当前短时公式、时间语义和失败路径；00A 的 30 秒稳定性与 pitch overshoot、production controller/allocator/actuator、Legacy 全轨迹差异以及 target runtime conformance 仍处于对应后续范围。
+`REF-YYZ-001` 现已在已接受的 fixture-local applicability domain 内提供 canonical R0 qualification source、uniform environment、coefficient lookup 与适用域、propulsion、mass evolution、制导控制、两区间闭环轨迹、terminal 和逐叶 tolerance/difference report。R3 target-conformance 切片已沿产品 navigation/guidance/controller/ideal-actuator 链执行精确多速率短跑与 3000-tick 长跑。该运行继续使用 fixture-local scientific parameters；00A canonical mission、30 秒稳定性与 pitch overshoot、真实 controller/allocator/actuator 与资产、Legacy 全轨迹差异及终端科学判定仍处于后续范围。
 
 ## 4. Scenario 冲突与 authority decision
 
 ### 4.1 已确认的非同一性
 
-00A target 示例声明：30 s、100 Hz、guidance 20 Hz、初始经纬高 `31.2304° / 121.4737° / 1000 m`、speed 220 m/s、heading 90°、mass 680 kg、altitude command 1000 m。15 §4 的示范执行表则假设 guidance 10 Hz。冻结 Legacy 声明：2 s、50 Hz、guidance 10 Hz、launch Cartesian 标准轨迹初值 `r=[0,0,1000] m`、`v=[260,0,20] m/s`、mass 120 kg。
+00A target 示例声明：30 s、100 Hz、guidance 20 Hz、初始经纬高 `31.2304° / 121.4737° / 1000 m`、speed 220 m/s、heading 90°、mass 680 kg、altitude command 1000 m。`YYZ-DEC-002`/ADR-0023 已选择 target-conformance 速率：`0.01 s` base，navigation/guidance/controller/actuator/observation 为 `100/20/50/100/25 Hz`，对应 interval `1/5/2/1/4` 与全零 offset。15 §4 的 guidance 10 Hz 保持 illustrative。冻结 Legacy 声明：2 s、50 Hz、guidance 10 Hz、launch Cartesian 标准轨迹初值 `r=[0,0,1000] m`、`v=[260,0,20] m/s`、mass 120 kg。
 
 这三者在 mission intent、时间、频率、坐标、状态和质量上都不同。即使某些字段名称相似，也不能共享 RunId、input hash、trajectory expected 或 terminal/metric verdict。
 
@@ -134,7 +134,7 @@ R0-LEG-001 的 YYZ 双跑观察为：
 | Id | 决策问题 | 关闭时必须提交的 evidence |
 | --- | --- | --- |
 | `YYZ-DEC-001` | canonical independent-science mission | signed decision、research question、source revision、validity domain |
-| `YYZ-DEC-002` | target rate set 与 20/10 Hz 差异 | rate table、rationale、integer interval proof、held/max-age policy |
+| `YYZ-DEC-002` | target rate set 与 20/10 Hz 差异 | ADR-0023 已关闭：interval `1/5/2/1/4`、全零 offset、HeldLatest age `4/1`；`r3.kernel-yyz-target-rate.probe` 提供 source/proof/Image 与执行证据 |
 | `YYZ-DEC-003` | geodetic/launch Cartesian mapping | frame ids、origin、axis、geometry、conversion formula/cases |
 | `YYZ-DEC-004` | attitude convention | direction、Hamilton order、angular-rate definition、normalization/domain、Legacy adapter tests |
 | `YYZ-DEC-005` | environment | Earth/gravity/atmosphere/wind definitions、constants/assets、domain |
@@ -194,8 +194,8 @@ REF-YYZ-001
 | 00A 内容 | 当前分类 | 激活后的验收方式 |
 | --- | --- | --- |
 | mission id、definition/version、初始 author input | `illustrative-author-input` | 经 scenario owner 采用后做 schema、unit、range、source-map 与 byte hash 检查 |
-| 100/50/25/20 Hz → interval 1/2/4/5 | `structural-exact` | 整数算术 exact；proof 指回 source refs |
-| base tick 10,000,000 ns、30 s → 3000 intervals | `structural-exact`（前提是 source 被采用） | integer duration/grid exact，无累计浮点时间 |
+| 100/50/25/20 Hz → interval 1/2/4/5 | `structural-exact/executable` | ADR-0023 已采用；整数算术 exact，proof 指回 source refs，短跑验证完整调用与 age 序列 |
+| base tick 10,000,000 ns、30 s → 3000 intervals | `structural-exact/executable` | target source 已采用，integer duration/grid exact；两次运行均提交 terminal tick 3000 |
 | 60 Hz at 100 Hz → 5/3，拒绝编译 | `negative-structural` | stable category/stage/subject/source refs；message text 不作 identity |
 | `asset://...@sha256:91b7` | `illustrative/rejected-as-integrity` | 替换为真实 asset id + 全长 SHA-256；短写不能通过 |
 | graph/plan/proof/run ids 中的短后缀 | `illustrative` | 由批准 canonical inputs 实际派生，validator 重算 |
@@ -208,15 +208,17 @@ REF-YYZ-001
 | Candidate case | 最低 payload | Exact invariants | 科学/runtime 状态 |
 | --- | --- | --- | --- |
 | `YYZ-CONF-SOURCE-001` | Mission source + SourceMap + full asset refs | ids、versions、units、rates、duration、hash | source values 待 scenario approval |
-| `YYZ-CONF-PLAN-001` | canonical graph、BindingPlan、ExecutionPlanDescriptor、proof index | subject/source/edge/operator refs；rate intervals | R2 前只能验证 fixture，不声称 compiler output |
-| `YYZ-CONF-BINDING-001` | RunBinding 与 immutable plan/source/package refs | no structural mutation；binding hash 可重算 | R3 前 target pending |
-| `YYZ-CONF-STEP-SUCCESS-001` | published epoch、deltas/candidate、journal、validation、ModelCommit | operator order、owner uniqueness、epoch +1、commit refs | 数值必须来自 science lane；executor pending |
+| `YYZ-CONF-PLAN-001` | canonical graph、BindingPlan、ExecutionPlanDescriptor、proof index | subject/source/edge/operator refs；rate intervals | programmatic target source 已通过 Compiler→proof→Image；完整 source-file schema 保持开放 |
+| `YYZ-CONF-BINDING-001` | RunBinding 与 immutable plan/source/package refs | no structural mutation；binding hash 可重算 | R3 exact Image/RunBinding 已执行，science inputs 保持 pending |
+| `YYZ-CONF-STEP-SUCCESS-001` | published epoch、deltas/candidate、journal、validation、ModelCommit | operator order、owner uniqueness、epoch +1、commit refs | tick 31 与 tick 3000 target runtime 已执行；数值 verdict 仍由 science lane 给出 |
 | `YYZ-CONF-STEP-FAIL-001` | 同一步的 pre-commit injected failure | committed state/epoch/tick/hash exact unchanged | executor pending，但 transaction fixture 可机验 |
-| `YYZ-CONF-OBS-001` | ObservationBatch + semantic CSV mapping | FieldId、sample tick/time、ModelCommit ref、column mapping | codec shape 可验；运行 output pending |
+| `YYZ-CONF-OBS-001` | ObservationBatch + semantic CSV mapping | FieldId、sample tick/time、ModelCommit ref、column mapping | interval 4/offset 0 已进入 Source→Plan→Proof→Image；runtime sink 与 CSV 保持 pending |
 | `YYZ-CONF-DIAG-001` | 100/60 invalid schedule | compile rejected；stage/subject/source/ratio exact | Compiler pending |
 | `YYZ-CONF-EVIDENCE-001` | RunManifest、LineageEdge、dataset/metric/report refs | all refs resolve to committed artifacts；hash closure | R4 producer pending |
 
 Case id 仅是本设计候选。若现有 schema 已经固定别的 identity，实施采用权威 schema，不新增平行 contract。
+
+R3 当前可执行记录为 `r3.kernel-yyz-target-rate.probe`：生产 `TruthPassthroughNavigation` 保持同 tick truth provenance；guidance→controller age 序列受最大值 4 约束，controller→actuator age 序列受最大值 1 约束；tick-31 短跑覆盖完整 cadence、bit determinism、controlled/zero-control 可区分性和共享 provider 的双 Session 隔离。两次 3000-tick 运行均在 tick 3000 完成，冻结任务结果为 `Aborted / remaining-mass-floor / priority 300 / remaining mass 85 kg`。该记录统一标记 `target_conformance/science_verdict_pending`。
 
 ### 6.3 成功 step 与失败 step
 
@@ -520,7 +522,7 @@ Mutation fixture 不得绕过 production parser 或直接断言一个独立测�
 
 - 录入 00A source、plan/proof、binding、success/failure step、observation、diagnostic 与 lineage payload；
 - 标注逐值 provenance/validity；
-- 结构 machine-valid，runtime assertions 保持 `target_pending`；
+- 结构 machine-valid；尚无对应可执行证据的 runtime assertions 保持 `target_pending`；
 - mutation 覆盖短 hash、rate、refs、commit/observation。
 
 ### Slice 2：formula oracle bundle

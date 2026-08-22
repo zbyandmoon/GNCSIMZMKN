@@ -19,7 +19,7 @@ The interval-1 REF-YYZ graph and the 2:1 held-output qualification establish the
 4. Stable package descriptors retain their package-owned default schedule. An optional programmatic `CompleteStaticCompositionSource` extension identifies exact real occurrences and bindings, supplies occurrence schedule and binding temporal overrides, and carries direct `SourceRef` provenance. The Compiler validates exact endpoint, port, contract, relation, offset and reachable-age consistency before publishing canonical IR.
 5. The optional extension has a dedicated conditional semantic-encoding domain. Source semantic hash, descriptor hash, proof identity and Image fingerprint therefore change when target-rate facts change. Sources without the extension preserve the established semantic bytes and interval-1 Image fingerprint.
 6. Observation cadence is a static source/plan/proof/Image fact for this R3 target-conformance slice. It does not create an observation runtime sink, R4 Field, Artifact or Dataset.
-7. The executable slice will use a production `TruthPassthroughNavigation` RuntimeComponent, the existing real YYZ guidance, controller and ideal actuator, a short run of at least 10 ticks, and a 3000-tick endurance run. Determinism and Session isolation remain mandatory evidence.
+7. The executable slice uses a production `TruthPassthroughNavigation` RuntimeComponent, the existing real YYZ guidance, controller and ideal actuator, a short run of at least 10 ticks, and a 3000-tick endurance run. Determinism and Session isolation are mandatory evidence.
 8. This decision freezes rate shape and temporal freshness only. Canonical scientific inputs, geodetic mapping, real asset selection, the difference report and the final science verdict remain open in `R3-YYZ-001`.
 
 ## Consequences
@@ -32,7 +32,8 @@ The interval-1 REF-YYZ graph and the 2:1 held-output qualification establish the
 ## Executable evidence
 
 - `r3.kernel-multirate-held-output.probe` verifies the optional source override path on the real guidance-to-controller binding, including changed source/descriptor/proof/Image identities, exact validation failures and preservation of the interval-1 fingerprint.
-- The dedicated 00A target-rate probe will provide the exact 1/5/2/1/4 cadence, held-age sequence, target chain, 3000-tick result, deterministic replay and two-Session isolation evidence in the next executable slice.
+- `r3.kernel-yyz-target-rate.probe` compiles the production navigation→guidance→controller→actuator chain with exact 1/5/2/1 intervals, an observation interval of 4, zero offsets and HeldLatest ages 4/1. It verifies Source→Plan→Proof→Image observation identity, a tick-31 short run with complete cadence/provenance sequences, controlled-versus-zero-controller distinction, bit-deterministic replay and two-Session isolation.
+- Two independent 3000-tick executions reach terminal tick 3000 with identical state, history and mission result. All comparable frozen RunOutcome fields are identical; the caller-owned RunIds deliberately differ. The observed mission result is `Aborted`, reason `remaining-mass-floor`, priority 300 and remaining mass `85 kg`. The probe emits `target_conformance science_verdict_pending`; this runtime result carries no scientific-equivalence verdict.
 
 ## Alternatives considered
 
