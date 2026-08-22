@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本仓库是 GNCZMKN 目标架构的全新实现。G0/G1/G2/G3 已通过，当前处于 R3；产品代码已完成 R1 Foundation/Contracts/YYZ/CAVH 模型切片、R2 静态 Compiler，以及 Image-backed formal REF-YYZ run、Completed-run reset 和 explicit dispose。蓝图描述目标语义，已交付能力只以当前源码、fixture、oracle 和自动测试为准。
+本仓库是 GNCZMKN 目标架构的全新实现。G0/G1/G2/G3 已通过，当前处于 R3；产品代码已完成 R1 Foundation/Contracts/YYZ/CAVH 模型切片、R2 静态 Compiler，以及 Image-backed formal REF-YYZ run、Completed-run reset、plan-derived cancellation 和 explicit dispose。蓝图描述目标语义，已交付能力只以当前源码、fixture、oracle 和自动测试为准。
 
 ## 每次开始
 
@@ -27,7 +27,7 @@
 ## 当前阶段
 
 - 当前 gate 为 R3。
-- R2 已通过 G3；当前已交付冻结 Image 到 Session 的 InitializationCommit、两次 RK4 Continue、Terminal commit、冻结 RunOutcome、Completed-only ResetCommit、稳定历史 outcome 查询与一次性 dispose。checkpoint、branch restore、active-run truncating reset、完整 RunResource hooks 和通用调度仍待后续 R3 切片。
+- R2 已通过 G3；当前已交付冻结 Image 到 Session 的 InitializationCommit、两次 RK4 Continue、Terminal commit、冻结 RunOutcome、Completed-only ResetCommit、plan-derived in-process cancellation、稳定历史 outcome 查询与一次性 dispose。CommandLedger/event queue、checkpoint、branch restore、active-run truncating reset、完整 RunResource hooks 和完整诊断 pipeline 仍待后续 R3 切片。
 - 仅 backlog 中进入 `ready` 的 R3 工作已解锁；R4～R8 保持锁定，直到对应 gate 通过。
 - 文档中的 `V1` 表示目标范围，不代表当前实现状态。
 

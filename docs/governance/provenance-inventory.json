@@ -144,6 +144,19 @@
       "distribution_effect": "not-redistributed"
     },
     {
+      "id": "host-standard-thread-runtime",
+      "use_scope": "R3 in-process cancellation synchronization and deterministic concurrency tests",
+      "version": "platform and supported C++ toolchain provided",
+      "bundled": false,
+      "source_refs": [
+        "docs/adr/0019-r3-plan-derived-in-process-cancellation.md",
+        "CMakeLists.txt"
+      ],
+      "cmake_packages": ["Threads"],
+      "license_conclusion": "NOASSERTION",
+      "distribution_effect": "platform/toolchain runtime; no tracked vendoring"
+    },
+    {
       "id": "github-actions-checkout-6.0.2",
       "use_scope": "ci-checkout",
       "version": "6.0.2",

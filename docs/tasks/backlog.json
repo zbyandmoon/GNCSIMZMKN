@@ -1,7 +1,7 @@
 {
   "schema_version": "gnczmkn.task-backlog/1",
   "current_gate": "R3",
-  "updated_at": "2026-08-21",
+  "updated_at": "2026-08-22",
   "status_values": ["planned", "ready", "in_progress", "blocked", "review", "done"],
   "tasks": [
     {
@@ -582,15 +582,15 @@
       "id": "R3-SCH-001",
       "stage": "R3",
       "title": "Implement region, boundary DAG, command, event and cancellation execution",
-      "status": "planned",
+      "status": "review",
       "priority": "P0",
       "size": "XL",
       "owner_role": "runtime_numerics_lead",
       "assignee": null,
       "depends_on": ["R3-FRM-001", "R2-PLAN-001"],
       "deliverables": ["Region executor", "schedule cutoff", "cutoff-owned CommandLedger/queues", "safe-point command/event handling"],
-      "acceptance": ["Execution order derives only from the plan and cancellation has one outcome"],
-      "evidence": ["Schedule and cancellation suite"],
+      "acceptance": ["Execution order derives only from the plan and cancellation has one outcome", "Command cutoff, application receipt and event ordering close against their first executable consumers"],
+      "evidence": ["The Compiler derives transaction-start, after-boundary-callsite, after-candidate-producer, before-ModelCommit and after-ModelCommit safe points from numeric Image facts and includes the policy in the existing Image fingerprint; Kernel validation rejects unknown, duplicate, out-of-range, structurally incompatible and incomplete policies before materialization", "request_cancel is the sole concurrent Session mutation and writes one mutex-protected monotonic request bound to the exact current RunId. r3.kernel-step-transaction.probe deterministically covers pre-step, inter-callsite, inter-candidate, final-precommit, postcommit and next-transaction sampling, idempotence, Terminal/failure precedence, Cancelled dispose and two-Session isolation without a production callback", "Precommit cancellation rolls back frame/candidate/history/seal/journal staging and freezes Cancelled + Valid without an error diagnostic; postcommit cancellation preserves the Committed StepOutcome and new epoch/tick/history/seal. CommandLedger/queues, command cutoff/application receipts and event queue remain open"],
       "architecture_refs": ["06", "14 §5–§7"]
     },
     {
@@ -620,7 +620,7 @@
       "depends_on": ["R2-GATE-001"],
       "deliverables": ["Lifecycle state machine", "resource journals", "RunBinding and RunId rules"],
       "acceptance": ["Create/initialize/reset/restore/dispose failures close resources deterministically"],
-      "evidence": ["r3.kernel-session-materialization.probe covers Created with no active RunId, exact caller-owned RunId/RunBinding validation, InitializationCommit at run_sequence 0/epoch 0/tick 0, unified Failed initialization outcomes, injected allocation/preparation/factory/initial-state failures, reverse destruction and successful subsequent Session creation", "r3.kernel-step-transaction.probe executes sequence 0, 1 and 2 in one Session. Completed-only ResetCommit validates a caller-owned Session-local unique RunId and exact binding, increments sequence/epoch once, restores tick 0 initial state, clears history/seal/result/journal/step count, reuses Image/provider/prepared/runtime bindings, and preserves stable historical RunOutcome pointers while every run follows Continue, Continue, Terminal", "reset request, initial rebuild, state clone/replace/validation, outcome/history allocation and final-precheck injections preserve the old committed sequence/state/epoch/tick/history/seal/outcome and freeze a Failed Unknown Reset attempt without post-failure allocation; a fresh Session still completes", "explicit dispose is covered from Created, Completed, initialization Failed and execution Failed, releases all materialized counts with one reverse cleanup, and retains Image, last committed RunId and frozen outcome queries until Session destruction. Checkpoint, branch restore, active-run truncating reset and complete RunResource open/finalize hooks remain open"],
+      "evidence": ["r3.kernel-session-materialization.probe covers Created with no active RunId, exact caller-owned RunId/RunBinding validation, InitializationCommit at run_sequence 0/epoch 0/tick 0, unified Failed initialization outcomes, injected allocation/preparation/factory/initial-state failures, reverse destruction and successful subsequent Session creation", "r3.kernel-step-transaction.probe executes sequence 0, 1 and 2 in one Session. Completed-only ResetCommit validates a caller-owned Session-local unique RunId, exact binding and Resettable capability on every Runtime Cell, increments sequence/epoch once, restores tick 0 initial state, clears history/seal/result/journal/step count, reuses Image/provider/prepared/runtime bindings, and preserves stable historical RunOutcome pointers while every run follows Continue, Continue, Terminal", "A legal Image missing one Resettable capability fails before reset staging/publication, preserves the prior sequence/state/epoch/tick/history/seal/result/outcome and freezes Reset + run_start_committed=false + Failed + Unknown. Request, initial rebuild, state clone/replace/validation, outcome/history allocation and final-precheck injections preserve the same boundary without post-failure allocation; InitializationCommit/ResetCommit precommit failures retain NotStarted finalization while post-run-start execution failure and Completed runs retain Succeeded", "explicit dispose is covered from Created, Completed, Cancelled, initialization Failed and execution Failed, releases all materialized counts with one reverse cleanup, and retains Image, last committed RunId and frozen outcome queries until Session destruction. Checkpoint, branch restore, active-run truncating reset and complete RunResource open/finalize hooks remain open"],
       "architecture_refs": ["06"]
     },
     {
@@ -635,7 +635,7 @@
       "depends_on": ["R1-CTR-001", "R3-TXN-001", "R3-LIF-001"],
       "deliverables": ["Diagnostic pipeline", "Step/Run outcomes", "policy fixtures"],
       "acceptance": ["All public failures carry stable code, source/subject, cause and validity effect"],
-      "evidence": ["r3.kernel-session-materialization.probe and r3.kernel-step-transaction.probe cover the narrow in-process runtime path: stable initialization/reset/schedule/authorization/history/seal/candidate/invocation/allocation/internal mappings, stage/subject/RunId/tick/base-epoch/cause/validity facts, fixed FailOperation policy, StepOutcome, ResetOutcome, general Initialize/Reset run-start facts, immutable Completed/Failed RunOutcome and stable sequence queries. The complete DiagnosticRecord enrichment, configurable policy, renderer/store and durable artifact path remain open"],
+      "evidence": ["r3.kernel-session-materialization.probe and r3.kernel-step-transaction.probe cover the narrow in-process runtime path: stable initialization/reset/schedule/authorization/history/seal/candidate/invocation/allocation/internal mappings, stage/subject/RunId/tick/base-epoch/cause/validity facts, fixed FailOperation policy, StepOutcome, ResetOutcome, general Initialize/Reset run-start facts, immutable Completed/Cancelled/Failed RunOutcome, direct Completed/Cancelled/Failed drive status and stable sequence queries. Cancellation is a normal outcome with Valid committed evidence and no RuntimeDiagnostic. The complete DiagnosticRecord enrichment, configurable policy, renderer/store and durable artifact path remain open"],
       "architecture_refs": ["07"]
     },
     {
