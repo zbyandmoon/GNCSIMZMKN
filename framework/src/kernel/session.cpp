@@ -320,6 +320,22 @@ template <typename Value>
         return RuntimeDiagnosticCode::InternalFailure;
     case SessionError::InvalidLifecycleTransition:
         return RuntimeDiagnosticCode::LifecycleTransitionRejected;
+    case SessionError::UnsupportedCheckpointCapability:
+        return RuntimeDiagnosticCode::CheckpointUnsupported;
+    case SessionError::CheckpointBarrierUnavailable:
+        return RuntimeDiagnosticCode::CheckpointBarrierFailed;
+    case SessionError::CheckpointCloneFailed:
+        return RuntimeDiagnosticCode::CheckpointCloneFailed;
+    case SessionError::CheckpointValidationFailed:
+        return RuntimeDiagnosticCode::CheckpointValidationFailed;
+    case SessionError::RestoreRequestInvalid:
+        return RuntimeDiagnosticCode::RestoreRequestInvalid;
+    case SessionError::RestoreCompatibilityMismatch:
+        return RuntimeDiagnosticCode::RestoreCompatibilityFailed;
+    case SessionError::RestoreCloneFailed:
+        return RuntimeDiagnosticCode::RestoreCloneFailed;
+    case SessionError::RestorePrecommitFailed:
+        return RuntimeDiagnosticCode::RestorePrecommitFailed;
     }
     return RuntimeDiagnosticCode::InternalFailure;
 }
@@ -368,11 +384,159 @@ template <typename Value>
         return "run.reset.capability_missing";
     case RuntimeDiagnosticCode::ResetPrecommitFailed:
         return "run.reset.precommit_failed";
+    case RuntimeDiagnosticCode::CheckpointUnsupported:
+        return "run.checkpoint.unsupported";
+    case RuntimeDiagnosticCode::CheckpointBarrierFailed:
+        return "run.checkpoint.barrier_failed";
+    case RuntimeDiagnosticCode::CheckpointCloneFailed:
+        return "run.checkpoint.clone_failed";
+    case RuntimeDiagnosticCode::CheckpointValidationFailed:
+        return "run.checkpoint.validation_failed";
+    case RuntimeDiagnosticCode::RestoreRequestInvalid:
+        return "run.restore_request.invalid";
+    case RuntimeDiagnosticCode::RestoreCompatibilityFailed:
+        return "run.restore.compatibility_failed";
+    case RuntimeDiagnosticCode::RestoreCloneFailed:
+        return "run.restore.clone_failed";
+    case RuntimeDiagnosticCode::RestorePrecommitFailed:
+        return "run.restore.precommit_failed";
     }
     return "run.internal.failure";
 }
 
+struct CheckpointObjectDeleter {
+    const InProcessObjectOperations* operations = nullptr;
+    std::uint64_t alignment = 0U;
+
+    void operator()(void* address) const noexcept {
+        if (address == nullptr) return;
+        if (operations != nullptr) operations->destroy(address);
+        release_raw(address, alignment);
+    }
+};
+
+struct CheckpointStoredValue {
+    std::uint32_t slot_handle = 0U;
+    SessionObjectRole role = SessionObjectRole::CycleFrameValue;
+    std::uint32_t linked_entry_handle = 0U;
+    std::uint32_t codec_entry_handle = 0U;
+    std::uint64_t size_bytes = 0U;
+    std::uint64_t alignment_bytes = 0U;
+    std::string layout_identity;
+    const void* type_identity = nullptr;
+    std::unique_ptr<void, CheckpointObjectDeleter> object{nullptr, {}};
+    std::uint64_t generation = 0U;
+    std::uint64_t sequence = 0U;
+    std::int64_t sample_tick = 0;
+    double sample_time_seconds = 0.0;
+    double interval_start_seconds = 0.0;
+    double interval_end_seconds = 0.0;
+    contracts::DataQuality quality = contracts::DataQuality::Invalid;
+    bool invariant_valid = true;
+};
+
+struct CheckpointStateBlock {
+    std::uint32_t block_handle = 0U;
+    std::uint32_t committed_slot_handle = 0U;
+    std::uint32_t candidate_slot_handle = 0U;
+    std::uint32_t initial_binding_handle = 0U;
+    std::uint64_t committed_epoch = 0U;
+    CheckpointStoredValue value;
+};
+
+struct CheckpointHistorySample {
+    std::int64_t tick = 0;
+    std::uint64_t committed_epoch = 0U;
+    std::vector<CheckpointStoredValue> members;
+};
+
+struct CheckpointHistoryStore {
+    std::uint32_t history_handle = 0U;
+    std::uint32_t history_depth = 0U;
+    std::vector<CheckpointHistorySample> samples;
+};
+
+struct CheckpointSealedBoundary {
+    std::uint64_t committed_epoch = 0U;
+    std::int64_t committed_tick = 0;
+    std::vector<CheckpointStoredValue> outputs;
+};
+
 } // namespace
+
+struct SessionCheckpoint::Impl {
+    // The Image and provider outlive every snapshot value below. The provider
+    // is retained only as the process-local implementation lifetime witness
+    // for typed destruction; no Runtime Cell object enters the checkpoint.
+    std::shared_ptr<const contracts::ExecutionPlanImage> image;
+    std::shared_ptr<const SessionMaterializationProvider> provider;
+    std::string image_fingerprint;
+    RunBinding binding;
+    CheckpointIdentity identity;
+    std::uint64_t frame_generation = 0U;
+    std::uint64_t frame_sequence = 0U;
+    std::vector<CheckpointStateBlock> states;
+    std::vector<CheckpointHistoryStore> histories;
+    CheckpointSealedBoundary sealed_boundary;
+};
+
+SessionCheckpoint::SessionCheckpoint(
+    std::shared_ptr<const Impl> implementation) noexcept
+    : implementation_(std::move(implementation)) {}
+
+SessionCheckpoint::~SessionCheckpoint() = default;
+
+const CheckpointIdentity& SessionCheckpoint::identity() const noexcept {
+    return implementation_->identity;
+}
+
+const RunBinding& SessionCheckpoint::binding() const noexcept {
+    return implementation_->binding;
+}
+
+std::string_view SessionCheckpoint::image_fingerprint() const noexcept {
+    return implementation_->image_fingerprint;
+}
+
+void SessionCheckpoint::qualification_mutate(
+    std::uint8_t mutation) const noexcept {
+    auto implementation =
+        std::const_pointer_cast<Impl>(implementation_);
+    if (implementation == nullptr) return;
+    const auto flip_first = [](std::string& value) noexcept {
+        if (!value.empty()) value.front() = value.front() == '!' ? '?' : '!';
+    };
+    switch (mutation) {
+    case 1U:
+        flip_first(implementation->image_fingerprint);
+        break;
+    case 2U:
+        flip_first(implementation->binding.plan_id);
+        break;
+    case 3U:
+        if (!implementation->states.empty()) {
+            flip_first(implementation->states.front().value.layout_identity);
+        }
+        break;
+    case 4U:
+        if (!implementation->states.empty()) {
+            ++implementation->states.front().value.codec_entry_handle;
+        }
+        break;
+    case 5U:
+        if (!implementation->states.empty()) {
+            implementation->states.front().value.type_identity = nullptr;
+        }
+        break;
+    case 6U:
+        if (!implementation->states.empty()) {
+            implementation->states.front().value.invariant_valid = false;
+        }
+        break;
+    default:
+        break;
+    }
+}
 
 RunBinding exact_run_binding(const contracts::ExecutionPlanImage& image) {
     return {image.fingerprint(), image.plan_id(), image.mission_id(),
@@ -443,6 +607,21 @@ std::string_view to_string(SessionError error) noexcept {
         return "TransactionPrecommitFailed";
     case SessionError::InvocationFailed: return "InvocationFailed";
     case SessionError::InternalFailure: return "InternalFailure";
+    case SessionError::UnsupportedCheckpointCapability:
+        return "UnsupportedCheckpointCapability";
+    case SessionError::CheckpointBarrierUnavailable:
+        return "CheckpointBarrierUnavailable";
+    case SessionError::CheckpointCloneFailed:
+        return "CheckpointCloneFailed";
+    case SessionError::CheckpointValidationFailed:
+        return "CheckpointValidationFailed";
+    case SessionError::RestoreRequestInvalid:
+        return "RestoreRequestInvalid";
+    case SessionError::RestoreCompatibilityMismatch:
+        return "RestoreCompatibilityMismatch";
+    case SessionError::RestoreCloneFailed: return "RestoreCloneFailed";
+    case SessionError::RestorePrecommitFailed:
+        return "RestorePrecommitFailed";
     }
     return "InternalFailure";
 }
@@ -490,6 +669,22 @@ std::string_view to_string(RuntimeDiagnosticCode code) noexcept {
         return "GNC-RUN-RST-0003";
     case RuntimeDiagnosticCode::ResetCapabilityMissing:
         return "GNC-RUN-RST-0004";
+    case RuntimeDiagnosticCode::CheckpointUnsupported:
+        return "GNC-RUN-CHK-0001";
+    case RuntimeDiagnosticCode::CheckpointBarrierFailed:
+        return "GNC-RUN-CHK-0002";
+    case RuntimeDiagnosticCode::CheckpointCloneFailed:
+        return "GNC-RUN-CHK-0003";
+    case RuntimeDiagnosticCode::CheckpointValidationFailed:
+        return "GNC-RUN-CHK-0004";
+    case RuntimeDiagnosticCode::RestoreRequestInvalid:
+        return "GNC-RUN-RSTO-0001";
+    case RuntimeDiagnosticCode::RestoreCompatibilityFailed:
+        return "GNC-RUN-RSTO-0002";
+    case RuntimeDiagnosticCode::RestoreCloneFailed:
+        return "GNC-RUN-RSTO-0003";
+    case RuntimeDiagnosticCode::RestorePrecommitFailed:
+        return "GNC-RUN-RSTO-0004";
     }
     return "GNC-RUN-INT-0001";
 }
@@ -521,6 +716,20 @@ std::string_view to_string(RuntimeDiagnosticStage stage) noexcept {
         return "CommandReduction";
     case RuntimeDiagnosticStage::EventConsumption:
         return "EventConsumption";
+    case RuntimeDiagnosticStage::CheckpointBarrier:
+        return "CheckpointBarrier";
+    case RuntimeDiagnosticStage::CheckpointClone:
+        return "CheckpointClone";
+    case RuntimeDiagnosticStage::CheckpointValidation:
+        return "CheckpointValidation";
+    case RuntimeDiagnosticStage::RestoreRequest:
+        return "RestoreRequest";
+    case RuntimeDiagnosticStage::RestoreMaterialization:
+        return "RestoreMaterialization";
+    case RuntimeDiagnosticStage::RestoreState:
+        return "RestoreState";
+    case RuntimeDiagnosticStage::RestorePrecommit:
+        return "RestorePrecommit";
     }
     return "Lifecycle";
 }
@@ -961,9 +1170,12 @@ struct Session::Impl final : SessionObjectAccess,
     SessionResult last_result;
     InitializationOutcome initialization_outcome;
     ResetOutcome reset_outcome;
+    CheckpointOutcome checkpoint_outcome;
+    RestoreOutcome restore_outcome;
     StepOutcome step_outcome;
     std::optional<InitializationRequest> pending_run_attempt;
     std::optional<ResetRequest> pending_reset_attempt;
+    std::optional<RestoreRequest> pending_restore_attempt;
     std::uint64_t pending_reset_run_sequence = 0U;
     std::optional<RunId> committed_run_id;
     std::optional<RunBinding> committed_run_binding;
@@ -973,6 +1185,8 @@ struct Session::Impl final : SessionObjectAccess,
     RunOutcome* current_run_outcome = nullptr;
     std::unique_ptr<RunOutcome> reset_failure_outcome_storage;
     bool run_outcome_frozen = false;
+    std::optional<RestoreLineage> restore_lineage;
+    std::shared_ptr<const SessionCheckpoint> restore_checkpoint;
     bool resources_disposed = false;
     RuntimeDiagnosticStage current_diagnostic_stage =
         RuntimeDiagnosticStage::Lifecycle;
@@ -1001,6 +1215,8 @@ struct Session::Impl final : SessionObjectAccess,
     std::vector<CommandApplicationReceipt> command_application_receipts;
     std::vector<CommittedEvent> committed_events;
     CommandTransactionStage command_stage;
+    std::uint8_t checkpoint_clone_fault = 0U;
+    bool restore_precommit_failure = false;
 
     // request_cancel() only touches this synchronized mirror. Every other
     // mutable Session field remains owned by the execution thread.
@@ -1122,7 +1338,9 @@ struct Session::Impl final : SessionObjectAccess,
         }
         result.stage = stage;
         result.subject_handle = cause.image_handle;
-        if (pending_reset_attempt.has_value()) {
+        if (pending_restore_attempt.has_value()) {
+            result.run_id = pending_restore_attempt->run_id;
+        } else if (pending_reset_attempt.has_value()) {
             result.run_id = pending_reset_attempt->run_id;
         } else if (pending_run_attempt.has_value()) {
             result.run_id = pending_run_attempt->run_id;
@@ -1333,6 +1551,102 @@ struct Session::Impl final : SessionObjectAccess,
         return initialization_outcome;
     }
 
+    [[nodiscard]] CheckpointOutcome fail_checkpoint(
+        SessionResult cause, RuntimeDiagnosticStage stage,
+        bool barrier_satisfied) noexcept {
+        last_result = cause;
+        checkpoint_outcome = {};
+        checkpoint_outcome.status = CheckpointStatus::Failed;
+        checkpoint_outcome.result = cause;
+        if (committed_run_id.has_value()) {
+            checkpoint_outcome.identity = {
+                *committed_run_id, committed_run_sequence,
+                committed_epoch, committed_tick, committed_step_count};
+        }
+        checkpoint_outcome.barrier_satisfied = barrier_satisfied;
+        checkpoint_outcome.checkpoint_commit = false;
+        checkpoint_outcome.primary_diagnostic = make_diagnostic(
+            cause, stage, contracts::EvidenceValidity::Unknown);
+        return checkpoint_outcome;
+    }
+
+    [[nodiscard]] RestoreOutcome reject_restore_unsupported(
+        RestoreRequest request) noexcept {
+        pending_restore_attempt.emplace(std::move(request));
+        const auto cause = failure(
+            SessionError::UnsupportedCheckpointCapability, 0U,
+            "checkpoint restore does not support command/event Images");
+        restore_outcome = {};
+        restore_outcome.status = RestoreStatus::Failed;
+        restore_outcome.result = cause;
+        restore_outcome.run_id = pending_restore_attempt->run_id;
+        restore_outcome.binding_matched = binding_matches_image(
+            pending_restore_attempt->binding, *image);
+        restore_outcome.checkpoint_matched = false;
+        restore_outcome.restore_commit = false;
+        restore_outcome.committed_epoch = committed_epoch;
+        restore_outcome.committed_tick = committed_tick;
+        restore_outcome.primary_diagnostic = make_diagnostic(
+            cause, RuntimeDiagnosticStage::RestoreRequest,
+            contracts::EvidenceValidity::Unknown);
+        pending_restore_attempt.reset();
+        return restore_outcome;
+    }
+
+    [[nodiscard]] RestoreOutcome fail_restore(
+        SessionResult cause, RuntimeDiagnosticStage stage,
+        bool binding_matched, bool checkpoint_matched) noexcept {
+        last_result = cause;
+        const auto diagnostic = make_diagnostic(
+            cause, stage, contracts::EvidenceValidity::Unknown);
+        restore_outcome = {};
+        restore_outcome.status = RestoreStatus::Failed;
+        restore_outcome.result = cause;
+        if (pending_restore_attempt.has_value()) {
+            restore_outcome.run_id = pending_restore_attempt->run_id;
+            restore_checkpoint = pending_restore_attempt->checkpoint;
+        }
+        restore_outcome.binding_matched = binding_matched;
+        restore_outcome.checkpoint_matched = checkpoint_matched;
+        restore_outcome.restore_commit = false;
+        restore_outcome.committed_epoch = committed_epoch;
+        restore_outcome.committed_tick = committed_tick;
+        restore_outcome.primary_diagnostic = diagnostic;
+
+        unwind();
+        state = SessionState::Failed;
+        publish_cancellation_lifecycle(SessionState::Failed);
+        has_committed_run = false;
+        committed_run_id.reset();
+        committed_run_binding.reset();
+        restore_lineage.reset();
+        committed_epoch = 0U;
+        committed_tick = image->clock().initial_tick;
+        committed_step_count = 0U;
+
+        if (current_run_outcome != nullptr) {
+            prepare_run_start(
+                *current_run_outcome,
+                pending_restore_attempt.has_value()
+                    ? pending_restore_attempt->run_id
+                    : RunId{},
+                0U, RunStartKind::RestoreBranch, false, 0U);
+            current_run_outcome->final_status = RunFinalStatus::Failed;
+            current_run_outcome->validity =
+                contracts::EvidenceValidity::Unknown;
+            current_run_outcome->initial_tick =
+                image->clock().initial_tick;
+            current_run_outcome->final_tick =
+                image->clock().initial_tick;
+            current_run_outcome->primary_diagnostic = diagnostic;
+            current_run_outcome->finalization_status =
+                RunFinalizationStatus::NotStarted;
+            run_outcome_frozen = true;
+        }
+        pending_restore_attempt.reset();
+        return restore_outcome;
+    }
+
     [[nodiscard]] ResetOutcome fail_reset(
         SessionResult cause, RuntimeDiagnosticStage stage) noexcept {
         last_result = cause;
@@ -1403,6 +1717,17 @@ struct Session::Impl final : SessionObjectAccess,
                        block.candidate_slot_handle == slot_handle;
             });
         return found == image->state_blocks().end() ? nullptr : &*found;
+    }
+
+    [[nodiscard]] const SessionObjectMaterializer*
+    committed_value_materializer(
+        const contracts::PlanImageSlot& slot) const noexcept {
+        const auto* block = state_for_slot(slot.handle);
+        if (block == nullptr) return provider->slot(slot.handle);
+        if (block->committed_slot_handle != slot.handle) return nullptr;
+        const auto* binding = initial_for_state(*block);
+        return binding == nullptr ? nullptr
+                                  : provider->initial_state(binding->handle);
     }
 
     [[nodiscard]] std::uint32_t owner_component_for_occurrence(
@@ -1605,6 +1930,284 @@ struct Session::Impl final : SessionObjectAccess,
         guard.release();
         static_cast<void>(allocation.release());
         destination = std::move(staged);
+        return {};
+    }
+
+    [[nodiscard]] SessionResult clone_checkpoint_value(
+        const contracts::PlanImageSlot& slot,
+        const SessionObjectMaterializer& materializer, const void* source,
+        SessionObjectRole role, std::uint32_t linked_entry_handle,
+        std::uint64_t generation, std::uint64_t sequence,
+        std::int64_t sample_tick, double sample_time_seconds,
+        double interval_start_seconds, double interval_end_seconds,
+        contracts::DataQuality quality,
+        CheckpointStoredValue& destination) {
+        const auto layout = materializer.operations().layout();
+        if (source == nullptr || layout.size_bytes != slot.size_bytes ||
+            layout.alignment_bytes != slot.alignment_bytes ||
+            layout.layout_identity != slot.layout_id ||
+            layout.codec_entry_handle != slot.codec_entry_handle ||
+            layout.type_identity == nullptr ||
+            !materializer.operations().validate(source)) {
+            return failure(SessionError::CheckpointCloneFailed,
+                           slot.handle,
+                           "checkpoint source value failed exact identity validation");
+        }
+
+        CheckpointStoredValue staged;
+        staged.slot_handle = slot.handle;
+        staged.role = role;
+        staged.linked_entry_handle = linked_entry_handle;
+        staged.codec_entry_handle = layout.codec_entry_handle;
+        staged.size_bytes = layout.size_bytes;
+        staged.alignment_bytes = layout.alignment_bytes;
+        staged.layout_identity = std::string(layout.layout_identity);
+        staged.type_identity = layout.type_identity;
+        staged.generation = generation;
+        staged.sequence = sequence;
+        staged.sample_tick = sample_tick;
+        staged.sample_time_seconds = sample_time_seconds;
+        staged.interval_start_seconds = interval_start_seconds;
+        staged.interval_end_seconds = interval_end_seconds;
+        staged.quality = quality;
+
+        RawBlock allocation(layout.size_bytes, layout.alignment_bytes);
+        if (allocation.get() == nullptr) {
+            return failure(SessionError::AllocationFailure, slot.handle,
+                           "checkpoint value allocation failed");
+        }
+        if (!materializer.operations().copy_construct(source,
+                                                      allocation.get())) {
+            return failure(SessionError::CheckpointCloneFailed,
+                           slot.handle,
+                           "checkpoint value clone failed");
+        }
+        ConstructedObject guard(allocation.get(), materializer.operations());
+        if (!materializer.operations().validate(allocation.get())) {
+            return failure(SessionError::CheckpointCloneFailed,
+                           slot.handle,
+                           "checkpoint cloned value failed invariant validation");
+        }
+        guard.release();
+        staged.object = decltype(staged.object)(
+            allocation.release(),
+            CheckpointObjectDeleter{&materializer.operations(),
+                                    layout.alignment_bytes});
+        destination = std::move(staged);
+        return {};
+    }
+
+    [[nodiscard]] SessionResult validate_checkpoint_value(
+        const CheckpointStoredValue& value,
+        const contracts::PlanImageSlot& slot,
+        const SessionObjectMaterializer& materializer,
+        SessionObjectRole role, std::uint32_t linked_entry_handle,
+        SessionError error) noexcept {
+        const auto layout = materializer.operations().layout();
+        if (value.slot_handle != slot.handle || value.role != role ||
+            value.linked_entry_handle != linked_entry_handle ||
+            value.codec_entry_handle != slot.codec_entry_handle ||
+            value.codec_entry_handle != layout.codec_entry_handle ||
+            value.size_bytes != slot.size_bytes ||
+            value.size_bytes != layout.size_bytes ||
+            value.alignment_bytes != slot.alignment_bytes ||
+            value.alignment_bytes != layout.alignment_bytes ||
+            value.layout_identity != slot.layout_id ||
+            value.layout_identity != layout.layout_identity ||
+            value.type_identity == nullptr ||
+            value.type_identity != layout.type_identity ||
+            value.object == nullptr || !value.invariant_valid ||
+            !materializer.operations().validate(value.object.get())) {
+            return failure(error, slot.handle,
+                           "checkpoint value identity or invariant mismatch");
+        }
+        return {};
+    }
+
+    [[nodiscard]] SessionResult validate_checkpoint_snapshot(
+        const SessionCheckpoint::Impl& checkpoint,
+        SessionError error) noexcept {
+        if (checkpoint.image.get() != image.get() ||
+            checkpoint.image_fingerprint != image->fingerprint() ||
+            !binding_matches_image(checkpoint.binding, *image) ||
+            checkpoint.identity.parent_run_id.empty() ||
+            checkpoint.identity.committed_tick < image->clock().initial_tick ||
+            checkpoint.identity.committed_tick > image->clock().terminal_tick ||
+            checkpoint.states.size() != image->state_blocks().size() ||
+            checkpoint.histories.size() !=
+                image->evaluator_histories().size()) {
+            return failure(error, 0U,
+                           "checkpoint Image, binding, boundary, or store shape mismatch");
+        }
+
+        for (std::size_t state_index = 0U;
+             state_index < checkpoint.states.size(); ++state_index) {
+            const auto& state_snapshot = checkpoint.states[state_index];
+            if (std::any_of(
+                    checkpoint.states.begin(),
+                    checkpoint.states.begin() +
+                        static_cast<std::ptrdiff_t>(state_index),
+                    [&state_snapshot](const auto& prior) {
+                        return prior.block_handle ==
+                               state_snapshot.block_handle;
+                    })) {
+                return failure(error, state_snapshot.block_handle,
+                               "checkpoint state block is duplicated");
+            }
+            const auto* block = find_handle(image->state_blocks(),
+                                            state_snapshot.block_handle);
+            const auto* binding =
+                block == nullptr ? nullptr : initial_for_state(*block);
+            const auto* slot =
+                block == nullptr
+                    ? nullptr
+                    : find_handle(image->slots(),
+                                  block->committed_slot_handle);
+            const auto* materializer =
+                binding == nullptr
+                    ? nullptr
+                    : provider->initial_state(binding->handle);
+            if (block == nullptr || binding == nullptr || slot == nullptr ||
+                materializer == nullptr ||
+                state_snapshot.committed_slot_handle !=
+                    block->committed_slot_handle ||
+                state_snapshot.candidate_slot_handle !=
+                    block->candidate_slot_handle ||
+                state_snapshot.initial_binding_handle != binding->handle ||
+                state_snapshot.committed_epoch !=
+                    checkpoint.identity.committed_epoch) {
+                return failure(error, state_snapshot.block_handle,
+                               "checkpoint state-block shape mismatch");
+            }
+            const auto result = validate_checkpoint_value(
+                state_snapshot.value, *slot, *materializer,
+                SessionObjectRole::CommittedState,
+                binding->builder_entry_handle, error);
+            if (!result) return result;
+        }
+
+        for (std::size_t history_index = 0U;
+             history_index < checkpoint.histories.size(); ++history_index) {
+            const auto& history_snapshot =
+                checkpoint.histories[history_index];
+            if (std::any_of(
+                    checkpoint.histories.begin(),
+                    checkpoint.histories.begin() +
+                        static_cast<std::ptrdiff_t>(history_index),
+                    [&history_snapshot](const auto& prior) {
+                        return prior.history_handle ==
+                               history_snapshot.history_handle;
+                    })) {
+                return failure(error, history_snapshot.history_handle,
+                               "checkpoint history store is duplicated");
+            }
+            const auto* plan = find_handle(image->evaluator_histories(),
+                                           history_snapshot.history_handle);
+            if (plan == nullptr ||
+                history_snapshot.history_depth != plan->history_depth ||
+                history_snapshot.samples.size() > plan->history_depth) {
+                return failure(error, history_snapshot.history_handle,
+                               "checkpoint history shape mismatch");
+            }
+            std::int64_t prior_tick =
+                (std::numeric_limits<std::int64_t>::min)();
+            for (const auto& sample : history_snapshot.samples) {
+                if (sample.members.size() !=
+                        plan->ordered_members.size() ||
+                    (prior_tick !=
+                         (std::numeric_limits<std::int64_t>::min)() &&
+                     (prior_tick ==
+                          (std::numeric_limits<std::int64_t>::max)() ||
+                      sample.tick != prior_tick + 1)) ||
+                    sample.committed_epoch >
+                        checkpoint.identity.committed_epoch) {
+                    return failure(error, plan->handle,
+                                   "checkpoint history sample shape mismatch");
+                }
+                prior_tick = sample.tick;
+                for (std::size_t index = 0U;
+                     index < sample.members.size(); ++index) {
+                    const auto* slot = find_handle(
+                        image->slots(),
+                        plan->ordered_members[index]
+                            .committed_state_slot_handle);
+                    const auto* materializer =
+                        slot == nullptr
+                            ? nullptr
+                            : committed_value_materializer(*slot);
+                    if (slot == nullptr || materializer == nullptr) {
+                        return failure(error, plan->handle,
+                                       "checkpoint history member is unavailable");
+                    }
+                    const auto result = validate_checkpoint_value(
+                        sample.members[index], *slot, *materializer,
+                        role_for_slot(*slot), 0U, error);
+                    if (!result) return result;
+                }
+            }
+        }
+
+        if (!checkpoint.sealed_boundary.outputs.empty() &&
+            (checkpoint.sealed_boundary.committed_epoch !=
+                 checkpoint.identity.committed_epoch ||
+             checkpoint.sealed_boundary.committed_tick !=
+                 checkpoint.identity.committed_tick)) {
+            return failure(error, 0U,
+                           "checkpoint sealed-boundary epoch mismatch");
+        }
+        if (!checkpoint.sealed_boundary.outputs.empty()) {
+            if (image->transactions().size() != 1U) {
+                return failure(error, 0U,
+                               "checkpoint sealed boundary lacks one transaction");
+            }
+            const auto* continue_branch =
+                contracts::find_transaction_branch(
+                    image->transactions().front(),
+                    contracts::TransactionBranch::Continue);
+            if (continue_branch == nullptr ||
+                continue_branch->sealed_output_slot_handles.size() !=
+                    checkpoint.sealed_boundary.outputs.size()) {
+                return failure(error, 0U,
+                               "checkpoint sealed boundary shape mismatch");
+            }
+            for (const auto handle :
+                 continue_branch->sealed_output_slot_handles) {
+                if (std::none_of(
+                        checkpoint.sealed_boundary.outputs.begin(),
+                        checkpoint.sealed_boundary.outputs.end(),
+                        [handle](const auto& output) {
+                            return output.slot_handle == handle;
+                        })) {
+                    return failure(
+                        error, handle,
+                        "checkpoint sealed boundary omits a committed output");
+                }
+            }
+        }
+        for (std::size_t index = 0U;
+             index < checkpoint.sealed_boundary.outputs.size(); ++index) {
+            const auto& output = checkpoint.sealed_boundary.outputs[index];
+            const auto* slot = find_handle(image->slots(),
+                                           output.slot_handle);
+            const auto* materializer =
+                slot == nullptr ? nullptr
+                                : committed_value_materializer(*slot);
+            if (slot == nullptr || materializer == nullptr ||
+                std::any_of(
+                    checkpoint.sealed_boundary.outputs.begin(),
+                    checkpoint.sealed_boundary.outputs.begin() +
+                        static_cast<std::ptrdiff_t>(index),
+                    [&output](const auto& prior) {
+                        return prior.slot_handle == output.slot_handle;
+                    })) {
+                return failure(error, output.slot_handle,
+                               "checkpoint sealed output shape mismatch");
+            }
+            const auto result = validate_checkpoint_value(
+                output, *slot, *materializer, role_for_slot(*slot), 0U,
+                error);
+            if (!result) return result;
+        }
         return {};
     }
 
@@ -3243,6 +3846,228 @@ struct Session::Impl final : SessionObjectAccess,
             history.samples.reserve(plan.history_depth);
             histories.push_back(std::move(history));
         }
+    }
+
+    [[nodiscard]] SessionResult stage_restore_states(
+        const SessionCheckpoint::Impl& checkpoint,
+        std::vector<ResetStateReplacement>& replacements) noexcept {
+        for (const auto& committed : committed_state_store.blocks) {
+            const auto snapshot = std::find_if(
+                checkpoint.states.begin(), checkpoint.states.end(),
+                [&committed](const auto& value) {
+                    return committed.block != nullptr &&
+                           value.block_handle == committed.block->handle;
+                });
+            auto* candidate =
+                committed.block == nullptr
+                    ? nullptr
+                    : candidate_for_slot(
+                          committed.block->candidate_slot_handle);
+            if (snapshot == checkpoint.states.end() ||
+                committed.block == nullptr || committed.materializer == nullptr ||
+                committed.address == nullptr || candidate == nullptr ||
+                candidate->materializer != committed.materializer ||
+                candidate->address == nullptr ||
+                snapshot->value.object == nullptr) {
+                return failure(SessionError::RestoreCloneFailed,
+                               committed.block == nullptr
+                                   ? 0U
+                                   : committed.block->handle,
+                               "restore state staging metadata is incomplete");
+            }
+            const auto& materializer = *committed.materializer;
+            const auto& operations = materializer.operations();
+            const auto layout = operations.layout();
+
+            RawBlock staged_committed(layout.size_bytes,
+                                      layout.alignment_bytes);
+            if (staged_committed.get() == nullptr) {
+                return failure(SessionError::AllocationFailure,
+                               committed.block->handle,
+                               "restore committed-state allocation failed");
+            }
+            if (!operations.copy_construct(snapshot->value.object.get(),
+                                           staged_committed.get())) {
+                return failure(SessionError::RestoreCloneFailed,
+                               committed.block->handle,
+                               "restore committed-state clone failed");
+            }
+            ConstructedObject committed_guard(staged_committed.get(),
+                                              operations);
+            if (!operations.validate(staged_committed.get())) {
+                return failure(SessionError::RestoreCloneFailed,
+                               committed.block->handle,
+                               "restore committed state failed invariant validation");
+            }
+
+            RawBlock staged_candidate(layout.size_bytes,
+                                      layout.alignment_bytes);
+            if (staged_candidate.get() == nullptr) {
+                return failure(SessionError::AllocationFailure,
+                               committed.block->handle,
+                               "restore candidate-state allocation failed");
+            }
+            if (!operations.copy_construct(snapshot->value.object.get(),
+                                           staged_candidate.get())) {
+                return failure(SessionError::RestoreCloneFailed,
+                               committed.block->handle,
+                               "restore candidate-state clone failed");
+            }
+            ConstructedObject candidate_guard(staged_candidate.get(),
+                                              operations);
+            if (!operations.validate(staged_candidate.get())) {
+                return failure(SessionError::RestoreCloneFailed,
+                               committed.block->handle,
+                               "restore candidate state failed invariant validation");
+            }
+
+            ResetStateReplacement replacement;
+            replacement.materializer = &materializer;
+            replacement.alignment = layout.alignment_bytes;
+            committed_guard.release();
+            candidate_guard.release();
+            replacement.committed_address = staged_committed.release();
+            replacement.candidate_address = staged_candidate.release();
+            replacements.push_back(std::move(replacement));
+        }
+        return {};
+    }
+
+    [[nodiscard]] SessionResult stage_restore_histories(
+        const SessionCheckpoint::Impl& checkpoint,
+        std::vector<EvaluatorHistoryStore>& histories) {
+        histories.reserve(image->evaluator_histories().size());
+        for (const auto& plan : image->evaluator_histories()) {
+            const auto snapshot = std::find_if(
+                checkpoint.histories.begin(), checkpoint.histories.end(),
+                [&plan](const auto& value) {
+                    return value.history_handle == plan.handle;
+                });
+            if (snapshot == checkpoint.histories.end()) {
+                return failure(SessionError::RestoreCloneFailed,
+                               plan.handle,
+                               "restore history snapshot is missing");
+            }
+            EvaluatorHistoryStore restored;
+            restored.plan = &plan;
+            restored.samples.reserve(plan.history_depth);
+            for (const auto& sample_snapshot : snapshot->samples) {
+                HistorySample sample;
+                sample.tick = sample_snapshot.tick;
+                sample.committed_epoch = sample_snapshot.committed_epoch;
+                sample.members.reserve(plan.ordered_members.size());
+                for (std::size_t index = 0U;
+                     index < sample_snapshot.members.size(); ++index) {
+                    const auto* slot = find_handle(
+                        image->slots(),
+                        plan.ordered_members[index]
+                            .committed_state_slot_handle);
+                    const auto* materializer =
+                        slot == nullptr
+                            ? nullptr
+                            : committed_value_materializer(*slot);
+                    if (slot == nullptr || materializer == nullptr) {
+                        return failure(SessionError::RestoreCloneFailed,
+                                       plan.handle,
+                                       "restore history materializer is unavailable");
+                    }
+                    const auto& value = sample_snapshot.members[index];
+                    StoredValue restored_value;
+                    const auto result = clone_stored_value(
+                        *slot, *materializer, value.object.get(),
+                        value.generation, value.sequence,
+                        value.sample_tick, value.sample_time_seconds,
+                        value.interval_start_seconds,
+                        value.interval_end_seconds, value.quality,
+                        restored_value, SessionError::RestoreCloneFailed,
+                        "restore history member clone failed");
+                    if (!result) return result;
+                    sample.members.push_back(std::move(restored_value));
+                }
+                restored.samples.push_back(std::move(sample));
+            }
+            histories.push_back(std::move(restored));
+        }
+        return {};
+    }
+
+    [[nodiscard]] SessionResult stage_restore_seal(
+        const SessionCheckpoint::Impl& checkpoint,
+        SealedBoundaryStore& seal) {
+        seal.committed_epoch =
+            checkpoint.sealed_boundary.committed_epoch;
+        seal.committed_tick = checkpoint.sealed_boundary.committed_tick;
+        seal.outputs.reserve(
+            checkpoint.sealed_boundary.outputs.size());
+        for (const auto& value : checkpoint.sealed_boundary.outputs) {
+            const auto* slot = find_handle(image->slots(),
+                                           value.slot_handle);
+            const auto* materializer =
+                slot == nullptr ? nullptr
+                                : committed_value_materializer(*slot);
+            if (slot == nullptr || materializer == nullptr) {
+                return failure(SessionError::RestoreCloneFailed,
+                               value.slot_handle,
+                               "restore sealed-output materializer is unavailable");
+            }
+            StoredValue restored;
+            const auto result = clone_stored_value(
+                *slot, *materializer, value.object.get(),
+                value.generation, value.sequence, value.sample_tick,
+                value.sample_time_seconds, value.interval_start_seconds,
+                value.interval_end_seconds, value.quality, restored,
+                SessionError::RestoreCloneFailed,
+                "restore sealed-output clone failed");
+            if (!result) return result;
+            seal.outputs.push_back(std::move(restored));
+        }
+        return {};
+    }
+
+    [[nodiscard]] SessionResult validate_restore_precommit(
+        const SessionCheckpoint::Impl& checkpoint,
+        const std::vector<ResetStateReplacement>& replacements,
+        const std::vector<EvaluatorHistoryStore>& histories,
+        const SealedBoundaryStore& seal) noexcept {
+        if (restore_precommit_failure || state != SessionState::Created ||
+            cycle_frame.open || active_transaction_handle != 0U ||
+            !cycle_frame.construction_order.empty() || has_committed_run ||
+            committed_run_id.has_value() ||
+            committed_run_binding.has_value() ||
+            current_run_outcome == nullptr || resources_disposed ||
+            !image->command_routes().empty() ||
+            !image->event_deliveries().empty() ||
+            committed_state_store.blocks.size() !=
+                image->state_blocks().size() ||
+            candidate_state_store.blocks.size() !=
+                committed_state_store.blocks.size() ||
+            replacements.size() != committed_state_store.blocks.size() ||
+            histories.size() != image->evaluator_histories().size() ||
+            seal.outputs.size() !=
+                checkpoint.sealed_boundary.outputs.size()) {
+            return failure(SessionError::RestorePrecommitFailed, 0U,
+                           "restore final precommit shape is invalid");
+        }
+        const auto checkpoint_result = validate_checkpoint_snapshot(
+            checkpoint, SessionError::RestoreCompatibilityMismatch);
+        if (!checkpoint_result) return checkpoint_result;
+        for (std::size_t index = 0U; index < replacements.size(); ++index) {
+            const auto& replacement = replacements[index];
+            const auto& committed = committed_state_store.blocks[index];
+            if (replacement.materializer == nullptr ||
+                replacement.materializer != committed.materializer ||
+                replacement.committed_address == nullptr ||
+                replacement.candidate_address == nullptr ||
+                !replacement.materializer->operations()
+                     .supports_nofail_swap()) {
+                return failure(SessionError::RestorePrecommitFailed,
+                               committed.block == nullptr
+                                   ? 0U
+                                   : committed.block->handle,
+                               "restore state lacks a no-fail commit operation");
+            }
+        }
+        return {};
     }
 
     [[nodiscard]] SessionResult validate_reset_precommit(
@@ -5253,6 +6078,24 @@ const ResetOutcome& Session::last_reset_outcome() const noexcept {
     return implementation_->reset_outcome;
 }
 
+const CheckpointOutcome& Session::last_checkpoint_outcome() const noexcept {
+    return implementation_->checkpoint_outcome;
+}
+
+const RestoreOutcome& Session::last_restore_outcome() const noexcept {
+    return implementation_->restore_outcome;
+}
+
+const RestoreLineage* Session::restore_lineage() const noexcept {
+    return implementation_->restore_lineage.has_value()
+               ? &*implementation_->restore_lineage
+               : nullptr;
+}
+
+const SessionCheckpoint* Session::last_restore_checkpoint() const noexcept {
+    return implementation_->restore_checkpoint.get();
+}
+
 const StepOutcome& Session::last_step_outcome() const noexcept {
     return implementation_->step_outcome;
 }
@@ -5472,6 +6315,509 @@ InitializationOutcome Session::initialize(
             "Session initialization failed unexpectedly");
         return impl.fail_initialization(
             result, impl.current_diagnostic_stage);
+    }
+}
+
+CheckpointOutcome Session::checkpoint() noexcept {
+    auto& impl = *implementation_;
+    if (!impl.image->command_routes().empty() ||
+        !impl.image->event_deliveries().empty()) {
+        return impl.fail_checkpoint(
+            impl.failure(
+                SessionError::UnsupportedCheckpointCapability, 0U,
+                "checkpoint does not support command/event Images"),
+            RuntimeDiagnosticStage::CheckpointBarrier, false);
+    }
+    if (impl.state != SessionState::Initialized ||
+        !impl.committed_run_id.has_value() ||
+        !impl.committed_run_binding.has_value() ||
+        !impl.has_committed_run) {
+        return impl.fail_checkpoint(
+            impl.failure(
+                SessionError::CheckpointBarrierUnavailable, 0U,
+                "checkpoint requires an Initialized committed run"),
+            RuntimeDiagnosticStage::CheckpointBarrier, false);
+    }
+    if (impl.cycle_frame.open || impl.active_transaction_handle != 0U ||
+        !impl.cycle_frame.construction_order.empty() ||
+        impl.command_stage.active) {
+        return impl.fail_checkpoint(
+            impl.failure(
+                SessionError::CheckpointBarrierUnavailable,
+                impl.active_transaction_handle,
+                "checkpoint requires a closed committed boundary"),
+            RuntimeDiagnosticStage::CheckpointBarrier, false);
+    }
+    if (!binding_matches_image(*impl.committed_run_binding, *impl.image)) {
+        return impl.fail_checkpoint(
+            impl.failure(
+                SessionError::CheckpointValidationFailed, 0U,
+                "checkpoint source run binding no longer matches the Image"),
+            RuntimeDiagnosticStage::CheckpointValidation, true);
+    }
+
+    const auto injected_fault =
+        std::exchange(impl.checkpoint_clone_fault, std::uint8_t{0U});
+    impl.current_diagnostic_stage = RuntimeDiagnosticStage::CheckpointClone;
+    try {
+        auto snapshot = std::make_shared<SessionCheckpoint::Impl>();
+        snapshot->image = impl.image;
+        snapshot->provider = impl.provider;
+        snapshot->image_fingerprint = impl.image->fingerprint();
+        snapshot->binding = *impl.committed_run_binding;
+        snapshot->identity = {
+            *impl.committed_run_id, impl.committed_run_sequence,
+            impl.committed_epoch, impl.committed_tick,
+            impl.committed_step_count};
+        snapshot->frame_generation = impl.cycle_frame.generation;
+        snapshot->frame_sequence = impl.cycle_frame.sequence;
+        snapshot->states.reserve(
+            impl.committed_state_store.blocks.size());
+        snapshot->histories.reserve(impl.evaluator_histories.size());
+        snapshot->sealed_boundary.outputs.reserve(
+            impl.sealed_boundary.outputs.size());
+
+        for (std::size_t index = 0U;
+             index < impl.committed_state_store.blocks.size(); ++index) {
+            const auto& committed =
+                impl.committed_state_store.blocks[index];
+            if (injected_fault == 1U && index == 0U) {
+                return impl.fail_checkpoint(
+                    impl.failure(
+                        SessionError::CheckpointCloneFailed,
+                        committed.block == nullptr
+                            ? 0U
+                            : committed.block->handle,
+                        "qualification checkpoint state clone failure"),
+                    RuntimeDiagnosticStage::CheckpointClone, true);
+            }
+            if (committed.block == nullptr || committed.initial == nullptr ||
+                committed.materializer == nullptr ||
+                committed.address == nullptr) {
+                return impl.fail_checkpoint(
+                    impl.failure(
+                        SessionError::CheckpointCloneFailed, 0U,
+                        "checkpoint committed state metadata is incomplete"),
+                    RuntimeDiagnosticStage::CheckpointClone, true);
+            }
+            const auto* slot = find_handle(
+                impl.image->slots(),
+                committed.block->committed_slot_handle);
+            if (slot == nullptr) {
+                return impl.fail_checkpoint(
+                    impl.failure(
+                        SessionError::CheckpointCloneFailed,
+                        committed.block->handle,
+                        "checkpoint committed state slot is unavailable"),
+                    RuntimeDiagnosticStage::CheckpointClone, true);
+            }
+            CheckpointStateBlock state_snapshot;
+            state_snapshot.block_handle = committed.block->handle;
+            state_snapshot.committed_slot_handle =
+                committed.block->committed_slot_handle;
+            state_snapshot.candidate_slot_handle =
+                committed.block->candidate_slot_handle;
+            state_snapshot.initial_binding_handle =
+                committed.initial->handle;
+            state_snapshot.committed_epoch = committed.committed_epoch;
+            auto result = impl.clone_checkpoint_value(
+                *slot, *committed.materializer, committed.address,
+                SessionObjectRole::CommittedState,
+                committed.initial->builder_entry_handle,
+                impl.cycle_frame.generation, 0U, impl.committed_tick,
+                impl.image->clock().base_step_seconds *
+                    static_cast<double>(impl.committed_tick),
+                0.0, 0.0, contracts::DataQuality::Valid,
+                state_snapshot.value);
+            if (!result) {
+                return impl.fail_checkpoint(
+                    impl.last_result,
+                    RuntimeDiagnosticStage::CheckpointClone, true);
+            }
+            snapshot->states.push_back(std::move(state_snapshot));
+        }
+
+        for (std::size_t history_index = 0U;
+             history_index < impl.evaluator_histories.size();
+             ++history_index) {
+            const auto& history = impl.evaluator_histories[history_index];
+            if (injected_fault == 2U && history_index == 0U) {
+                return impl.fail_checkpoint(
+                    impl.failure(
+                        SessionError::CheckpointCloneFailed,
+                        history.plan == nullptr ? 0U
+                                                : history.plan->handle,
+                        "qualification checkpoint history clone failure"),
+                    RuntimeDiagnosticStage::CheckpointClone, true);
+            }
+            if (history.plan == nullptr) {
+                return impl.fail_checkpoint(
+                    impl.failure(
+                        SessionError::CheckpointCloneFailed, 0U,
+                        "checkpoint history metadata is incomplete"),
+                    RuntimeDiagnosticStage::CheckpointClone, true);
+            }
+            CheckpointHistoryStore history_snapshot;
+            history_snapshot.history_handle = history.plan->handle;
+            history_snapshot.history_depth = history.plan->history_depth;
+            history_snapshot.samples.reserve(history.samples.size());
+            for (const auto& sample : history.samples) {
+                CheckpointHistorySample sample_snapshot;
+                sample_snapshot.tick = sample.tick;
+                sample_snapshot.committed_epoch = sample.committed_epoch;
+                sample_snapshot.members.reserve(sample.members.size());
+                for (const auto& member : sample.members) {
+                    if (member.slot == nullptr ||
+                        member.materializer == nullptr ||
+                        member.address == nullptr) {
+                        return impl.fail_checkpoint(
+                            impl.failure(
+                                SessionError::CheckpointCloneFailed,
+                                history.plan->handle,
+                                "checkpoint history member metadata is incomplete"),
+                            RuntimeDiagnosticStage::CheckpointClone, true);
+                    }
+                    CheckpointStoredValue member_snapshot;
+                    const auto result = impl.clone_checkpoint_value(
+                        *member.slot, *member.materializer,
+                        member.address, role_for_slot(*member.slot), 0U,
+                        member.generation, member.sequence,
+                        member.sample_tick, member.sample_time_seconds,
+                        member.interval_start_seconds,
+                        member.interval_end_seconds, member.quality,
+                        member_snapshot);
+                    if (!result) {
+                        return impl.fail_checkpoint(
+                            impl.last_result,
+                            RuntimeDiagnosticStage::CheckpointClone, true);
+                    }
+                    sample_snapshot.members.push_back(
+                        std::move(member_snapshot));
+                }
+                history_snapshot.samples.push_back(
+                    std::move(sample_snapshot));
+            }
+            snapshot->histories.push_back(std::move(history_snapshot));
+        }
+
+        snapshot->sealed_boundary.committed_epoch =
+            impl.sealed_boundary.committed_epoch;
+        snapshot->sealed_boundary.committed_tick =
+            impl.sealed_boundary.committed_tick;
+        for (std::size_t index = 0U;
+             index < impl.sealed_boundary.outputs.size(); ++index) {
+            const auto& output = impl.sealed_boundary.outputs[index];
+            if (injected_fault == 3U && index == 0U) {
+                return impl.fail_checkpoint(
+                    impl.failure(
+                        SessionError::CheckpointCloneFailed,
+                        output.slot == nullptr ? 0U
+                                               : output.slot->handle,
+                        "qualification checkpoint seal clone failure"),
+                    RuntimeDiagnosticStage::CheckpointClone, true);
+            }
+            if (output.slot == nullptr || output.materializer == nullptr ||
+                output.address == nullptr) {
+                return impl.fail_checkpoint(
+                    impl.failure(
+                        SessionError::CheckpointCloneFailed, 0U,
+                        "checkpoint sealed output metadata is incomplete"),
+                    RuntimeDiagnosticStage::CheckpointClone, true);
+            }
+            CheckpointStoredValue output_snapshot;
+            const auto result = impl.clone_checkpoint_value(
+                *output.slot, *output.materializer, output.address,
+                role_for_slot(*output.slot), 0U, output.generation,
+                output.sequence, output.sample_tick,
+                output.sample_time_seconds,
+                output.interval_start_seconds,
+                output.interval_end_seconds, output.quality,
+                output_snapshot);
+            if (!result) {
+                return impl.fail_checkpoint(
+                    impl.last_result,
+                    RuntimeDiagnosticStage::CheckpointClone, true);
+            }
+            snapshot->sealed_boundary.outputs.push_back(
+                std::move(output_snapshot));
+        }
+
+        impl.current_diagnostic_stage =
+            RuntimeDiagnosticStage::CheckpointValidation;
+        const auto validation = impl.validate_checkpoint_snapshot(
+            *snapshot, SessionError::CheckpointValidationFailed);
+        if (!validation) {
+            return impl.fail_checkpoint(
+                impl.last_result,
+                RuntimeDiagnosticStage::CheckpointValidation, true);
+        }
+
+        std::shared_ptr<const SessionCheckpoint> published(
+            new SessionCheckpoint(std::move(snapshot)));
+        impl.checkpoint_outcome = {};
+        impl.checkpoint_outcome.status = CheckpointStatus::Captured;
+        impl.checkpoint_outcome.result = {};
+        impl.checkpoint_outcome.identity = published->identity();
+        impl.checkpoint_outcome.checkpoint = std::move(published);
+        impl.checkpoint_outcome.barrier_satisfied = true;
+        impl.checkpoint_outcome.checkpoint_commit = true;
+        impl.last_result = {};
+        impl.current_diagnostic_stage = RuntimeDiagnosticStage::Lifecycle;
+        return impl.checkpoint_outcome;
+    } catch (const std::bad_alloc&) {
+        return impl.fail_checkpoint(
+            impl.failure(SessionError::AllocationFailure, 0U,
+                         "checkpoint staging allocation failed"),
+            impl.current_diagnostic_stage, true);
+    } catch (...) {
+        return impl.fail_checkpoint(
+            impl.failure(SessionError::InternalFailure, 0U,
+                         "checkpoint staging failed unexpectedly"),
+            impl.current_diagnostic_stage, true);
+    }
+}
+
+RestoreOutcome Session::restore(RestoreRequest request) noexcept {
+    auto& impl = *implementation_;
+    if (!impl.image->command_routes().empty() ||
+        !impl.image->event_deliveries().empty()) {
+        return impl.reject_restore_unsupported(std::move(request));
+    }
+    if (impl.state != SessionState::Created) {
+        const auto cause = impl.failure(
+            SessionError::InvalidLifecycleTransition, 0U,
+            "restore requires a Created Session");
+        auto diagnostic = impl.make_diagnostic(
+            cause, RuntimeDiagnosticStage::Lifecycle,
+            impl.run_outcome_frozen && impl.current_run_outcome != nullptr
+                ? impl.current_run_outcome->validity
+                : contracts::EvidenceValidity::Unknown);
+        diagnostic.run_id = request.run_id;
+        impl.restore_outcome = {};
+        impl.restore_outcome.status = RestoreStatus::Failed;
+        impl.restore_outcome.result = cause;
+        impl.restore_outcome.run_id = request.run_id;
+        impl.restore_outcome.binding_matched =
+            binding_matches_image(request.binding, *impl.image);
+        impl.restore_outcome.committed_epoch = impl.committed_epoch;
+        impl.restore_outcome.committed_tick = impl.committed_tick;
+        impl.restore_outcome.primary_diagnostic = diagnostic;
+        return impl.restore_outcome;
+    }
+
+    impl.pending_restore_attempt.emplace(std::move(request));
+    impl.restore_checkpoint = impl.pending_restore_attempt->checkpoint;
+    const bool binding_matched = binding_matches_image(
+        impl.pending_restore_attempt->binding, *impl.image);
+    if (impl.pending_restore_attempt->run_id.empty()) {
+        return impl.fail_restore(
+            impl.failure(SessionError::RestoreRequestInvalid, 0U,
+                         "restore requires a non-empty child RunId"),
+            RuntimeDiagnosticStage::RestoreRequest, binding_matched, false);
+    }
+    if (impl.pending_restore_attempt->checkpoint == nullptr ||
+        impl.pending_restore_attempt->checkpoint->implementation_ == nullptr) {
+        return impl.fail_restore(
+            impl.failure(SessionError::RestoreRequestInvalid, 0U,
+                         "restore requires an immutable checkpoint"),
+            RuntimeDiagnosticStage::RestoreRequest, binding_matched, false);
+    }
+    const auto& checkpoint =
+        *impl.pending_restore_attempt->checkpoint->implementation_;
+    if (impl.pending_restore_attempt->run_id ==
+        checkpoint.identity.parent_run_id) {
+        return impl.fail_restore(
+            impl.failure(SessionError::RestoreRequestInvalid, 0U,
+                         "restore child RunId duplicates the parent RunId"),
+            RuntimeDiagnosticStage::RestoreRequest, binding_matched, false);
+    }
+    const bool checkpoint_matched =
+        checkpoint.image.get() == impl.image.get() &&
+        checkpoint.image_fingerprint == impl.image->fingerprint() &&
+        checkpoint.binding == impl.pending_restore_attempt->binding &&
+        binding_matched;
+    if (!checkpoint_matched) {
+        return impl.fail_restore(
+            impl.failure(
+                SessionError::RestoreCompatibilityMismatch, 0U,
+                "restore Image, RunBinding, or implementation lock mismatch"),
+            RuntimeDiagnosticStage::RestoreRequest, binding_matched, false);
+    }
+
+    impl.current_diagnostic_stage = RuntimeDiagnosticStage::RestoreRequest;
+    auto result = impl.validate_checkpoint_snapshot(
+        checkpoint, SessionError::RestoreCompatibilityMismatch);
+    if (!result) {
+        return impl.fail_restore(impl.last_result,
+                                 RuntimeDiagnosticStage::RestoreRequest,
+                                 binding_matched, true);
+    }
+
+    try {
+        impl.current_diagnostic_stage =
+            RuntimeDiagnosticStage::RestoreMaterialization;
+        result = impl.validate_image();
+        if (result) {
+            impl.reserve_tracking();
+            result = impl.allocate_arenas();
+        }
+        if (result) {
+            for (const auto handle :
+                 impl.image->lifecycle().preparation_handles) {
+                const auto* preparation = find_handle(
+                    impl.image->preparations(), handle);
+                const auto* materializer = impl.provider->preparation(handle);
+                const Impl::ScopedObjectAccess no_dependencies(impl,
+                                                               nullptr);
+                result = impl.construct_owned(
+                    handle, *materializer, no_dependencies,
+                    impl.preparations, SessionObjectRole::PreparedModel,
+                    preparation->prepare_entry_handle,
+                    SessionError::PreparationFailed);
+                if (!result) break;
+            }
+        }
+        if (result) {
+            for (const auto handle :
+                 impl.image->lifecycle().runtime_component_handles) {
+                const auto* component = find_handle(
+                    impl.image->runtime_components(), handle);
+                const auto* materializer =
+                    impl.provider->runtime_component(handle);
+                result = impl.validate_runtime_dependencies(*materializer,
+                                                            handle);
+                if (result) {
+                    const Impl::ScopedObjectAccess dependencies(
+                        impl, &component->preparation_handles);
+                    result = impl.construct_owned(
+                        handle, *materializer, dependencies,
+                        impl.runtime_bindings.cells,
+                        SessionObjectRole::RuntimeCell,
+                        component->runtime_cell_factory_entry_handle,
+                        SessionError::RuntimeCellFailed);
+                }
+                if (!result) break;
+            }
+        }
+        if (result) result = impl.prepare_frame_slots();
+        if (result) result = impl.construct_states();
+        if (result) result = impl.prepare_evaluator_histories();
+        if (!result) {
+            return impl.fail_restore(
+                impl.last_result,
+                RuntimeDiagnosticStage::RestoreMaterialization,
+                binding_matched, true);
+        }
+
+        impl.current_diagnostic_stage = RuntimeDiagnosticStage::RestoreState;
+        std::vector<Impl::ResetStateReplacement> replacements;
+        replacements.reserve(impl.committed_state_store.blocks.size());
+        result = impl.stage_restore_states(checkpoint, replacements);
+        if (!result) {
+            return impl.fail_restore(impl.last_result,
+                                     RuntimeDiagnosticStage::RestoreState,
+                                     binding_matched, true);
+        }
+        std::vector<Impl::EvaluatorHistoryStore> histories;
+        result = impl.stage_restore_histories(checkpoint, histories);
+        if (!result) {
+            return impl.fail_restore(impl.last_result,
+                                     RuntimeDiagnosticStage::RestoreState,
+                                     binding_matched, true);
+        }
+        Impl::SealedBoundaryStore seal;
+        result = impl.stage_restore_seal(checkpoint, seal);
+        if (!result) {
+            return impl.fail_restore(impl.last_result,
+                                     RuntimeDiagnosticStage::RestoreState,
+                                     binding_matched, true);
+        }
+
+        RunId child_run_id = impl.pending_restore_attempt->run_id;
+        RunBinding child_binding =
+            std::move(impl.pending_restore_attempt->binding);
+        RestoreLineage lineage{
+            checkpoint.identity.parent_run_id,
+            checkpoint.identity.parent_run_sequence,
+            checkpoint.identity};
+
+        impl.current_diagnostic_stage =
+            RuntimeDiagnosticStage::RestorePrecommit;
+        result = impl.validate_restore_precommit(
+            checkpoint, replacements, histories, seal);
+        if (!result) {
+            return impl.fail_restore(impl.last_result,
+                                     impl.current_diagnostic_stage,
+                                     binding_matched, true);
+        }
+
+        for (std::size_t index = 0U; index < replacements.size(); ++index) {
+            auto& replacement = replacements[index];
+            auto& committed = impl.committed_state_store.blocks[index];
+            auto* candidate = impl.candidate_for_slot(
+                committed.block->candidate_slot_handle);
+            replacement.materializer->operations().nofail_swap(
+                committed.address, replacement.committed_address);
+            replacement.materializer->operations().nofail_swap(
+                candidate->address, replacement.candidate_address);
+        }
+        impl.evaluator_histories.swap(histories);
+        impl.sealed_boundary.outputs.swap(seal.outputs);
+        impl.sealed_boundary.committed_epoch = seal.committed_epoch;
+        impl.sealed_boundary.committed_tick = seal.committed_tick;
+        impl.clear_run_journals_noexcept();
+        impl.cycle_frame.generation = checkpoint.frame_generation;
+        impl.cycle_frame.sequence = checkpoint.frame_sequence;
+        impl.committed_epoch = checkpoint.identity.committed_epoch;
+        impl.committed_tick = checkpoint.identity.committed_tick;
+        impl.committed_step_count =
+            checkpoint.identity.committed_step_count;
+        for (auto& committed : impl.committed_state_store.blocks) {
+            committed.committed_epoch = impl.committed_epoch;
+        }
+        for (auto& candidate : impl.candidate_state_store.blocks) {
+            candidate.committed_epoch = impl.committed_epoch;
+        }
+        impl.committed_run_id.emplace(std::move(child_run_id));
+        impl.committed_run_binding.emplace(std::move(child_binding));
+        impl.committed_run_sequence = 0U;
+        impl.has_committed_run = true;
+        impl.restore_lineage.emplace(std::move(lineage));
+        impl.restore_checkpoint =
+            impl.pending_restore_attempt->checkpoint;
+        impl.clear_command_control();
+        impl.run_outcome_frozen = false;
+        impl.state = SessionState::Initialized;
+        impl.prepare_run_start(
+            *impl.current_run_outcome, *impl.committed_run_id, 0U,
+            RunStartKind::RestoreBranch, true, impl.committed_epoch);
+        impl.current_run_outcome->initial_tick = impl.committed_tick;
+        impl.current_run_outcome->final_tick = impl.committed_tick;
+        impl.publish_cancellation_run_start(*impl.committed_run_id);
+        impl.last_result = {};
+        impl.current_diagnostic_stage = RuntimeDiagnosticStage::Lifecycle;
+
+        impl.restore_outcome = {};
+        impl.restore_outcome.status = RestoreStatus::Committed;
+        impl.restore_outcome.result = {};
+        impl.restore_outcome.run_id = *impl.committed_run_id;
+        impl.restore_outcome.binding_matched = true;
+        impl.restore_outcome.checkpoint_matched = true;
+        impl.restore_outcome.restore_commit = true;
+        impl.restore_outcome.committed_epoch = impl.committed_epoch;
+        impl.restore_outcome.committed_tick = impl.committed_tick;
+        impl.pending_restore_attempt.reset();
+        return impl.restore_outcome;
+    } catch (const std::bad_alloc&) {
+        return impl.fail_restore(
+            impl.failure(SessionError::AllocationFailure, 0U,
+                         "restore staging allocation failed"),
+            impl.current_diagnostic_stage, binding_matched, true);
+    } catch (...) {
+        return impl.fail_restore(
+            impl.failure(SessionError::InternalFailure, 0U,
+                         "restore staging failed unexpectedly"),
+            impl.current_diagnostic_stage, binding_matched, true);
     }
 }
 
@@ -6470,6 +7816,51 @@ SessionResult Session::qualification_read_committed_output(
     return {};
 }
 
+SessionResult Session::qualification_read_history_member(
+    std::uint32_t history_handle, std::size_t sample_index,
+    std::size_t member_index, std::int64_t& sample_tick,
+    std::uint64_t& committed_epoch,
+    SessionObjectIdentityView& result) const noexcept {
+    result = {};
+    sample_tick = 0;
+    committed_epoch = 0U;
+    if (!has_materialized_storage(state())) {
+        return {SessionError::InvalidLifecycleTransition, history_handle,
+                "history inspection requires a materialized Session"};
+    }
+    const auto* history = implementation_->history_store(
+        implementation_->evaluator_histories, history_handle);
+    if (history == nullptr || history->plan == nullptr ||
+        sample_index >= history->samples.size()) {
+        return {SessionError::InvalidImageHandle, history_handle,
+                "history sample is unavailable"};
+    }
+    const auto& sample = history->samples[sample_index];
+    if (member_index >= sample.members.size()) {
+        return {SessionError::InvalidImageHandle, history_handle,
+                "history member is unavailable"};
+    }
+    const auto& member = sample.members[member_index];
+    if (member.slot == nullptr || member.materializer == nullptr ||
+        member.address == nullptr ||
+        !member.materializer->operations().validate(member.address)) {
+        return {SessionError::HistoryValidationFailed, history_handle,
+                "history member failed typed validation"};
+    }
+    const auto layout = member.materializer->operations().layout();
+    sample_tick = sample.tick;
+    committed_epoch = sample.committed_epoch;
+    result = {member.address,
+              layout.size_bytes,
+              layout.alignment_bytes,
+              layout.type_identity,
+              role_for_slot(*member.slot),
+              member.slot->handle,
+              0U,
+              member.slot->codec_entry_handle};
+    return {};
+}
+
 SessionResult Session::qualification_replace_candidate(
     std::uint32_t state_block_handle,
     InProcessValueView value) noexcept {
@@ -6528,6 +7919,35 @@ bool Session::frame_open() const noexcept {
 std::size_t Session::qualification_command_queue_storage_count()
     const noexcept {
     return implementation_->command_queue.size();
+}
+
+void Session::qualification_set_checkpoint_clone_fault(
+    std::uint8_t fault) noexcept {
+    implementation_->checkpoint_clone_fault = fault;
+}
+
+CheckpointOutcome Session::qualification_checkpoint_with_barrier(
+    std::uint8_t barrier) noexcept {
+    auto& impl = *implementation_;
+    const auto frame_open = impl.cycle_frame.open;
+    const auto transaction_handle = impl.active_transaction_handle;
+    if (barrier == 1U) {
+        impl.cycle_frame.open = true;
+    } else if (barrier == 2U) {
+        impl.active_transaction_handle =
+            impl.image->transactions().empty()
+                ? 1U
+                : impl.image->transactions().front().handle;
+    }
+    const auto outcome = checkpoint();
+    impl.cycle_frame.open = frame_open;
+    impl.active_transaction_handle = transaction_handle;
+    return outcome;
+}
+
+void Session::qualification_set_restore_precommit_failure(
+    bool fail) noexcept {
+    implementation_->restore_precommit_failure = fail;
 }
 
 std::uint64_t Session::command_ledger_sequence() const noexcept {

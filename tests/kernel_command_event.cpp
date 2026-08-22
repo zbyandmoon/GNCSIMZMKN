@@ -39,6 +39,13 @@ void disarm() noexcept { fail_after = -1; }
     return false;
 }
 
+#if defined(__GNUC__)
+__attribute__((noinline))
+#endif
+void release(void* address) noexcept {
+    std::free(address);
+}
+
 } // namespace command_allocation_fault
 
 void* operator new(std::size_t size) {
@@ -53,13 +60,17 @@ void* operator new(std::size_t size) {
 
 void* operator new[](std::size_t size) { return ::operator new(size); }
 
-void operator delete(void* address) noexcept { std::free(address); }
-void operator delete[](void* address) noexcept { std::free(address); }
+void operator delete(void* address) noexcept {
+    command_allocation_fault::release(address);
+}
+void operator delete[](void* address) noexcept {
+    command_allocation_fault::release(address);
+}
 void operator delete(void* address, std::size_t) noexcept {
-    std::free(address);
+    command_allocation_fault::release(address);
 }
 void operator delete[](void* address, std::size_t) noexcept {
-    std::free(address);
+    command_allocation_fault::release(address);
 }
 
 namespace {
@@ -2072,6 +2083,80 @@ void verify_reset_isolation_and_dispose(
             "dispose retained Session-owned runtime or command/event objects");
 }
 
+void verify_checkpoint_restore_unsupported(
+    const contracts::ExecutionPlanImage& image) {
+    auto source = initialize_session(image, "run.checkpoint-unsupported");
+    const auto state_before = committed_mode(source);
+    const auto ledger_before = source.session->command_ledger_sequence();
+    const auto checkpoint = source.session->checkpoint();
+    require(!checkpoint &&
+                checkpoint.result.error ==
+                    kernel::SessionError::UnsupportedCheckpointCapability &&
+                !checkpoint.barrier_satisfied &&
+                !checkpoint.checkpoint_commit &&
+                checkpoint.checkpoint == nullptr &&
+                checkpoint.primary_diagnostic.has_value() &&
+                checkpoint.primary_diagnostic->code ==
+                    kernel::RuntimeDiagnosticCode::CheckpointUnsupported &&
+                checkpoint.primary_diagnostic->stage ==
+                    kernel::RuntimeDiagnosticStage::CheckpointBarrier &&
+                source.session->state() ==
+                    kernel::SessionState::Initialized &&
+                source.session->active_run_id() != nullptr &&
+                source.session->active_run_id()->value() ==
+                    "run.checkpoint-unsupported" &&
+                source.session->committed_epoch() == 0U &&
+                source.session->committed_tick() == 0 &&
+                source.session->committed_step_count() == 0U &&
+                source.session->command_ledger_sequence() == ledger_before &&
+                source.session->pending_command_count() == 0U &&
+                source.session->command_submission_outcomes().empty() &&
+                source.session->command_maintenance_receipts().empty() &&
+                source.session->command_application_receipts().empty() &&
+                source.session->committed_events().empty() &&
+                source.session->run_outcome() == nullptr &&
+                committed_mode(source).mode == state_before.mode &&
+                committed_mode(source).revision == state_before.revision,
+            "command/event checkpoint request changed the source Session");
+
+    auto provider = std::make_shared<ModeOwnerProvider>(*source.image);
+    auto created = kernel::create_session(source.image, provider);
+    require(static_cast<bool>(created),
+            "unsupported restore target Session creation failed");
+    const auto restore = created.session->restore(
+        {kernel::RunId("run.restore-unsupported"),
+         kernel::exact_run_binding(*source.image), nullptr});
+    require(!restore &&
+                restore.result.error ==
+                    kernel::SessionError::UnsupportedCheckpointCapability &&
+                !restore.restore_commit &&
+                restore.primary_diagnostic.has_value() &&
+                restore.primary_diagnostic->code ==
+                    kernel::RuntimeDiagnosticCode::CheckpointUnsupported &&
+                restore.primary_diagnostic->stage ==
+                    kernel::RuntimeDiagnosticStage::RestoreRequest &&
+                created.session->state() == kernel::SessionState::Created &&
+                created.session->active_run_id() == nullptr &&
+                created.session->active_run_binding() == nullptr &&
+                !created.session->run_sequence().has_value() &&
+                created.session->run_outcome() == nullptr &&
+                created.session->restore_lineage() == nullptr &&
+                created.session->last_restore_checkpoint() == nullptr &&
+                created.session->committed_epoch() == 0U &&
+                created.session->committed_tick() == 0 &&
+                created.session->committed_step_count() == 0U &&
+                created.session->preparation_count() == 0U &&
+                created.session->runtime_cell_count() == 0U &&
+                created.session->committed_state_count() == 0U &&
+                created.session->command_ledger_sequence() == 0U &&
+                created.session->pending_command_count() == 0U &&
+                created.session->command_submission_outcomes().empty() &&
+                created.session->command_maintenance_receipts().empty() &&
+                created.session->command_application_receipts().empty() &&
+                created.session->committed_events().empty(),
+            "command/event restore request changed the Created target Session");
+}
+
 std::size_t run_self_check() {
     const auto resettable = compile_fixture(true);
     const auto non_resettable = compile_fixture(false);
@@ -2086,7 +2171,8 @@ std::size_t run_self_check() {
     verify_step_allocation_failure_is_structured(resettable.image);
     verify_cancellation_boundaries(resettable.image);
     verify_reset_isolation_and_dispose(resettable, non_resettable);
-    return 10U;
+    verify_checkpoint_restore_unsupported(resettable.image);
+    return 11U;
 }
 
 } // namespace

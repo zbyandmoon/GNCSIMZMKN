@@ -4,6 +4,27 @@
 
 namespace gnc::kernel::qualification {
 
+enum class CheckpointCloneFault : std::uint8_t {
+    None = 0U,
+    State = 1U,
+    History = 2U,
+    Seal = 3U,
+};
+
+enum class CheckpointBarrierFault : std::uint8_t {
+    OpenFrame = 1U,
+    ActiveTransaction = 2U,
+};
+
+enum class CheckpointMutation : std::uint8_t {
+    ImageFingerprint = 1U,
+    RunBinding = 2U,
+    StateLayout = 3U,
+    StateCodec = 4U,
+    StateType = 5U,
+    StateInvariant = 6U,
+};
+
 // This friend is compiled only by qualification probes. Product callers have
 // no Session API that can obtain or replace candidate-state object storage.
 class SessionAccess final {
@@ -41,9 +62,44 @@ class SessionAccess final {
                                                            result);
     }
 
+    [[nodiscard]] static SessionResult read_history_member(
+        const Session& session, std::uint32_t history_handle,
+        std::size_t sample_index, std::size_t member_index,
+        std::int64_t& sample_tick, std::uint64_t& committed_epoch,
+        SessionObjectIdentityView& result) noexcept {
+        return session.qualification_read_history_member(
+            history_handle, sample_index, member_index, sample_tick,
+            committed_epoch, result);
+    }
+
     [[nodiscard]] static std::size_t command_queue_storage_count(
         const Session& session) noexcept {
         return session.qualification_command_queue_storage_count();
+    }
+
+    static void fail_next_checkpoint_clone(
+        Session& session, CheckpointCloneFault fault) noexcept {
+        session.qualification_set_checkpoint_clone_fault(
+            static_cast<std::uint8_t>(fault));
+    }
+
+    [[nodiscard]] static CheckpointOutcome checkpoint_with_barrier(
+        Session& session, CheckpointBarrierFault fault) noexcept {
+        return session.qualification_checkpoint_with_barrier(
+            static_cast<std::uint8_t>(fault));
+    }
+
+    static void fail_restore_precommit(Session& session) noexcept {
+        session.qualification_set_restore_precommit_failure(true);
+    }
+
+    static void mutate_checkpoint(
+        const std::shared_ptr<const SessionCheckpoint>& checkpoint,
+        CheckpointMutation mutation) noexcept {
+        if (checkpoint != nullptr) {
+            checkpoint->qualification_mutate(
+                static_cast<std::uint8_t>(mutation));
+        }
     }
 };
 

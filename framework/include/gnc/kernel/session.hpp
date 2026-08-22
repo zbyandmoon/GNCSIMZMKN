@@ -77,6 +77,14 @@ enum class SessionError : std::uint8_t {
     TransactionPrecommitFailed,
     InvocationFailed,
     InternalFailure,
+    UnsupportedCheckpointCapability,
+    CheckpointBarrierUnavailable,
+    CheckpointCloneFailed,
+    CheckpointValidationFailed,
+    RestoreRequestInvalid,
+    RestoreCompatibilityMismatch,
+    RestoreCloneFailed,
+    RestorePrecommitFailed,
 };
 
 [[nodiscard]] std::string_view to_string(SessionError error) noexcept;
@@ -236,6 +244,57 @@ struct RunBinding {
 [[nodiscard]] RunBinding exact_run_binding(
     const contracts::ExecutionPlanImage& image);
 
+// A process-local checkpoint identity is the exact committed boundary that
+// produced it. It deliberately reuses existing run and clock identities and
+// does not introduce a persistent hash, codec, or wire schema.
+struct CheckpointIdentity {
+    RunId parent_run_id;
+    std::uint64_t parent_run_sequence = 0U;
+    std::uint64_t committed_epoch = 0U;
+    std::int64_t committed_tick = 0;
+    std::uint64_t committed_step_count = 0U;
+
+    friend bool operator==(const CheckpointIdentity& lhs,
+                           const CheckpointIdentity& rhs) noexcept {
+        return lhs.parent_run_id == rhs.parent_run_id &&
+               lhs.parent_run_sequence == rhs.parent_run_sequence &&
+               lhs.committed_epoch == rhs.committed_epoch &&
+               lhs.committed_tick == rhs.committed_tick &&
+               lhs.committed_step_count == rhs.committed_step_count;
+    }
+    friend bool operator!=(const CheckpointIdentity& lhs,
+                           const CheckpointIdentity& rhs) noexcept {
+        return !(lhs == rhs);
+    }
+};
+
+// Immutable, process-local ownership of one fully validated committed
+// boundary. The representation remains opaque to product callers.
+class SessionCheckpoint final {
+  public:
+    struct Impl;
+
+    SessionCheckpoint(const SessionCheckpoint&) = delete;
+    SessionCheckpoint& operator=(const SessionCheckpoint&) = delete;
+    SessionCheckpoint(SessionCheckpoint&&) = delete;
+    SessionCheckpoint& operator=(SessionCheckpoint&&) = delete;
+    ~SessionCheckpoint();
+
+    [[nodiscard]] const CheckpointIdentity& identity() const noexcept;
+    [[nodiscard]] const RunBinding& binding() const noexcept;
+    [[nodiscard]] std::string_view image_fingerprint() const noexcept;
+
+  private:
+    explicit SessionCheckpoint(std::shared_ptr<const Impl> implementation)
+        noexcept;
+    void qualification_mutate(std::uint8_t mutation) const noexcept;
+
+    std::shared_ptr<const Impl> implementation_;
+
+    friend class Session;
+    friend class qualification::SessionAccess;
+};
+
 struct InitializationRequest {
     RunId run_id;
     RunBinding binding;
@@ -263,6 +322,14 @@ enum class RuntimeDiagnosticCode : std::uint8_t {
     ResetStateRebuildFailed,
     ResetPrecommitFailed,
     ResetCapabilityMissing,
+    CheckpointUnsupported,
+    CheckpointBarrierFailed,
+    CheckpointCloneFailed,
+    CheckpointValidationFailed,
+    RestoreRequestInvalid,
+    RestoreCompatibilityFailed,
+    RestoreCloneFailed,
+    RestorePrecommitFailed,
 };
 
 enum class RuntimeDiagnosticStage : std::uint8_t {
@@ -283,6 +350,13 @@ enum class RuntimeDiagnosticStage : std::uint8_t {
     ResetPrecommit,
     CommandReduction,
     EventConsumption,
+    CheckpointBarrier,
+    CheckpointClone,
+    CheckpointValidation,
+    RestoreRequest,
+    RestoreMaterialization,
+    RestoreState,
+    RestorePrecommit,
 };
 
 enum class RuntimeFailureDisposition : std::uint8_t {
@@ -310,6 +384,67 @@ struct RuntimeDiagnostic {
         RuntimeFailureDisposition::FailOperation;
     std::string_view message_key;
     std::string_view detail;
+};
+
+enum class CheckpointStatus : std::uint8_t {
+    Captured,
+    Failed,
+};
+
+struct CheckpointOutcome {
+    CheckpointStatus status = CheckpointStatus::Failed;
+    SessionResult result;
+    CheckpointIdentity identity;
+    std::shared_ptr<const SessionCheckpoint> checkpoint;
+    bool barrier_satisfied = false;
+    bool checkpoint_commit = false;
+    std::optional<RuntimeDiagnostic> primary_diagnostic;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return status == CheckpointStatus::Captured && checkpoint_commit &&
+               checkpoint != nullptr && result;
+    }
+};
+
+struct RestoreRequest {
+    RunId run_id;
+    RunBinding binding;
+    std::shared_ptr<const SessionCheckpoint> checkpoint;
+};
+
+enum class RestoreStatus : std::uint8_t {
+    Committed,
+    Failed,
+};
+
+struct RestoreOutcome {
+    RestoreStatus status = RestoreStatus::Failed;
+    SessionResult result;
+    RunId run_id;
+    bool binding_matched = false;
+    bool checkpoint_matched = false;
+    bool restore_commit = false;
+    std::uint64_t committed_epoch = 0U;
+    std::int64_t committed_tick = 0;
+    std::optional<RuntimeDiagnostic> primary_diagnostic;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return status == RestoreStatus::Committed && restore_commit &&
+               result;
+    }
+};
+
+struct RestoreLineage {
+    RunId parent_run_id;
+    std::uint64_t parent_run_sequence = 0U;
+    CheckpointIdentity checkpoint_identity;
+
+    friend bool operator==(const RestoreLineage& lhs,
+                           const RestoreLineage& rhs) noexcept {
+        return lhs.parent_run_id == rhs.parent_run_id &&
+               lhs.parent_run_sequence == rhs.parent_run_sequence &&
+               lhs.checkpoint_identity == rhs.checkpoint_identity;
+    }
 };
 
 enum class InitializationStatus : std::uint8_t {
@@ -1408,6 +1543,8 @@ class Session final {
     [[nodiscard]] InitializationOutcome initialize(
         InitializationRequest request) noexcept;
     [[nodiscard]] ResetOutcome reset(ResetRequest request) noexcept;
+    [[nodiscard]] CheckpointOutcome checkpoint() noexcept;
+    [[nodiscard]] RestoreOutcome restore(RestoreRequest request) noexcept;
     // The only Session mutation entry that may run concurrently with the
     // single execution owner. Session lifetime must cover the whole call.
     [[nodiscard]] CancellationOutcome request_cancel(
@@ -1421,6 +1558,12 @@ class Session final {
     [[nodiscard]] const InitializationOutcome&
     last_initialization_outcome() const noexcept;
     [[nodiscard]] const ResetOutcome& last_reset_outcome() const noexcept;
+    [[nodiscard]] const CheckpointOutcome&
+    last_checkpoint_outcome() const noexcept;
+    [[nodiscard]] const RestoreOutcome& last_restore_outcome() const noexcept;
+    [[nodiscard]] const RestoreLineage* restore_lineage() const noexcept;
+    [[nodiscard]] const SessionCheckpoint*
+    last_restore_checkpoint() const noexcept;
     [[nodiscard]] const StepOutcome& last_step_outcome() const noexcept;
     [[nodiscard]] const RunId* active_run_id() const noexcept;
     [[nodiscard]] const RunBinding* active_run_binding() const noexcept;
@@ -1481,10 +1624,20 @@ class Session final {
     [[nodiscard]] SessionResult qualification_read_committed_output(
         std::uint32_t slot_handle,
         SessionObjectIdentityView& result) const noexcept;
+    [[nodiscard]] SessionResult qualification_read_history_member(
+        std::uint32_t history_handle, std::size_t sample_index,
+        std::size_t member_index, std::int64_t& sample_tick,
+        std::uint64_t& committed_epoch,
+        SessionObjectIdentityView& result) const noexcept;
     [[nodiscard]] SessionResult qualification_execute_opening_boundary()
         noexcept;
     [[nodiscard]] std::size_t
     qualification_command_queue_storage_count() const noexcept;
+    void qualification_set_checkpoint_clone_fault(
+        std::uint8_t fault) noexcept;
+    [[nodiscard]] CheckpointOutcome qualification_checkpoint_with_barrier(
+        std::uint8_t barrier) noexcept;
+    void qualification_set_restore_precommit_failure(bool fail) noexcept;
     std::unique_ptr<Impl> implementation_;
 
     friend class qualification::SessionAccess;

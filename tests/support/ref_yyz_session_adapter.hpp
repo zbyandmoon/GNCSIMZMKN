@@ -181,6 +181,12 @@ struct CommittedRigidMassProbe {
     std::int64_t mass_sample_tick = -1;
 };
 
+struct CommittedHistorySampleProbe {
+    std::int64_t tick = 0;
+    std::uint64_t committed_epoch = 0U;
+    CommittedRigidMassProbe state;
+};
+
 struct MissionResultProbe {
     bool present = false;
     bool completed = false;
@@ -321,6 +327,10 @@ struct NonTrivialObjectProbe {
 [[nodiscard]] kernel::SessionResult read_committed_rigid_mass_for_qualification(
     const kernel::Session& session, const RefYyzSessionAdapter& adapter,
     CommittedRigidMassProbe& result) noexcept;
+
+[[nodiscard]] kernel::SessionResult read_committed_history_for_qualification(
+    const kernel::Session& session,
+    std::vector<CommittedHistorySampleProbe>& result) noexcept;
 
 [[nodiscard]] kernel::SessionResult read_mission_result_for_qualification(
     const kernel::Session& session, const RefYyzSessionAdapter& adapter,

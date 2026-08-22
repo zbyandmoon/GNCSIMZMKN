@@ -1060,6 +1060,126 @@ void verify_reset_allocation_failure_atomicity(
             "reset allocation sweep missed outcome/history staging or success");
 }
 
+void verify_checkpoint_restore_allocation_failure_atomicity(
+    const std::shared_ptr<const ExecutionPlanImage>& image) {
+    auto source_adapter =
+        gnc::tests::ref_yyz::make_session_adapter(*image);
+    require(static_cast<bool>(source_adapter), source_adapter.error);
+    source_adapter.trace->events.reserve(4096U);
+    const auto source_trace = source_adapter.trace;
+    auto source_creation = gnc::kernel::create_session(
+        image, source_adapter.provider);
+    require(source_creation &&
+                source_creation.session->initialize(
+                    initialization_request(
+                        *image, "run:checkpoint-allocation-parent")) &&
+                source_creation.session->execute_step(),
+            "checkpoint allocation fixture did not reach tick one");
+    const auto state_before = committed_probe(
+        *source_creation.session, source_adapter);
+    const auto blocks_before = source_creation.session->state_blocks();
+    const auto histories_before =
+        source_creation.session->committed_histories();
+    const auto outputs_before =
+        source_creation.session->committed_outputs();
+    const auto live_before = source_trace->live_object_count();
+
+    allocation_fault::arm(0);
+    const auto failed_checkpoint =
+        source_creation.session->checkpoint();
+    const auto checkpoint_post_failure_allocations =
+        allocation_fault::post_failure_allocation_count();
+    allocation_fault::disarm();
+    require(!failed_checkpoint &&
+                failed_checkpoint.result.error ==
+                    SessionError::AllocationFailure &&
+                failed_checkpoint.primary_diagnostic.has_value() &&
+                failed_checkpoint.primary_diagnostic->code ==
+                    gnc::kernel::RuntimeDiagnosticCode::AllocationFailed &&
+                failed_checkpoint.primary_diagnostic->stage ==
+                    gnc::kernel::RuntimeDiagnosticStage::CheckpointClone &&
+                checkpoint_post_failure_allocations == 0U &&
+                source_creation.session->state() ==
+                    SessionState::Initialized &&
+                source_creation.session->committed_epoch() == 1U &&
+                source_creation.session->committed_tick() == 1 &&
+                source_creation.session->committed_step_count() == 1U &&
+                exactly_same(committed_probe(*source_creation.session,
+                                             source_adapter),
+                             state_before) &&
+                same_state_blocks(source_creation.session->state_blocks(),
+                                  blocks_before) &&
+                same_histories(
+                    source_creation.session->committed_histories(),
+                    histories_before) &&
+                same_outputs(source_creation.session->committed_outputs(),
+                             outputs_before) &&
+                source_trace->live_object_count() == live_before,
+            "checkpoint allocation failure changed the committed boundary or allocated while reporting failure");
+
+    auto checkpoint = source_creation.session->checkpoint().checkpoint;
+    require(checkpoint != nullptr,
+            "checkpoint allocation recovery did not publish a checkpoint");
+
+    auto target_adapter =
+        gnc::tests::ref_yyz::make_session_adapter(*image);
+    require(static_cast<bool>(target_adapter), target_adapter.error);
+    target_adapter.trace->events.reserve(4096U);
+    auto target_creation = gnc::kernel::create_session(
+        image, target_adapter.provider);
+    require(static_cast<bool>(target_creation),
+            "restore allocation target creation failed");
+    gnc::kernel::RestoreRequest request{
+        gnc::kernel::RunId("run:restore-allocation-child"),
+        gnc::kernel::exact_run_binding(*image), checkpoint};
+    allocation_fault::arm(0);
+    const auto failed_restore =
+        target_creation.session->restore(std::move(request));
+    const auto restore_post_failure_allocations =
+        allocation_fault::post_failure_allocation_count();
+    allocation_fault::disarm();
+    const auto* failed_outcome = target_creation.session->run_outcome();
+    require(!failed_restore &&
+                failed_restore.result.error ==
+                    SessionError::AllocationFailure &&
+                failed_restore.primary_diagnostic.has_value() &&
+                failed_restore.primary_diagnostic->code ==
+                    gnc::kernel::RuntimeDiagnosticCode::AllocationFailed &&
+                restore_post_failure_allocations == 0U &&
+                target_creation.session->state() == SessionState::Failed &&
+                target_creation.session->active_run_id() == nullptr &&
+                !target_creation.session->run_sequence().has_value() &&
+                target_creation.session->committed_epoch() == 0U &&
+                target_creation.session->committed_tick() == 0 &&
+                target_creation.session->committed_step_count() == 0U &&
+                target_creation.session->preparation_count() == 0U &&
+                target_creation.session->runtime_cell_count() == 0U &&
+                target_creation.session->committed_state_count() == 0U &&
+                target_creation.session->committed_histories().empty() &&
+                target_creation.session->committed_outputs().empty() &&
+                target_creation.session->last_restore_checkpoint() ==
+                    checkpoint.get() &&
+                target_creation.session->restore_lineage() == nullptr &&
+                failed_outcome != nullptr &&
+                failed_outcome->run_start_kind ==
+                    gnc::kernel::RunStartKind::RestoreBranch &&
+                !failed_outcome->run_start_committed &&
+                failed_outcome->final_status ==
+                    gnc::kernel::RunFinalStatus::Failed &&
+                failed_outcome->primary_diagnostic.has_value() &&
+                target_adapter.trace->live_object_count() == 0U,
+            "restore allocation failure published partial state or allocated while freezing failure");
+
+    require(static_cast<bool>(target_creation.session->dispose()),
+            "failed restore allocation target did not dispose");
+    target_creation.session.reset();
+    source_creation.session.reset();
+    checkpoint.reset();
+    require(target_adapter.trace->live_object_count() == 0U &&
+                source_trace->live_object_count() == 0U,
+            "checkpoint/restore allocation test leaked typed objects");
+}
+
 void run() {
     const auto image = build_deterministic_image();
     require(image->preparations().size() == 3U &&
@@ -1078,6 +1198,7 @@ void run() {
     verify_materializer_identity_failures(image);
     verify_allocation_failure_unwind(image);
     verify_reset_allocation_failure_atomicity(image);
+    verify_checkpoint_restore_allocation_failure_atomicity(image);
 }
 
 } // namespace

@@ -28,3 +28,4 @@ ADR 记录已经收窄到实现层的关键选择，并连接需求、架构分�
 - [0018 R3 completed-run reset, outcome retention and explicit dispose](0018-r3-completed-run-reset-outcome-retention-and-explicit-dispose.md)
 - [0019 R3 plan-derived in-process cancellation and safe-point sampling](0019-r3-plan-derived-in-process-cancellation.md)
 - [0020 R3 in-process command cutoff, receipt and event commit](0020-r3-in-process-command-cutoff-receipt-and-event-commit.md)
+- [0021 R3 process-local REF-YYZ checkpoint and branch restore](0021-r3-process-local-ref-yyz-checkpoint-branch-restore.md)

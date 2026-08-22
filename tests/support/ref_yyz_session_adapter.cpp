@@ -3750,6 +3750,92 @@ kernel::SessionResult read_committed_rigid_mass_for_qualification(
     return {};
 }
 
+kernel::SessionResult read_committed_history_for_qualification(
+    const kernel::Session& session,
+    std::vector<CommittedHistorySampleProbe>& result) noexcept {
+    result.clear();
+    try {
+        const auto histories = session.committed_histories();
+        if (histories.size() != 1U ||
+            histories.front().member_count != 2U) {
+            return {kernel::SessionError::HistoryValidationFailed, 0U,
+                    "REF-YYZ committed history shape is unavailable"};
+        }
+        const auto& history = histories.front();
+        result.reserve(history.sample_count);
+        for (std::size_t sample_index = 0U;
+             sample_index < history.sample_count; ++sample_index) {
+            const yyz::RigidState* rigid = nullptr;
+            const yyz::MassState* mass = nullptr;
+            std::int64_t shared_tick = 0;
+            std::uint64_t shared_epoch = 0U;
+            for (std::size_t member_index = 0U; member_index < 2U;
+                 ++member_index) {
+                kernel::SessionObjectIdentityView view;
+                std::int64_t sample_tick = 0;
+                std::uint64_t committed_epoch = 0U;
+                const auto status =
+                    kernel::qualification::SessionAccess::
+                        read_history_member(
+                            session, history.history_handle,
+                            sample_index, member_index, sample_tick,
+                            committed_epoch, view);
+                if (!status) return status;
+                if (member_index == 0U) {
+                    shared_tick = sample_tick;
+                    shared_epoch = committed_epoch;
+                } else if (sample_tick != shared_tick ||
+                           committed_epoch != shared_epoch) {
+                    return {kernel::SessionError::HistoryValidationFailed,
+                            history.history_handle,
+                            "REF-YYZ history member coordinates differ"};
+                }
+                if (view.type_identity == &typeid(yyz::RigidState) &&
+                    view.size_bytes == sizeof(yyz::RigidState) &&
+                    view.alignment_bytes == alignof(yyz::RigidState)) {
+                    rigid = static_cast<const yyz::RigidState*>(view.address);
+                } else if (view.type_identity == &typeid(yyz::MassState) &&
+                           view.size_bytes == sizeof(yyz::MassState) &&
+                           view.alignment_bytes == alignof(yyz::MassState)) {
+                    mass = static_cast<const yyz::MassState*>(view.address);
+                } else {
+                    return {kernel::SessionError::ObjectTypeMismatch,
+                            view.image_object_handle,
+                            "REF-YYZ history member type mismatch"};
+                }
+            }
+            if (rigid == nullptr || mass == nullptr) {
+                return {kernel::SessionError::HistoryValidationFailed,
+                        history.history_handle,
+                        "REF-YYZ history pair is incomplete"};
+            }
+            CommittedHistorySampleProbe sample;
+            sample.tick = shared_tick;
+            sample.committed_epoch = shared_epoch;
+            sample.state.position = vector3(rigid->position.value);
+            sample.state.velocity = vector3(rigid->velocity.value);
+            sample.state.attitude_wxyz =
+                gnc::foundation::quaternion_to_wxyz(
+                    rigid->attitude.value);
+            sample.state.angular_rate =
+                vector3(rigid->angular_rate.value);
+            sample.state.mass_kilograms = mass->mass_kilograms;
+            sample.state.center_of_mass = vector3(
+                mass->body_origin_to_center_of_mass.value);
+            sample.state.inertia = matrix3(
+                mass->inertia_about_center_of_mass.value);
+            sample.state.mass_sample_tick =
+                mass->context.sample_time.tick;
+            result.push_back(std::move(sample));
+        }
+        return {};
+    } catch (...) {
+        result.clear();
+        return {kernel::SessionError::InternalFailure, 0U,
+                "REF-YYZ committed history qualification read failed"};
+    }
+}
+
 kernel::SessionResult read_mission_result_for_qualification(
     const kernel::Session& session, const RefYyzSessionAdapter& adapter,
     MissionResultProbe& result) noexcept {

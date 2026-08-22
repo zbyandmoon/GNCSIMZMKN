@@ -2,6 +2,7 @@
 
 #include "support/ref_yyz_complete_composition.hpp"
 #include "support/ref_yyz_session_adapter.hpp"
+#include "support/session_qualification_access.hpp"
 
 #include <algorithm>
 #include <array>
@@ -28,6 +29,7 @@ using gnc::kernel::RuntimeDiagnosticStage;
 using gnc::tests::ref_yyz::AdapterOptions;
 using gnc::tests::ref_yyz::AdapterCoordinationPoint;
 using gnc::tests::ref_yyz::CommittedRigidMassProbe;
+using gnc::tests::ref_yyz::CommittedHistorySampleProbe;
 using gnc::tests::ref_yyz::FailurePhase;
 using gnc::tests::ref_yyz::MissionResultProbe;
 using gnc::tests::ref_yyz::SealedObservationSnapshot;
@@ -86,6 +88,20 @@ template <std::size_t Size>
            exact_array(lhs.center_of_mass, rhs.center_of_mass) &&
            exact_array(lhs.inertia, rhs.inertia) &&
            lhs.mass_sample_tick == rhs.mass_sample_tick;
+}
+
+[[nodiscard]] bool exactly_same(
+    const std::vector<CommittedHistorySampleProbe>& lhs,
+    const std::vector<CommittedHistorySampleProbe>& rhs) noexcept {
+    if (lhs.size() != rhs.size()) return false;
+    for (std::size_t index = 0U; index < lhs.size(); ++index) {
+        if (lhs[index].tick != rhs[index].tick ||
+            lhs[index].committed_epoch != rhs[index].committed_epoch ||
+            !exactly_same(lhs[index].state, rhs[index].state)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 [[nodiscard]] bool same_state_blocks(
@@ -792,6 +808,22 @@ void require_mission_oracle(const MissionResultProbe& value) {
         return RuntimeDiagnosticCode::InternalFailure;
     case SessionError::InvalidLifecycleTransition:
         return RuntimeDiagnosticCode::LifecycleTransitionRejected;
+    case SessionError::UnsupportedCheckpointCapability:
+        return RuntimeDiagnosticCode::CheckpointUnsupported;
+    case SessionError::CheckpointBarrierUnavailable:
+        return RuntimeDiagnosticCode::CheckpointBarrierFailed;
+    case SessionError::CheckpointCloneFailed:
+        return RuntimeDiagnosticCode::CheckpointCloneFailed;
+    case SessionError::CheckpointValidationFailed:
+        return RuntimeDiagnosticCode::CheckpointValidationFailed;
+    case SessionError::RestoreRequestInvalid:
+        return RuntimeDiagnosticCode::RestoreRequestInvalid;
+    case SessionError::RestoreCompatibilityMismatch:
+        return RuntimeDiagnosticCode::RestoreCompatibilityFailed;
+    case SessionError::RestoreCloneFailed:
+        return RuntimeDiagnosticCode::RestoreCloneFailed;
+    case SessionError::RestorePrecommitFailed:
+        return RuntimeDiagnosticCode::RestorePrecommitFailed;
     }
     return RuntimeDiagnosticCode::InternalFailure;
 }
@@ -840,6 +872,14 @@ build_image_without_reset_capability() {
             gnc::kernel::exact_run_binding(image)};
 }
 
+[[nodiscard]] gnc::kernel::RestoreRequest restore_request(
+    const ExecutionPlanImage& image, std::string run_id,
+    std::shared_ptr<const gnc::kernel::SessionCheckpoint> checkpoint) {
+    return {gnc::kernel::RunId{std::move(run_id)},
+            gnc::kernel::exact_run_binding(image),
+            std::move(checkpoint)};
+}
+
 [[nodiscard]] gnc::kernel::CancellationRequest cancellation_request(
     std::string request_id, std::string run_id) {
     return {gnc::kernel::CancellationRequestId{std::move(request_id)},
@@ -872,6 +912,16 @@ struct SessionBundle {
     gnc::tests::ref_yyz::RefYyzSessionAdapter adapter;
     std::unique_ptr<gnc::kernel::Session> session;
 };
+
+[[nodiscard]] SessionBundle create_uninitialized_session(
+    const std::shared_ptr<const ExecutionPlanImage>& image,
+    AdapterOptions options = {}) {
+    auto adapter = gnc::tests::ref_yyz::make_session_adapter(*image, options);
+    require(static_cast<bool>(adapter), adapter.error);
+    auto creation = gnc::kernel::create_session(image, adapter.provider);
+    require(static_cast<bool>(creation), "Session creation failed");
+    return {std::move(adapter), std::move(creation.session)};
+}
 
 [[nodiscard]] SessionBundle initialize_session(
     const std::shared_ptr<const ExecutionPlanImage>& image,
@@ -948,6 +998,16 @@ void require_cancelled_run(const gnc::kernel::Session& session,
             session, adapter, result);
     require(static_cast<bool>(read),
             "committed rigid/mass qualification read failed");
+    return result;
+}
+
+[[nodiscard]] std::vector<CommittedHistorySampleProbe>
+committed_history_snapshot(const gnc::kernel::Session& session) {
+    std::vector<CommittedHistorySampleProbe> result;
+    const auto read = gnc::tests::ref_yyz::
+        read_committed_history_for_qualification(session, result);
+    require(static_cast<bool>(read),
+            "committed history qualification read failed");
     return result;
 }
 
@@ -3289,10 +3349,524 @@ void verify_dispose_lifecycle(
     }
 }
 
+void verify_checkpoint_diagnostic_code_stability() {
+    require(
+        gnc::kernel::to_string(
+            RuntimeDiagnosticCode::CheckpointUnsupported) ==
+                "GNC-RUN-CHK-0001" &&
+            gnc::kernel::to_string(
+                RuntimeDiagnosticCode::CheckpointBarrierFailed) ==
+                "GNC-RUN-CHK-0002" &&
+            gnc::kernel::to_string(
+                RuntimeDiagnosticCode::CheckpointCloneFailed) ==
+                "GNC-RUN-CHK-0003" &&
+            gnc::kernel::to_string(
+                RuntimeDiagnosticCode::CheckpointValidationFailed) ==
+                "GNC-RUN-CHK-0004" &&
+            gnc::kernel::to_string(
+                RuntimeDiagnosticCode::RestoreRequestInvalid) ==
+                "GNC-RUN-RSTO-0001" &&
+            gnc::kernel::to_string(
+                RuntimeDiagnosticCode::RestoreCompatibilityFailed) ==
+                "GNC-RUN-RSTO-0002" &&
+            gnc::kernel::to_string(
+                RuntimeDiagnosticCode::RestoreCloneFailed) ==
+                "GNC-RUN-RSTO-0003" &&
+            gnc::kernel::to_string(
+                RuntimeDiagnosticCode::RestorePrecommitFailed) ==
+                "GNC-RUN-RSTO-0004",
+        "checkpoint/restore diagnostic code compatibility changed");
+}
+
+void require_restore_failure_atomic(
+    const SessionBundle& target,
+    const gnc::kernel::RestoreOutcome& outcome,
+    const std::shared_ptr<const gnc::kernel::SessionCheckpoint>& checkpoint,
+    SessionError expected_error,
+    RuntimeDiagnosticStage expected_stage) {
+    const auto* run_outcome = target.session->run_outcome();
+    require(!outcome && outcome.result.error == expected_error &&
+                !outcome.restore_commit &&
+                outcome.primary_diagnostic.has_value() &&
+                outcome.primary_diagnostic->code ==
+                    expected_runtime_code(expected_error) &&
+                outcome.primary_diagnostic->stage == expected_stage &&
+                target.session->state() ==
+                    gnc::kernel::SessionState::Failed &&
+                target.session->active_run_id() == nullptr &&
+                target.session->active_run_binding() == nullptr &&
+                !target.session->run_sequence().has_value() &&
+                target.session->committed_epoch() == 0U &&
+                target.session->committed_tick() == 0 &&
+                target.session->committed_step_count() == 0U &&
+                target.session->preparation_count() == 0U &&
+                target.session->runtime_cell_count() == 0U &&
+                target.session->committed_state_count() == 0U &&
+                target.session->committed_histories().empty() &&
+                target.session->committed_outputs().empty() &&
+                target.adapter.trace->live_object_count() == 0U &&
+                target.session->last_restore_checkpoint() ==
+                    checkpoint.get() &&
+                target.session->restore_lineage() == nullptr &&
+                run_outcome != nullptr &&
+                run_outcome->run_id == outcome.run_id &&
+                run_outcome->run_sequence == 0U &&
+                run_outcome->run_start_kind ==
+                    gnc::kernel::RunStartKind::RestoreBranch &&
+                !run_outcome->run_start_committed &&
+                run_outcome->final_status ==
+                    gnc::kernel::RunFinalStatus::Failed &&
+                run_outcome->validity ==
+                    gnc::contracts::EvidenceValidity::Unknown &&
+                run_outcome->initial_committed_epoch == 0U &&
+                run_outcome->final_committed_epoch == 0U &&
+                run_outcome->initial_tick == 0 &&
+                run_outcome->final_tick == 0 &&
+                run_outcome->committed_step_count == 0U &&
+                run_outcome->primary_diagnostic.has_value() &&
+                run_outcome->primary_diagnostic->cause_code ==
+                    expected_error &&
+                run_outcome->finalization_status ==
+                    gnc::kernel::RunFinalizationStatus::NotStarted,
+            "restore failure published a partial run or mutable store");
+}
+
+[[nodiscard]] std::shared_ptr<const gnc::kernel::SessionCheckpoint>
+capture_tick_one_checkpoint(
+    const std::shared_ptr<const ExecutionPlanImage>& image,
+    std::string run_id) {
+    auto source = initialize_session(image, {}, std::move(run_id));
+    require(static_cast<bool>(source.session->execute_step()),
+            "checkpoint fixture first Continue failed");
+    const auto captured = source.session->checkpoint();
+    require(captured && captured.checkpoint != nullptr,
+            "checkpoint fixture capture failed");
+    return captured.checkpoint;
+}
+
+void verify_checkpoint_clone_and_barrier_failures(
+    const std::shared_ptr<const ExecutionPlanImage>& image) {
+    auto source = initialize_session(
+        image, {}, "run:checkpoint-failure-parent");
+    require(static_cast<bool>(source.session->execute_step()),
+            "checkpoint failure fixture first Continue failed");
+    const auto state_before = committed_probe(*source.session,
+                                              source.adapter);
+    const auto blocks_before = source.session->state_blocks();
+    const auto history_before = source.session->committed_histories();
+    const auto seal_before = sealed_snapshot(*source.session);
+
+    using Access = gnc::kernel::qualification::SessionAccess;
+    using CloneFault =
+        gnc::kernel::qualification::CheckpointCloneFault;
+    for (const auto fault : {CloneFault::State, CloneFault::History,
+                             CloneFault::Seal}) {
+        Access::fail_next_checkpoint_clone(*source.session, fault);
+        const auto failed = source.session->checkpoint();
+        require(!failed &&
+                    failed.result.error ==
+                        SessionError::CheckpointCloneFailed &&
+                    failed.barrier_satisfied &&
+                    !failed.checkpoint_commit &&
+                    failed.checkpoint == nullptr &&
+                    failed.primary_diagnostic.has_value() &&
+                    failed.primary_diagnostic->code ==
+                        RuntimeDiagnosticCode::CheckpointCloneFailed &&
+                    failed.primary_diagnostic->stage ==
+                        RuntimeDiagnosticStage::CheckpointClone &&
+                    source.session->state() ==
+                        gnc::kernel::SessionState::Initialized &&
+                    source.session->committed_epoch() == 1U &&
+                    source.session->committed_tick() == 1 &&
+                    source.session->committed_step_count() == 1U &&
+                    exactly_same(committed_probe(*source.session,
+                                                 source.adapter),
+                                 state_before) &&
+                    same_state_blocks(source.session->state_blocks(),
+                                      blocks_before) &&
+                    exactly_same(source.session->committed_histories(),
+                                 history_before) &&
+                    exact_sealed_observation_snapshot(
+                        sealed_snapshot(*source.session), seal_before),
+                "checkpoint clone failure changed the source boundary");
+    }
+
+    using BarrierFault =
+        gnc::kernel::qualification::CheckpointBarrierFault;
+    for (const auto barrier : {BarrierFault::OpenFrame,
+                               BarrierFault::ActiveTransaction}) {
+        const auto failed = Access::checkpoint_with_barrier(
+            *source.session, barrier);
+        require(!failed &&
+                    failed.result.error ==
+                        SessionError::CheckpointBarrierUnavailable &&
+                    !failed.barrier_satisfied &&
+                    !failed.checkpoint_commit &&
+                    source.session->state() ==
+                        gnc::kernel::SessionState::Initialized &&
+                    !source.session->frame_open() &&
+                    source.session->committed_epoch() == 1U &&
+                    source.session->committed_tick() == 1 &&
+                    exactly_same(committed_probe(*source.session,
+                                                 source.adapter),
+                                 state_before) &&
+                    exactly_same(source.session->committed_histories(),
+                                 history_before) &&
+                    exact_sealed_observation_snapshot(
+                        sealed_snapshot(*source.session), seal_before),
+                "open frame or transaction crossed CheckpointBarrier");
+    }
+
+    const auto successful = source.session->checkpoint();
+    require(successful && successful.checkpoint != nullptr &&
+                successful.identity.parent_run_id.value() ==
+                    "run:checkpoint-failure-parent" &&
+                successful.identity.parent_run_sequence == 0U &&
+                successful.identity.committed_epoch == 1U &&
+                successful.identity.committed_tick == 1 &&
+                successful.identity.committed_step_count == 1U,
+            "checkpoint failure injection leaked into the next capture");
+}
+
+void verify_restore_failure_matrix(
+    const std::shared_ptr<const ExecutionPlanImage>& image) {
+    const auto checkpoint = capture_tick_one_checkpoint(
+        image, "run:restore-failure-parent");
+
+    {
+        auto target = create_uninitialized_session(image);
+        const auto failed = target.session->restore(
+            restore_request(*image, {}, checkpoint));
+        require_restore_failure_atomic(
+            target, failed, checkpoint,
+            SessionError::RestoreRequestInvalid,
+            RuntimeDiagnosticStage::RestoreRequest);
+    }
+    {
+        auto target = create_uninitialized_session(image);
+        const auto failed = target.session->restore(
+            restore_request(
+                *image,
+                std::string(checkpoint->identity().parent_run_id.value()),
+                checkpoint));
+        require_restore_failure_atomic(
+            target, failed, checkpoint,
+            SessionError::RestoreRequestInvalid,
+            RuntimeDiagnosticStage::RestoreRequest);
+    }
+    {
+        auto target = create_uninitialized_session(image);
+        auto request = restore_request(
+            *image, "run:restore-wrong-binding", checkpoint);
+        request.binding.descriptor_semantic_hash += ".wrong";
+        const auto failed = target.session->restore(std::move(request));
+        require(!failed.binding_matched,
+                "wrong restore binding was reported as matched");
+        require_restore_failure_atomic(
+            target, failed, checkpoint,
+            SessionError::RestoreCompatibilityMismatch,
+            RuntimeDiagnosticStage::RestoreRequest);
+    }
+    {
+        const auto wrong_image = build_image_without_reset_capability();
+        auto target = create_uninitialized_session(wrong_image);
+        const auto failed = target.session->restore(
+            restore_request(*wrong_image, "run:restore-wrong-image",
+                            checkpoint));
+        require(failed.binding_matched && !failed.checkpoint_matched,
+                "wrong Image restore matching facts are invalid");
+        require_restore_failure_atomic(
+            target, failed, checkpoint,
+            SessionError::RestoreCompatibilityMismatch,
+            RuntimeDiagnosticStage::RestoreRequest);
+    }
+
+    using Access = gnc::kernel::qualification::SessionAccess;
+    using Mutation = gnc::kernel::qualification::CheckpointMutation;
+    for (const auto mutation : {
+             Mutation::ImageFingerprint, Mutation::RunBinding,
+             Mutation::StateLayout, Mutation::StateCodec,
+             Mutation::StateType, Mutation::StateInvariant}) {
+        auto mutated = capture_tick_one_checkpoint(
+            image, "run:restore-mutated-parent");
+        Access::mutate_checkpoint(mutated, mutation);
+        auto target = create_uninitialized_session(image);
+        const auto failed = target.session->restore(
+            restore_request(*image, "run:restore-mutated-child",
+                            mutated));
+        require_restore_failure_atomic(
+            target, failed, mutated,
+            SessionError::RestoreCompatibilityMismatch,
+            RuntimeDiagnosticStage::RestoreRequest);
+    }
+
+    {
+        auto target = create_uninitialized_session(image);
+        Access::fail_restore_precommit(*target.session);
+        const auto failed = target.session->restore(
+            restore_request(*image, "run:restore-precommit-failure",
+                            checkpoint));
+        require_restore_failure_atomic(
+            target, failed, checkpoint,
+            SessionError::RestorePrecommitFailed,
+            RuntimeDiagnosticStage::RestorePrecommit);
+    }
+}
+
+void verify_checkpoint_branch_restore(
+    const std::shared_ptr<const ExecutionPlanImage>& image) {
+    auto source = initialize_session(
+        image, {}, "run:checkpoint-parent");
+    const auto first = source.session->execute_step();
+    require(first && first.status == gnc::kernel::StepStatus::Committed &&
+                source.session->committed_epoch() == 1U &&
+                source.session->committed_tick() == 1 &&
+                source.session->committed_step_count() == 1U,
+            "checkpoint parent did not reach the tick-one boundary");
+    const auto checkpoint_state = committed_probe(*source.session,
+                                                  source.adapter);
+    const auto checkpoint_history =
+        source.session->committed_histories();
+    const auto checkpoint_history_values =
+        committed_history_snapshot(*source.session);
+    const auto checkpoint_seal = sealed_snapshot(*source.session);
+    const auto captured = source.session->checkpoint();
+    require(captured && captured.checkpoint != nullptr &&
+                captured.barrier_satisfied && captured.checkpoint_commit &&
+                captured.identity.parent_run_id.value() ==
+                    "run:checkpoint-parent" &&
+                captured.identity.parent_run_sequence == 0U &&
+                captured.identity.committed_epoch == 1U &&
+                captured.identity.committed_tick == 1 &&
+                captured.identity.committed_step_count == 1U &&
+                captured.checkpoint->identity() == captured.identity &&
+                captured.checkpoint->binding() ==
+                    gnc::kernel::exact_run_binding(*image) &&
+                captured.checkpoint->image_fingerprint() ==
+                    image->fingerprint(),
+            "checkpoint publication lost its exact parent boundary identity");
+    const auto checkpoint = captured.checkpoint;
+
+    const auto source_second = source.session->execute_step();
+    require(source_second &&
+                source_second.status ==
+                    gnc::kernel::StepStatus::Committed,
+            "checkpoint parent second Continue failed");
+    const auto source_tick_two_state = committed_probe(
+        *source.session, source.adapter);
+    const auto source_tick_one_seal = sealed_snapshot(*source.session);
+    const auto source_terminal = source.session->execute_step();
+    require(source_terminal &&
+                source_terminal.status ==
+                    gnc::kernel::StepStatus::Terminated,
+            "checkpoint parent Terminal failed");
+    const auto source_terminal_state = committed_probe(
+        *source.session, source.adapter);
+    const auto source_terminal_history =
+        source.session->committed_histories();
+    const auto source_terminal_history_values =
+        committed_history_snapshot(*source.session);
+    const auto source_terminal_seal = sealed_snapshot(*source.session);
+    const auto source_result = mission_result_probe(*source.session,
+                                                    source.adapter);
+    const auto source_outcome = *source.session->run_outcome();
+    require_mission_oracle(source_result);
+    const auto reset_source = source.session->reset(
+        reset_request(*image, "run:checkpoint-parent-reset"));
+    require(reset_source &&
+                source.session->state() ==
+                    gnc::kernel::SessionState::Initialized &&
+                static_cast<bool>(source.session->run_to_terminal()),
+            "checkpoint parent could not reset and complete after capture");
+    require(source.session->dispose() &&
+                source.session->state() ==
+                    gnc::kernel::SessionState::Disposed,
+            "checkpoint parent dispose failed");
+    source.session.reset();
+    require(checkpoint->identity() == captured.identity,
+            "checkpoint did not survive source Session destruction");
+
+    auto branch_one = create_uninitialized_session(image);
+    auto branch_two = create_uninitialized_session(image);
+    const auto restored_one = branch_one.session->restore(
+        restore_request(*image, "run:checkpoint-child-one", checkpoint));
+    const auto restored_two = branch_two.session->restore(
+        restore_request(*image, "run:checkpoint-child-two", checkpoint));
+    require(restored_one && restored_two &&
+                restored_one.restore_commit && restored_two.restore_commit &&
+                restored_one.committed_epoch == 1U &&
+                restored_one.committed_tick == 1 &&
+                branch_one.session->state() ==
+                    gnc::kernel::SessionState::Initialized &&
+                branch_two.session->state() ==
+                    gnc::kernel::SessionState::Initialized &&
+                branch_one.session->active_run_id()->value() ==
+                    "run:checkpoint-child-one" &&
+                branch_two.session->active_run_id()->value() ==
+                    "run:checkpoint-child-two" &&
+                branch_one.session->run_sequence().has_value() &&
+                *branch_one.session->run_sequence() == 0U &&
+                branch_two.session->run_sequence().has_value() &&
+                *branch_two.session->run_sequence() == 0U &&
+                branch_one.session->committed_step_count() == 1U &&
+                branch_two.session->committed_step_count() == 1U &&
+                branch_one.session->last_restore_checkpoint() ==
+                    checkpoint.get() &&
+                branch_two.session->last_restore_checkpoint() ==
+                    checkpoint.get(),
+            "RestoreCommit did not publish two independent child runs");
+    const auto* lineage_one = branch_one.session->restore_lineage();
+    const auto* lineage_two = branch_two.session->restore_lineage();
+    require(lineage_one != nullptr && lineage_two != nullptr &&
+                lineage_one->parent_run_id ==
+                    captured.identity.parent_run_id &&
+                lineage_one->parent_run_sequence == 0U &&
+                lineage_one->checkpoint_identity == captured.identity &&
+                *lineage_one == *lineage_two &&
+                exactly_same(committed_probe(*branch_one.session,
+                                             branch_one.adapter),
+                             checkpoint_state) &&
+                exactly_same(committed_probe(*branch_two.session,
+                                             branch_two.adapter),
+                             checkpoint_state) &&
+                exactly_same(branch_one.session->committed_histories(),
+                             checkpoint_history) &&
+                exactly_same(branch_two.session->committed_histories(),
+                             checkpoint_history) &&
+                exactly_same(
+                    committed_history_snapshot(*branch_one.session),
+                    checkpoint_history_values) &&
+                exactly_same(
+                    committed_history_snapshot(*branch_two.session),
+                    checkpoint_history_values) &&
+                exact_sealed_observation_snapshot(
+                    sealed_snapshot(*branch_one.session), checkpoint_seal) &&
+                exact_sealed_observation_snapshot(
+                    sealed_snapshot(*branch_two.session), checkpoint_seal),
+            "restored boundary state, history, seal, or lineage changed");
+
+    const auto branch_one_second = branch_one.session->execute_step();
+    require(branch_one_second &&
+                branch_one.session->committed_epoch() == 2U &&
+                branch_one.session->committed_tick() == 2 &&
+                branch_two.session->committed_epoch() == 1U &&
+                branch_two.session->committed_tick() == 1 &&
+                exactly_same(committed_probe(*branch_two.session,
+                                             branch_two.adapter),
+                             checkpoint_state) &&
+                exact_sealed_observation_snapshot(
+                    sealed_snapshot(*branch_two.session), checkpoint_seal),
+            "advancing one restored branch mutated the other branch");
+    const auto branch_two_second = branch_two.session->execute_step();
+    require(branch_two_second &&
+                exactly_same(committed_probe(*branch_one.session,
+                                             branch_one.adapter),
+                             source_tick_two_state) &&
+                exactly_same(committed_probe(*branch_two.session,
+                                             branch_two.adapter),
+                             source_tick_two_state) &&
+                exact_sealed_observation_snapshot(
+                    sealed_snapshot(*branch_one.session),
+                    source_tick_one_seal) &&
+                exact_sealed_observation_snapshot(
+                    sealed_snapshot(*branch_two.session),
+                    source_tick_one_seal) &&
+                exactly_same(branch_one.session->committed_histories(),
+                             branch_two.session->committed_histories()) &&
+                exactly_same(
+                    committed_history_snapshot(*branch_one.session),
+                    committed_history_snapshot(*branch_two.session)),
+            "restored Continue suffix differs from the parent suffix");
+
+    const auto terminal_one = branch_one.session->execute_step();
+    const auto terminal_two = branch_two.session->execute_step();
+    require(terminal_one && terminal_two &&
+                terminal_one.status ==
+                    gnc::kernel::StepStatus::Terminated &&
+                terminal_two.status ==
+                    gnc::kernel::StepStatus::Terminated &&
+                terminal_one.branch == source_terminal.branch &&
+                terminal_two.branch == source_terminal.branch &&
+                exactly_same(committed_probe(*branch_one.session,
+                                             branch_one.adapter),
+                             source_terminal_state) &&
+                exactly_same(committed_probe(*branch_two.session,
+                                             branch_two.adapter),
+                             source_terminal_state) &&
+                exactly_same(branch_one.session->committed_histories(),
+                             source_terminal_history) &&
+                exactly_same(branch_two.session->committed_histories(),
+                             source_terminal_history) &&
+                exactly_same(
+                    committed_history_snapshot(*branch_one.session),
+                    source_terminal_history_values) &&
+                exactly_same(
+                    committed_history_snapshot(*branch_two.session),
+                    source_terminal_history_values) &&
+                exact_sealed_observation_snapshot(
+                    sealed_snapshot(*branch_one.session),
+                    source_terminal_seal) &&
+                exact_sealed_observation_snapshot(
+                    sealed_snapshot(*branch_two.session),
+                    source_terminal_seal),
+            "restored Terminal suffix changed state, history, seal, or decision");
+    const auto branch_one_result = mission_result_probe(
+        *branch_one.session, branch_one.adapter);
+    const auto branch_two_result = mission_result_probe(
+        *branch_two.session, branch_two.adapter);
+    require(exactly_same(branch_one_result, source_result) &&
+                exactly_same(branch_two_result, source_result),
+            "restored terminal mission result is not bit-identical");
+    require_mission_oracle(branch_one_result);
+    require_mission_oracle(branch_two_result);
+
+    const auto* outcome_one = branch_one.session->run_outcome();
+    const auto* outcome_two = branch_two.session->run_outcome();
+    require(outcome_one != nullptr && outcome_two != nullptr &&
+                outcome_one->run_id.value() ==
+                    "run:checkpoint-child-one" &&
+                outcome_two->run_id.value() ==
+                    "run:checkpoint-child-two" &&
+                outcome_one->run_start_kind ==
+                    gnc::kernel::RunStartKind::RestoreBranch &&
+                outcome_two->run_start_kind ==
+                    gnc::kernel::RunStartKind::RestoreBranch &&
+                outcome_one->run_start_committed &&
+                outcome_two->run_start_committed &&
+                outcome_one->initial_tick == 1 &&
+                outcome_two->initial_tick == 1 &&
+                outcome_one->initial_committed_epoch == 1U &&
+                outcome_two->initial_committed_epoch == 1U &&
+                outcome_one->final_status == source_outcome.final_status &&
+                outcome_two->final_status == source_outcome.final_status &&
+                outcome_one->validity == source_outcome.validity &&
+                outcome_two->validity == source_outcome.validity &&
+                outcome_one->final_tick == source_outcome.final_tick &&
+                outcome_two->final_tick == source_outcome.final_tick &&
+                outcome_one->final_committed_epoch ==
+                    source_outcome.final_committed_epoch &&
+                outcome_two->final_committed_epoch ==
+                    source_outcome.final_committed_epoch &&
+                outcome_one->committed_step_count ==
+                    source_outcome.committed_step_count &&
+                outcome_two->committed_step_count ==
+                    source_outcome.committed_step_count &&
+                outcome_one->terminal_branch_committed &&
+                outcome_two->terminal_branch_committed &&
+                outcome_one->mission_result_available &&
+                outcome_two->mission_result_available &&
+                outcome_one->finalization_status ==
+                    source_outcome.finalization_status &&
+                outcome_two->finalization_status ==
+                    source_outcome.finalization_status,
+            "restored RunOutcome lost suffix completion facts");
+}
+
 void run() {
     const auto image = build_image();
     verify_initialization_identity_and_commit(image);
     verify_reset_diagnostic_code_stability();
+    verify_checkpoint_diagnostic_code_stability();
     verify_complete_step_transactions(image);
     verify_run_to_terminal(image);
     verify_failure_matrix(image);
@@ -3312,6 +3886,9 @@ void run() {
     verify_terminal_and_failure_precedence_over_cancellation(image);
     verify_cancellation_session_isolation(image);
     verify_dispose_lifecycle(image);
+    verify_checkpoint_clone_and_barrier_failures(image);
+    verify_restore_failure_matrix(image);
+    verify_checkpoint_branch_restore(image);
 }
 
 } // namespace
