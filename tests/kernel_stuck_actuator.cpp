@@ -263,6 +263,7 @@ struct CompiledFixture {
     compiler::CompleteStaticCompositionSource source;
     compiler::CompleteStaticCompilation base;
     compiler::CompleteExecutionPlanDescriptor plan;
+    compiler::PlanProofIndex proofs;
     contracts::ExecutionPlanImage image;
 };
 
@@ -281,23 +282,23 @@ struct CompiledFixture {
     }
     auto base = *base_outcome.value;
     const auto routed = compiler::compile_command_event_routes(
-        base.plan, {stuck_route()});
+        base, {stuck_route()});
     if (!routed.succeeded()) {
         throw std::runtime_error(
             "stuck-actuator route lowering failed: " +
             diagnostic_text(routed));
     }
-    auto plan = *routed.value;
+    auto extended = *routed.value;
     const auto linked = compiler::link_complete_execution_plan(
-        plan, base.proofs, {implementation});
+        extended.plan, extended.proofs, {implementation});
     if (!linked.succeeded()) {
         throw std::runtime_error(
             "stuck-actuator Image link failed: " +
             diagnostic_text(linked));
     }
     return {std::move(package), std::move(implementation),
-            std::move(source), std::move(base), std::move(plan),
-            *linked.value};
+            std::move(source), std::move(base), std::move(extended.plan),
+            std::move(extended.proofs), *linked.value};
 }
 
 struct RuntimeControl {

@@ -531,6 +531,7 @@ struct CompiledFixture {
     compiler::CompleteStaticCompositionSource source;
     compiler::CompleteStaticCompilation base;
     compiler::CompleteExecutionPlanDescriptor extended_plan;
+    compiler::PlanProofIndex extended_proofs;
     contracts::ExecutionPlanImage image;
 };
 
@@ -545,16 +546,17 @@ struct CompiledFixture {
             "ModeOwner base plan compilation failed");
     auto base = *base_outcome.value;
     const auto route_outcome = compiler::compile_command_event_routes(
-        base.plan, {mode_owner_route()});
+        base, {mode_owner_route()});
     require(route_outcome.succeeded(),
             "ModeOwner command/event route lowering failed");
-    auto extended_plan = *route_outcome.value;
+    auto extended = *route_outcome.value;
     const auto image_outcome = compiler::link_complete_execution_plan(
-        extended_plan, base.proofs, {implementation});
+        extended.plan, extended.proofs, {implementation});
     require(image_outcome.succeeded(), "ModeOwner Image link failed");
     return {std::move(package), std::move(implementation),
             std::move(source), std::move(base),
-            std::move(extended_plan), *image_outcome.value};
+            std::move(extended.plan), std::move(extended.proofs),
+            *image_outcome.value};
 }
 
 struct RuntimeControl {
@@ -1291,7 +1293,7 @@ void verify_compiler_and_image_contracts(const CompiledFixture& fixture) {
             "qualification implementation lacks reducer entry");
     reducer->call_shape_id += ".tampered";
     const auto mismatched_link = compiler::link_complete_execution_plan(
-        fixture.extended_plan, fixture.base.proofs, {implementation});
+        fixture.extended_plan, fixture.extended_proofs, {implementation});
     require(!mismatched_link.succeeded() &&
                 has_complete_diagnostic(
                     mismatched_link.diagnostics,

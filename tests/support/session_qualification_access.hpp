@@ -109,6 +109,10 @@ class SessionAccess final {
         session.qualification_set_restore_precommit_failure(true);
     }
 
+    static void fail_activation_precommit(Session& session) noexcept {
+        session.qualification_set_activation_precommit_failure(true);
+    }
+
     static void fail_next_held_output(
         Session& session, HeldOutputFault fault) noexcept {
         session.qualification_set_held_output_fault(

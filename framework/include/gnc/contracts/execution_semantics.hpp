@@ -103,6 +103,9 @@ enum class CommandCutoffPolicy : std::uint8_t {
 
 enum class EventDeliveryPoint : std::uint8_t {
     LaterPhaseSameTick,
+    // A package-authored linear event chain may continue within one phase.
+    // Stable delivery order, not scheduler priority, determines the hop order.
+    OrderedSamePhaseSameTick,
 };
 
 // Shared continuous-closure strategy authority. Individual Compiler slices

@@ -1195,13 +1195,23 @@ class SessionEventConsumptionContext final {
     [[nodiscard]] InProcessValueView payload() const noexcept {
         return payload_;
     }
+    [[nodiscard]] const SessionCommittedStateView& committed()
+        const noexcept {
+        return committed_;
+    }
+    [[nodiscard]] const SessionCandidateWriterSet& candidates()
+        const noexcept {
+        return candidates_;
+    }
 
   private:
     SessionEventConsumptionContext(
         std::uint32_t delivery_handle, std::uint32_t callsite_handle,
         std::uint32_t component_handle, EventId event_id,
         CommandId command_id, std::int64_t tick,
-        InProcessValueView payload) noexcept;
+        InProcessValueView payload,
+        SessionCommittedStateView committed,
+        SessionCandidateWriterSet candidates) noexcept;
 
     std::uint32_t delivery_handle_ = 0U;
     std::uint32_t callsite_handle_ = 0U;
@@ -1210,6 +1220,8 @@ class SessionEventConsumptionContext final {
     CommandId command_id_;
     std::int64_t tick_ = 0;
     InProcessValueView payload_;
+    SessionCommittedStateView committed_;
+    SessionCandidateWriterSet candidates_;
 
     friend class Session;
 };
@@ -1634,6 +1646,9 @@ class Session final {
     [[nodiscard]] std::uint64_t committed_epoch() const noexcept;
     [[nodiscard]] std::int64_t committed_tick() const noexcept;
     [[nodiscard]] std::uint64_t committed_step_count() const noexcept;
+    [[nodiscard]] std::optional<bool> entity_active(
+        std::uint32_t entity_handle) const noexcept;
+    [[nodiscard]] std::uint64_t topology_revision() const noexcept;
     [[nodiscard]] bool frame_open() const noexcept;
     [[nodiscard]] std::uint64_t command_ledger_sequence() const noexcept;
     [[nodiscard]] std::size_t pending_command_count() const noexcept;
@@ -1675,6 +1690,7 @@ class Session final {
     [[nodiscard]] CheckpointOutcome qualification_checkpoint_with_barrier(
         std::uint8_t barrier) noexcept;
     void qualification_set_restore_precommit_failure(bool fail) noexcept;
+    void qualification_set_activation_precommit_failure(bool fail) noexcept;
     void qualification_set_held_output_fault(std::uint8_t fault) noexcept;
     std::unique_ptr<Impl> implementation_;
 

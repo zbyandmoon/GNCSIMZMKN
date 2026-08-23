@@ -33,6 +33,7 @@ struct SourceRef {
 enum class EntityLifecycle : std::uint8_t {
     Unspecified,
     ActiveAtInitialize,
+    InactiveAtInitialize,
 };
 
 [[nodiscard]] constexpr std::string_view to_string(
@@ -42,6 +43,8 @@ enum class EntityLifecycle : std::uint8_t {
         return "Unspecified";
     case EntityLifecycle::ActiveAtInitialize:
         return "active_at_initialize";
+    case EntityLifecycle::InactiveAtInitialize:
+        return "inactive_at_initialize";
     }
     return "Unknown";
 }
@@ -437,6 +440,14 @@ inline void validate_runtime_component(
                     CommandReduction,
                 gnc::model_sdk::RuntimeExecutionObligation::
                     EventConsumption};
+    const bool event_patch_discrete =
+        discrete &&
+        obligations ==
+            std::set<gnc::model_sdk::RuntimeExecutionObligation>{
+                gnc::model_sdk::RuntimeExecutionObligation::
+                    PublishProjection,
+                gnc::model_sdk::RuntimeExecutionObligation::
+                    EventConsumption};
     const bool profile_contract =
         (sampled &&
          (model.placement ==
@@ -469,7 +480,7 @@ inline void validate_runtime_component(
                       PublishProjection,
                   gnc::model_sdk::RuntimeExecutionObligation::
                       IntervalEvolution} ||
-          instant_patch_discrete) &&
+          instant_patch_discrete || event_patch_discrete) &&
          runtime.state_owner.has_value()) ||
         (evaluator &&
          model.placement ==
@@ -503,7 +514,7 @@ inline void validate_runtime_component(
         const auto& owner = *runtime.state_owner;
         const auto& schema = owner.schema;
         const auto expected_evolution =
-            mode_owner || instant_patch_discrete
+            mode_owner || instant_patch_discrete || event_patch_discrete
             ? gnc::model_sdk::StaticStateEvolution::InstantPatch
             : (continuous
                    ? gnc::model_sdk::StaticStateEvolution::
@@ -758,8 +769,12 @@ inline void validate_runtime_component(
     const bool config_driven_output_source =
         sampled &&
         model.placement == gnc::model_sdk::ModelPlacement::VehicleOutput;
+    // Event-patch processors receive their typed driving value through the
+    // package-declared EventConsumption request contract, not a CycleFrame
+    // input port.  Their PublishProjection output remains a normal port.
     if (!mode_owner &&
-        ((!config_driven_output_source && input_count == 0U) ||
+        (((!config_driven_output_source && !event_patch_discrete) &&
+          input_count == 0U) ||
          output_count == 0U)) {
         diagnostics.push_back(
             {DiagnosticCode::InvalidCatalogDescriptor, source,
@@ -812,7 +827,7 @@ inline void validate_runtime_component(
                                 ? gnc::model_sdk::StaticStateReadKind::Candidate
                                 : gnc::model_sdk::StaticStateReadKind::Committed;
         } else if (discrete) {
-            if (instant_patch_discrete) {
+            if (instant_patch_discrete || event_patch_discrete) {
                 if (entry.obligation ==
                     gnc::model_sdk::RuntimeExecutionObligation::
                         PublishProjection) {
@@ -831,6 +846,12 @@ inline void validate_runtime_component(
                            gnc::model_sdk::RuntimeExecutionObligation::
                                EventConsumption) {
                     expected_phase = gnc::model_sdk::CoarsePhase::Output;
+                    if (event_patch_discrete) {
+                        expected_read =
+                            gnc::model_sdk::StaticStateReadKind::Committed;
+                        expected_write =
+                            gnc::model_sdk::StaticStateWriteKind::InstantPatch;
+                    }
                 } else if (entry.obligation ==
                            gnc::model_sdk::RuntimeExecutionObligation::
                                BoundaryEvaluation) {

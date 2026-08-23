@@ -512,6 +512,14 @@ struct PlanImageTransaction {
     std::vector<std::uint32_t> member_occurrence_handles;
 };
 
+struct PlanImageEntity {
+    std::uint32_t handle = 0U;
+    std::string plan_element_id;
+    std::string entity_id;
+    bool active_at_initialize = true;
+    std::vector<std::uint32_t> occurrence_handles;
+};
+
 // Cancellation remains an in-process control operation. These immutable facts
 // identify the exact execution boundaries where the Kernel may observe a
 // request; no callback, serializer, or package-specific dispatch is implied.
@@ -546,6 +554,7 @@ struct PlanImageCommandRoute {
     CommandCutoffPolicy cutoff_policy =
         CommandCutoffPolicy::LedgerSequenceAtTransactionStart;
     std::uint32_t event_delivery_handle = 0U;
+    std::vector<std::uint32_t> event_delivery_handles;
 };
 
 struct PlanImageEventDelivery {
@@ -557,6 +566,24 @@ struct PlanImageEventDelivery {
     std::string event_schema_id;
     EventDeliveryPoint delivery = EventDeliveryPoint::LaterPhaseSameTick;
     std::uint32_t stable_order = 0U;
+    std::uint32_t predecessor_event_delivery_handle = 0U;
+};
+
+struct PlanImageKnownActivation {
+    std::uint32_t handle = 0U;
+    std::string plan_element_id;
+    std::uint32_t parent_entity_handle = 0U;
+    std::uint32_t child_entity_handle = 0U;
+    std::uint32_t relationship_owner_occurrence_handle = 0U;
+    std::uint32_t parent_owner_occurrence_handle = 0U;
+    std::uint32_t child_owner_occurrence_handle = 0U;
+    std::uint32_t transaction_handle = 0U;
+    std::uint32_t command_route_handle = 0U;
+    std::vector<std::uint32_t> mapping_event_delivery_handles;
+    std::vector<std::uint32_t> required_candidate_slot_handles;
+    std::vector<std::uint32_t> gated_callsite_handles;
+    std::vector<std::uint32_t> gated_output_slot_handles;
+    std::uint64_t topology_revision_delta = 1U;
 };
 
 [[nodiscard]] inline const PlanImageTransactionBranch*
@@ -689,9 +716,11 @@ struct ExecutionPlanImageData {
     std::vector<PlanImageDagEdge> dag_edges;
     std::vector<PlanImageIntegrationScope> integration_scopes;
     std::vector<PlanImageTransaction> transactions;
+    std::vector<PlanImageEntity> entities;
     PlanImageCancellationPolicy cancellation_policy;
     std::vector<PlanImageCommandRoute> command_routes;
     std::vector<PlanImageEventDelivery> event_deliveries;
+    std::vector<PlanImageKnownActivation> known_activations;
     std::vector<PlanImageEvaluatorHistory> evaluator_histories;
     PlanImageLifecycle lifecycle;
     std::vector<PlanImageConformance> conformance;
@@ -776,6 +805,10 @@ class ExecutionPlanImage final {
         const noexcept {
         return data_.entity_selectors;
     }
+    [[nodiscard]] const std::vector<PlanImageEntity>& entities()
+        const noexcept {
+        return data_.entities;
+    }
     [[nodiscard]] const std::vector<PlanImageHeldOutput>& held_outputs()
         const noexcept {
         return data_.held_outputs;
@@ -822,6 +855,10 @@ class ExecutionPlanImage final {
     [[nodiscard]] const std::vector<PlanImageEventDelivery>& event_deliveries()
         const noexcept {
         return data_.event_deliveries;
+    }
+    [[nodiscard]] const std::vector<PlanImageKnownActivation>&
+    known_activations() const noexcept {
+        return data_.known_activations;
     }
     [[nodiscard]] const std::vector<PlanImageEvaluatorHistory>& evaluator_histories() const noexcept {
         return data_.evaluator_histories;
