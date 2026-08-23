@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import subprocess
 import sys
@@ -120,6 +121,208 @@ def exact_record(field: str, actual: Any, expected: Any) -> Dict[str, Any]:
     }
 
 
+def opening_query_contract(
+    actual: Dict[str, Any],
+    reference: Dict[str, Any],
+    absolute_tolerance: Decimal,
+    relative_tolerance: Decimal,
+) -> Dict[str, bool]:
+    scalar_fields = (
+        "airspeed_mps",
+        "mach",
+        "alpha_rad",
+        "beta_rad",
+        "dynamic_pressure_pa",
+    )
+    actual_coefficients = actual.get("coefficients", [])
+    reference_coefficients = reference.get("coefficients", [])
+    shape_valid = (
+        all(field in actual and field in reference for field in scalar_fields)
+        and isinstance(actual_coefficients, list)
+        and isinstance(reference_coefficients, list)
+        and len(actual_coefficients) == len(reference_coefficients) == 6
+    )
+    if not shape_valid:
+        return {
+            "finite": False,
+            "shape_valid": False,
+            "within_declared_tolerance": False,
+        }
+    pairs = [(actual[field], reference[field]) for field in scalar_fields]
+    pairs.extend(zip(actual_coefficients, reference_coefficients))
+    finite = all(
+        as_decimal(actual_value).is_finite()
+        and as_decimal(reference_value).is_finite()
+        for actual_value, reference_value in pairs
+    )
+    accepted = finite and all(
+        numeric_record(
+            "portable-opening",
+            actual_value,
+            reference_value,
+            absolute_tolerance,
+            relative_tolerance,
+        )["accepted"]
+        for actual_value, reference_value in pairs
+    )
+    return {
+        "finite": finite,
+        "shape_valid": shape_valid,
+        "within_declared_tolerance": accepted,
+    }
+
+
+def actual_envelope_contract(
+    envelope: Dict[str, Any],
+    domain: Dict[str, Any],
+    opening: Dict[str, Any],
+) -> Dict[str, bool]:
+    axes = (
+        ("mach", "mach", "mach"),
+        ("alpha_rad", "alpha", "alpha_rad"),
+        ("beta_rad", "beta", "beta_rad"),
+    )
+    shape_valid = all(
+        isinstance(envelope.get(envelope_axis), list)
+        and len(envelope[envelope_axis]) == 2
+        and isinstance(domain.get(domain_axis), list)
+        and len(domain[domain_axis]) == 2
+        and opening_axis in opening
+        for envelope_axis, domain_axis, opening_axis in axes
+    )
+    if not shape_valid:
+        return {
+            "finite": False,
+            "shape_valid": False,
+            "ordered": False,
+            "within_selected_asset_domain": False,
+            "contains_opening_query": False,
+        }
+    finite = True
+    ordered = True
+    within_domain = True
+    contains_opening = True
+    for envelope_axis, domain_axis, opening_axis in axes:
+        observed_min, observed_max = (
+            as_decimal(value) for value in envelope[envelope_axis]
+        )
+        domain_min, domain_max = (
+            as_decimal(value) for value in domain[domain_axis]
+        )
+        opening_value = as_decimal(opening[opening_axis])
+        finite = finite and all(
+            value.is_finite()
+            for value in (
+                observed_min,
+                observed_max,
+                domain_min,
+                domain_max,
+                opening_value,
+            )
+        )
+        ordered = ordered and observed_min <= observed_max
+        within_domain = within_domain and (
+            domain_min <= observed_min <= observed_max <= domain_max
+        )
+        contains_opening = contains_opening and (
+            observed_min <= opening_value <= observed_max
+        )
+    return {
+        "finite": finite,
+        "shape_valid": shape_valid,
+        "ordered": ordered,
+        "within_selected_asset_domain": within_domain,
+        "contains_opening_query": contains_opening,
+    }
+
+
+def terminal_state_contract(
+    state: Dict[str, Any],
+    expected_mass: Any,
+    absolute_tolerance: Decimal,
+    relative_tolerance: Decimal,
+) -> Dict[str, bool]:
+    position = state.get("position_enu_m", [])
+    velocity = state.get("velocity_enu_mps", [])
+    shape_valid = (
+        isinstance(position, list)
+        and len(position) == 3
+        and isinstance(velocity, list)
+        and len(velocity) == 3
+        and "mass_kg" in state
+    )
+    if not shape_valid:
+        return {
+            "finite": False,
+            "shape_valid": False,
+            "mass_within_declared_tolerance": False,
+        }
+    values = [*position, *velocity, state["mass_kg"]]
+    finite = all(as_decimal(value).is_finite() for value in values)
+    mass_accepted = finite and numeric_record(
+        "terminal_state.mass_kg",
+        state["mass_kg"],
+        expected_mass,
+        absolute_tolerance,
+        relative_tolerance,
+    )["accepted"]
+    return {
+        "finite": finite,
+        "shape_valid": shape_valid,
+        "mass_within_declared_tolerance": mass_accepted,
+    }
+
+
+def portable_report_contract(report: Dict[str, Any]) -> Dict[str, Any]:
+    """Project a rich build-local capture onto cross-toolchain evidence.
+
+    Long, nonlinear floating-point trajectories are required to be bit exact
+    across repeated Sessions in one build/process.  They are not required to
+    be bit-identical between standard libraries and compilers.  The frozen
+    report therefore retains one representative observation, while this
+    projection independently reclassifies only the declared portable facts.
+    """
+    projected = copy.deepcopy(report)
+    tolerance = projected["tolerance"]
+    absolute_tolerance = D(tolerance["absolute"])
+    relative_tolerance = D(tolerance["relative"])
+    opening = projected["opening_query"]
+    opening_contract = opening_query_contract(
+        opening["actual"],
+        opening["independent_reference"],
+        absolute_tolerance,
+        relative_tolerance,
+    )
+    opening["actual"] = {
+        "build_local_observation_contract": opening_contract,
+    }
+    envelope_contract = actual_envelope_contract(
+        projected["actual_query_envelope"],
+        projected["asset_transition"]["new"]["domain"],
+        report["opening_query"]["actual"],
+    )
+    projected["actual_query_envelope"] = {
+        "build_local_observation_contract": envelope_contract,
+    }
+    terminal = projected["terminal"]
+    terminal_contract = terminal_state_contract(
+        terminal["state"],
+        terminal["expected_mass_kg"],
+        absolute_tolerance,
+        relative_tolerance,
+    )
+    terminal["state"] = {
+        "build_local_observation_contract": terminal_contract,
+    }
+    projected["maximum_absolute_error"] = {
+        "accepted": bool(projected["maximum_absolute_error"]["accepted"]),
+    }
+    projected["maximum_relative_error"] = {
+        "accepted": bool(projected["maximum_relative_error"]["accepted"]),
+    }
+    return projected
+
+
 def build_difference_report(
     reference: Dict[str, Any],
     actual: Dict[str, Any],
@@ -177,26 +380,15 @@ def build_difference_report(
     envelope_expectation = reference["trajectory"][
         "actual_query_envelope_expectation"
     ]
-    for actual_axis, reference_axis in (
-        ("mach", "mach"),
-        ("alpha_rad", "alpha_rad"),
-        ("beta_rad", "beta_rad"),
-    ):
-        append_vector_records(
-            numeric,
-            f"actual_envelope.{actual_axis}",
-            actual["actual_envelope"][actual_axis],
-            envelope_expectation[reference_axis],
-            absolute_tolerance,
-            relative_tolerance,
-        )
-
+    expected_terminal_mass = (
+        D(source["author_input"]["mass_kg"])
+        - D("0.5") * D(source["author_input"]["duration_s"])
+    )
     numeric.append(
         numeric_record(
             "terminal_state.mass_kg",
             actual["terminal_state"]["mass_kg"],
-            D(source["author_input"]["mass_kg"])
-            - D("0.5") * D(source["author_input"]["duration_s"]),
+            expected_terminal_mass,
             absolute_tolerance,
             relative_tolerance,
         )
@@ -276,6 +468,31 @@ def build_difference_report(
             },
         ),
     ]
+    envelope_evidence = actual_envelope_contract(
+        actual["actual_envelope"], actual["new_domain"], opening
+    )
+    terminal_evidence = terminal_state_contract(
+        actual["terminal_state"],
+        expected_terminal_mass,
+        absolute_tolerance,
+        relative_tolerance,
+    )
+    for field, accepted in (
+        ("actual_envelope_finite", envelope_evidence["finite"]),
+        ("actual_envelope_shape", envelope_evidence["shape_valid"]),
+        ("actual_envelope_order", envelope_evidence["ordered"]),
+        (
+            "actual_envelope_domain",
+            envelope_evidence["within_selected_asset_domain"],
+        ),
+        (
+            "actual_envelope_opening",
+            envelope_evidence["contains_opening_query"],
+        ),
+        ("terminal_state_finite", terminal_evidence["finite"]),
+        ("terminal_state_shape", terminal_evidence["shape_valid"]),
+    ):
+        exact.append(exact_record(field, accepted, True))
 
     all_accepted = all(record["accepted"] for record in numeric) and all(
         record["accepted"] for record in exact
@@ -289,15 +506,33 @@ def build_difference_report(
         "The launch-local ENU frame and uniform environment omit Earth curvature, rotation, changing tangent planes, and atmospheric variation.",
         "The independent Decimal reference stops at the opening lookup; terminal motion is product conformance evidence without an independent 3000-step integration or convergence claim.",
         "Stability, overshoot, handling quality, and flight-safety conclusions remain outside this verdict.",
+        "Long-horizon state equality across compiler and standard-library implementations is not claimed; each qualified build must be bit-deterministic within one process and satisfy the portable domain, cadence, terminal, and mass invariants.",
     ]
     verdict = VERDICT if all_accepted else "comparison_failed"
     return json_value({
-        "schema_version": "gnczmkn.yyz-00a-difference-report/2",
-        "report_id": "DIFF-YYZ-00A-CANONICAL-002",
+        "schema_version": "gnczmkn.yyz-00a-difference-report/3",
+        "report_id": "DIFF-YYZ-00A-CANONICAL-003",
         "reference_id": reference["reference_id"],
         "status": "accepted" if all_accepted else "mismatch",
         "verdict": verdict,
         "claim_scope": source["claim_scope"],
+        "cross_tool_contract": {
+            "portable_acceptance": (
+                "exact identity, status, cadence, held-age, terminal and "
+                "image facts; independently tolerated opening query and "
+                "terminal mass; finite ordered in-domain product envelope "
+                "containing the opening query"
+            ),
+            "build_local_determinism": (
+                "bit-exact across two Sessions in one build/process"
+            ),
+            "long_horizon_state_equality": "not-claimed-across-toolchains",
+            "representative_capture": (
+                "raw opening, envelope and terminal state values are retained "
+                "as one build-local observation and are normalized to their "
+                "declared contracts during cross-tool verification"
+            ),
+        },
         "product_image_fingerprint": actual["image_fingerprint"],
         "asset_transition": {
             "old": {
@@ -339,9 +574,13 @@ def build_difference_report(
             "tick": actual["terminal_tick"],
             "committed_intervals": actual["committed_intervals"],
             "state": actual["terminal_state"],
+            "state_contract": terminal_evidence,
+            "expected_mass_kg": expected_terminal_mass,
             "runwide_and_terminal_self_consistent": True,
         },
         "actual_query_envelope": actual["actual_envelope"],
+        "actual_query_envelope_contract": envelope_evidence,
+        "reference_query_envelope_capture": envelope_expectation,
         "cadence_and_hold": {
             "counts": actual["cadence_counts"],
             "held_latest_max_age": actual["held_latest_max_age"],

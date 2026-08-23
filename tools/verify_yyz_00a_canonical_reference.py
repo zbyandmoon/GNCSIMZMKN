@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
 from pathlib import Path
@@ -14,7 +15,34 @@ from yyz_00a_canonical_reference import (
     build_reference_document,
     load_decimal_json,
 )
-from yyz_00a_difference import build_difference_report, run_probe
+from yyz_00a_difference import (
+    build_difference_report,
+    portable_report_contract,
+    run_probe,
+)
+
+
+def verify_portable_projection_guards(report: dict) -> None:
+    baseline = portable_report_contract(report)
+    mutations = []
+
+    bad_opening = copy.deepcopy(report)
+    bad_opening["opening_query"]["actual"]["mach"] = "9"
+    mutations.append(("opening tolerance", bad_opening))
+
+    bad_envelope = copy.deepcopy(report)
+    bad_envelope["actual_query_envelope"]["mach"][0] = "-1"
+    mutations.append(("envelope domain", bad_envelope))
+
+    bad_terminal_mass = copy.deepcopy(report)
+    bad_terminal_mass["terminal"]["state"]["mass_kg"] = "999"
+    mutations.append(("terminal mass", bad_terminal_mass))
+
+    for label, mutation in mutations:
+        if portable_report_contract(mutation) == baseline:
+            raise RuntimeError(
+                f"portable report projection ignored {label} mutation"
+            )
 
 
 def main() -> int:
@@ -39,9 +67,14 @@ def main() -> int:
         actual,
         load_decimal_json(args.source.resolve()),
     )
+    verify_portable_projection_guards(recomputed_report)
     frozen_report = load_decimal_json(args.report.resolve())
-    if recomputed_report != frozen_report:
+    if portable_report_contract(recomputed_report) != portable_report_contract(
+        frozen_report
+    ):
         raise RuntimeError("frozen canonical 00A difference report is stale")
+    if not frozen_report["all_available_fields_accepted"]:
+        raise RuntimeError("frozen canonical 00A report is not accepted")
     if not recomputed_report["all_available_fields_accepted"]:
         raise RuntimeError("canonical available-field comparison failed")
     if recomputed_report["unresolved_count"] != 0:

@@ -13,6 +13,13 @@
       "0.61764705882352944"
     ]
   },
+  "actual_query_envelope_contract": {
+    "contains_opening_query": true,
+    "finite": true,
+    "ordered": true,
+    "shape_valid": true,
+    "within_selected_asset_domain": true
+  },
   "all_available_fields_accepted": true,
   "asset_transition": {
     "new": {
@@ -94,15 +101,21 @@
   },
   "candidate_terminal_science_verdict": true,
   "claim_scope": "Abstract engineering qualification for source mapping, deterministic product execution, explicit synthetic aerodynamic applicability, and a completed 30-second product trajectory. No real-aircraft aerodynamic accuracy, stability, or certification claim is made.",
+  "cross_tool_contract": {
+    "build_local_determinism": "bit-exact across two Sessions in one build/process",
+    "long_horizon_state_equality": "not-claimed-across-toolchains",
+    "portable_acceptance": "exact identity, status, cadence, held-age, terminal and image facts; independently tolerated opening query and terminal mass; finite ordered in-domain product envelope containing the opening query",
+    "representative_capture": "raw opening, envelope and terminal state values are retained as one build-local observation and are normalized to their declared contracts during cross-tool verification"
+  },
   "determinism": {
     "bit_deterministic": true,
     "runs": 2
   },
   "difference_classification": {
-    "accepted_numeric_count": 24,
+    "accepted_numeric_count": 18,
     "approved_model_time_numerical_difference_count": 0,
     "defect_count": 0,
-    "exact_match_count": 14,
+    "exact_match_count": 21,
     "unexplained_difference_count": 0,
     "unresolved_coverage_count": 0
   },
@@ -158,18 +171,34 @@
   },
   "product_image_fingerprint": "65e00515234efcabfae14399e9fe6838d65248af2d9a598f50b09a3470131078",
   "reference_id": "REFERENCE-YYZ-00A-CANONICAL-001",
-  "report_id": "DIFF-YYZ-00A-CANONICAL-002",
-  "schema_version": "gnczmkn.yyz-00a-difference-report/2",
-  "science_gap_count": 4,
+  "reference_query_envelope_capture": {
+    "alpha_rad": [
+      "-3.1412239572488261",
+      "3.1397707600310452"
+    ],
+    "beta_rad": [
+      "-1.4925695311254403",
+      "1.4441212960610592"
+    ],
+    "mach": [
+      "0.30237994030302495",
+      "0.61764705882352944"
+    ]
+  },
+  "report_id": "DIFF-YYZ-00A-CANONICAL-003",
+  "schema_version": "gnczmkn.yyz-00a-difference-report/3",
+  "science_gap_count": 5,
   "science_gaps": [
     "The aerodynamic successor is synthetic and has no real-aircraft accuracy or certification basis.",
     "The launch-local ENU frame and uniform environment omit Earth curvature, rotation, changing tangent planes, and atmospheric variation.",
     "The independent Decimal reference stops at the opening lookup; terminal motion is product conformance evidence without an independent 3000-step integration or convergence claim.",
-    "Stability, overshoot, handling quality, and flight-safety conclusions remain outside this verdict."
+    "Stability, overshoot, handling quality, and flight-safety conclusions remain outside this verdict.",
+    "Long-horizon state equality across compiler and standard-library implementations is not claimed; each qualified build must be bit-deterministic within one process and satisfy the portable domain, cadence, terminal, and mass invariants."
   ],
   "status": "accepted",
   "terminal": {
     "committed_intervals": 3000,
+    "expected_mass_kg": "665",
     "reason": "duration-complete",
     "runwide_and_terminal_self_consistent": true,
     "state": {
@@ -184,6 +213,11 @@
         "28.245347473459518",
         "-111.6251989078372"
       ]
+    },
+    "state_contract": {
+      "finite": true,
+      "mass_within_declared_tolerance": true,
+      "shape_valid": true
     },
     "status": "Completed",
     "tick": 3000
