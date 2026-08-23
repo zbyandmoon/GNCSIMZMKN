@@ -16,6 +16,15 @@ find_package(Threads REQUIRED)
 
 add_library(gnc_build_options INTERFACE)
 target_compile_features(gnc_build_options INTERFACE cxx_std_17)
+if(MSVC)
+    # ExecutionPlanImage freezes exact in-process STL-backed object layouts
+    # under a package build lock. Keep that ABI identical between Debug and
+    # Release; MSVC's Debug default (_ITERATOR_DEBUG_LEVEL=2) otherwise changes
+    # those layouts and makes the same build fingerprint describe two ABIs.
+    target_compile_definitions(
+        gnc_build_options
+        INTERFACE _ITERATOR_DEBUG_LEVEL=0)
+endif()
 target_include_directories(
     gnc_build_options
     INTERFACE
