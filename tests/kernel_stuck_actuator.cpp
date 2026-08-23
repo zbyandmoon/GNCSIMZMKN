@@ -118,7 +118,8 @@ void append_field_sources(
     return result;
 }
 
-[[nodiscard]] compiler::CompleteStaticCompositionSource fixture_source() {
+[[nodiscard]] compiler::CompleteStaticCompositionSource fixture_source(
+    double ground_altitude_meters = 0.0) {
     compiler::CompleteStaticCompositionSource source;
     source.source_version =
         std::string(compiler::kCompleteStaticCompositionSourceVersion);
@@ -175,17 +176,17 @@ void append_field_sources(
         std::string(kContactOccurrence),
         std::string(yyz::kContactImpactEvaluatorModelId),
         config(std::string(yyz::kContactImpactConfigSchemaId),
-               {{"ground_altitude_meters", 0.0}}),
+               {{"ground_altitude_meters", ground_altitude_meters}}),
         scope, sdk::ModelPlacement::Evaluation));
 
     compiler::CompleteSourceInitialBinding actuator_initial;
     actuator_initial.owner_occurrence_id = std::string(kActuatorOccurrence);
     actuator_initial.builder_inputs =
         config(std::string(yyz::kActuatorInitialStateSchemaId),
-               {{"actual_position_radians", 0.0}});
+               {{"locked_position_radians", 0.0}});
     actuator_initial.field_sources.push_back(
-        {"actual_position_radians",
-         source_ref("/initial/actuator/actual-position")});
+        {"locked_position_radians",
+         source_ref("/initial/actuator/locked-position")});
     actuator_initial.source = source_ref("/initial/actuator");
     source.initial_bindings.push_back(std::move(actuator_initial));
 
@@ -265,11 +266,12 @@ struct CompiledFixture {
     contracts::ExecutionPlanImage image;
 };
 
-[[nodiscard]] CompiledFixture compile_fixture() {
+[[nodiscard]] CompiledFixture compile_fixture(
+    double ground_altitude_meters = 0.0) {
     auto package = yyz::describe_scheduled_stuck_actuator_package();
     auto implementation =
         yyz::describe_scheduled_stuck_actuator_implementation();
-    auto source = fixture_source();
+    auto source = fixture_source(ground_altitude_meters);
     const auto base_outcome =
         compiler::compile_complete_execution_plan(source, {package});
     if (!base_outcome.succeeded()) {
@@ -305,6 +307,7 @@ struct RuntimeControl {
     std::size_t seal_failures_remaining = 0U;
     std::size_t fail_stuck_validation_at = 0U;
     std::size_t stuck_validation_count = 0U;
+    std::optional<contracts::TransactionBranch> forced_branch_decision;
 };
 
 template <typename Value>
@@ -355,10 +358,10 @@ class TypedOperations final : public kernel::InProcessObjectOperations {
 
     [[nodiscard]] bool validate(const void* object) const noexcept override {
         if (object == nullptr) return false;
-        if constexpr (std::is_same_v<Value, yyz::StatefulActuatorState>) {
+        if constexpr (std::is_same_v<Value, yyz::FaultStateFragment>) {
             const auto& state = *static_cast<const Value*>(object);
             if (!yyz::validate_stateful_actuator_state(state)) return false;
-            if (state.fault.mode == yyz::ActuatorFaultMode::Stuck &&
+            if (state.mode == yyz::ActuatorFaultMode::Stuck &&
                 control_ != nullptr &&
                 control_->fail_stuck_validation_at != 0U) {
                 ++control_->stuck_validation_count;
@@ -369,22 +372,22 @@ class TypedOperations final : public kernel::InProcessObjectOperations {
                 }
             }
             return true;
-        }
-        if constexpr (std::is_same_v<Value,
-                                     yyz::VerticalPitchRigidState>) {
+        } else if constexpr (std::is_same_v<
+                                 Value, yyz::VerticalPitchRigidState>) {
             return yyz::validate_vertical_pitch_rigid_state(
                 *static_cast<const Value*>(object));
+        } else {
+            return true;
         }
-        return true;
     }
 
     [[nodiscard]] bool supports_nofail_swap() const noexcept override {
-        return std::is_same_v<Value, yyz::StatefulActuatorState> ||
+        return std::is_same_v<Value, yyz::FaultStateFragment> ||
                std::is_same_v<Value, yyz::VerticalPitchRigidState>;
     }
 
     void nofail_swap(void* lhs, void* rhs) const noexcept override {
-        if constexpr (std::is_same_v<Value, yyz::StatefulActuatorState>) {
+        if constexpr (std::is_same_v<Value, yyz::FaultStateFragment>) {
             yyz::swap_stateful_actuator_state(
                 *static_cast<Value*>(lhs), *static_cast<Value*>(rhs));
         } else if constexpr (std::is_same_v<
@@ -680,7 +683,7 @@ class StuckReducer final : public kernel::SessionCommandReducerEntry {
                     identity_.route_handle,
                     "stuck reducer payload or authority mismatch"};
         }
-        const yyz::StatefulActuatorState* prior = nullptr;
+        const yyz::FaultStateFragment* prior = nullptr;
         auto status = read_typed(context.committed(), state_block_handle_,
                                  prior);
         if (!status) return status;
@@ -799,6 +802,7 @@ class FixtureProvider final : public kernel::SessionMaterializationProvider {
     std::uint32_t rigid_state_block_handle = 0U;
     std::uint32_t actual_surface_slot_handle = 0U;
     std::uint32_t contact_result_slot_handle = 0U;
+    std::uint32_t terminal_branch_slot_handle = 0U;
 
   private:
     using MaterializerMap = std::unordered_map<
@@ -850,6 +854,10 @@ class FixtureProvider final : public kernel::SessionMaterializationProvider {
                        yyz::kContactImpactResultLayoutId) {
                 contact_result_slot_handle = slot.handle;
                 add_slot(slot, yyz::ContactImpactResult{});
+            } else if (slot.layout_id ==
+                       yyz::kTerminalBranchDecisionLayoutId) {
+                terminal_branch_slot_handle = slot.handle;
+                add_slot(slot, contracts::TransactionBranch::Continue);
             } else {
                 throw std::runtime_error(
                     "unsupported stuck-actuator slot layout");
@@ -935,7 +943,7 @@ class FixtureProvider final : public kernel::SessionMaterializationProvider {
                 initial_states_.emplace(
                     binding->handle,
                     std::make_unique<TypedMaterializer<
-                        yyz::StatefulActuatorState>>(
+                        yyz::FaultStateFragment>>(
                         kernel::SessionMaterializerIdentity{
                             binding->handle,
                             kernel::SessionObjectRole::InitialStateValue,
@@ -1042,7 +1050,7 @@ class FixtureProvider final : public kernel::SessionMaterializationProvider {
                     publish->handle, component->handle,
                     publish->entry_handle},
                 [this, state_output, state_writer](const auto& context) {
-                    const yyz::StatefulActuatorState* state = nullptr;
+                    const yyz::FaultStateFragment* state = nullptr;
                     auto status = read_typed(
                         context.committed(), actuator_state_block_handle,
                         state);
@@ -1070,7 +1078,7 @@ class FixtureProvider final : public kernel::SessionMaterializationProvider {
                     boundary->entry_handle},
                 [this, effective_state_slot, demand_slot, actual_output,
                  actual_writer](const auto& context) {
-                    const yyz::StatefulActuatorState* state = nullptr;
+                    const yyz::FaultStateFragment* state = nullptr;
                     const yyz::ScheduledSurfaceDemand* demand = nullptr;
                     auto status = read_typed(context.inputs(),
                                              effective_state_slot, state);
@@ -1247,6 +1255,10 @@ class FixtureProvider final : public kernel::SessionMaterializationProvider {
             image, callsite->output_slot_handles,
             yyz::kContactImpactResultContractId);
         const auto writer = writer_for_slot(*callsite, output);
+        const auto branch_output = slot_with_contract(
+            image, callsite->output_slot_handles,
+            yyz::kTerminalBranchDecisionContractId);
+        const auto branch_writer = writer_for_slot(*callsite, branch_output);
         const auto history = component->evaluator_history_handles.front();
         invocations_.emplace(
             callsite->handle,
@@ -1254,7 +1266,8 @@ class FixtureProvider final : public kernel::SessionMaterializationProvider {
                 kernel::SessionInvocationIdentity{
                     callsite->handle, component->handle,
                     callsite->entry_handle},
-                [this, output, writer, history](const auto& context) {
+                [this, output, writer, branch_output, branch_writer,
+                 history](const auto& context) {
                     kernel::SessionCommittedHistoryInfo info;
                     auto status = context.history().info(history, info);
                     if (!status || info.sample_count == 0U ||
@@ -1286,8 +1299,14 @@ class FixtureProvider final : public kernel::SessionMaterializationProvider {
                             kernel::SessionError::InvocationFailed, output,
                             "contact impact evaluation failed"};
                     }
-                    return write_typed(context.outputs(), output, writer,
-                                       value.value());
+                    status = write_typed(context.outputs(), output, writer,
+                                         value.value().result);
+                    if (!status) return status;
+                    const auto branch =
+                        control.forced_branch_decision.value_or(
+                            value.value().branch);
+                    return write_typed(context.outputs(), branch_output,
+                                       branch_writer, branch);
                 }));
     }
 
@@ -1331,6 +1350,13 @@ struct LiveSession {
             std::move(session), std::move(id)};
 }
 
+[[nodiscard]] contracts::ExecutionPlanImage image_from(
+    contracts::ExecutionPlanImageData data) {
+    data.image_fingerprint =
+        compiler::complete_plan_detail::image_fingerprint(data);
+    return contracts::ExecutionPlanImage::freeze(std::move(data));
+}
+
 [[nodiscard]] kernel::CommandRequest stuck_command(
     const LiveSession& live, std::string command_id,
     std::int64_t effective_tick = kFaultTick,
@@ -1371,11 +1397,13 @@ template <typename Value>
 struct ScenarioResult {
     yyz::ActualSurfaceOutput fault_tick_output;
     yyz::ActualSurfaceOutput later_tick_output;
-    yyz::StatefulActuatorState actuator;
+    yyz::FaultStateFragment actuator;
     yyz::VerticalPitchRigidState rigid;
     yyz::ContactImpactResult contact;
     std::size_t application_receipts = 0U;
     std::size_t events = 0U;
+    double preterminal_altitude_meters = 0.0;
+    kernel::StepOutcome terminal_step;
     kernel::RunOutcome outcome;
 };
 
@@ -1392,11 +1420,22 @@ struct ScenarioResult {
     ScenarioResult result;
     bool fault_output_seen = false;
     bool later_output_seen = false;
+    double prior_opening_altitude =
+        read_committed_state<yyz::VerticalPitchRigidState>(
+            live, live.provider->rigid_state_block_handle)
+            .altitude_meters;
     while (live.session->state() == kernel::SessionState::Initialized) {
+        const auto opening_rigid =
+            read_committed_state<yyz::VerticalPitchRigidState>(
+                live, live.provider->rigid_state_block_handle);
         const auto step = live.session->execute_step();
         require(step.status == kernel::StepStatus::Committed ||
                     step.status == kernel::StepStatus::Terminated,
                 "stuck-actuator scenario step failed");
+        if (step.status == kernel::StepStatus::Terminated) {
+            result.preterminal_altitude_meters = prior_opening_altitude;
+            result.terminal_step = step;
+        }
         if (step.tick_before == kFaultTick) {
             result.fault_tick_output =
                 read_committed_output<yyz::ActualSurfaceOutput>(
@@ -1442,11 +1481,12 @@ struct ScenarioResult {
                     live, live.provider->actual_surface_slot_handle);
             later_output_seen = true;
         }
+        prior_opening_altitude = opening_rigid.altitude_meters;
     }
     require(fault_output_seen && later_output_seen &&
                 live.session->state() == kernel::SessionState::Completed,
             "stuck-actuator scenario did not reach its terminal boundary");
-    result.actuator = read_committed_state<yyz::StatefulActuatorState>(
+    result.actuator = read_committed_state<yyz::FaultStateFragment>(
         live, live.provider->actuator_state_block_handle);
     result.rigid = read_committed_state<yyz::VerticalPitchRigidState>(
         live, live.provider->rigid_state_block_handle);
@@ -1493,10 +1533,46 @@ void verify_image_contract(const CompiledFixture& fixture) {
                                 ? nullptr
                                 : component_for_occurrence(
                                       fixture.image, actuator->handle);
+    const auto model = std::find_if(
+        fixture.package.models.begin(), fixture.package.models.end(),
+        [](const auto& value) {
+            return value.definition.model_id ==
+                   yyz::kStatefulStuckActuatorModelId;
+        });
+    const auto& history = fixture.image.evaluator_histories().front();
+    const auto* decision_slot = std::find_if(
+        fixture.image.slots().begin(), fixture.image.slots().end(),
+        [&](const auto& slot) {
+            return slot.handle == history.branch_decision_slot_handle;
+        }) == fixture.image.slots().end()
+                                    ? nullptr
+                                    : &*std::find_if(
+                                          fixture.image.slots().begin(),
+                                          fixture.image.slots().end(),
+                                          [&](const auto& slot) {
+                                              return slot.handle ==
+                                                  history.branch_decision_slot_handle;
+                                          });
     require(component != nullptr &&
                 component->profile == "DiscreteStateProcessor" &&
+                model != fixture.package.models.end() &&
+                model->runtime_component.has_value() &&
+                model->runtime_component->state_owner.has_value() &&
+                model->runtime_component->state_owner->schema.fields.size() ==
+                    3U &&
+                model->runtime_component->state_owner->schema.fields[0]
+                        .field_id == "mode" &&
+                model->runtime_component->state_owner->schema.fields[1]
+                        .field_id == "locked_position_radians" &&
+                model->runtime_component->state_owner->schema.fields[2]
+                        .field_id == "revision" &&
                 fixture.image.state_blocks().size() == 2U &&
-                fixture.image.transactions().size() == 1U,
+                fixture.image.transactions().size() == 1U &&
+                history.history_depth == 1U &&
+                history.branch_decision_slot_handle != 0U &&
+                decision_slot != nullptr &&
+                decision_slot->storage_class ==
+                    contracts::SlotStorageClass::TerminalResult,
             "stuck actuator did not remain a typed discrete state owner");
 }
 
@@ -1527,12 +1603,12 @@ void verify_healthy_stuck_ab(
     require(stuck.application_receipts == 1U && stuck.events == 1U &&
                 healthy.application_receipts == 0U && healthy.events == 0U,
             "stuck command did not commit exactly one receipt and event");
-    require(healthy.actuator.fault.mode ==
+    require(healthy.actuator.mode ==
                     yyz::ActuatorFaultMode::Healthy &&
-                stuck.actuator.fault.mode ==
+                stuck.actuator.mode ==
                     yyz::ActuatorFaultMode::Stuck &&
-                stuck.actuator.fault.revision == 1U &&
-                near(stuck.actuator.actual_position_radians, 0.0),
+                stuck.actuator.revision == 1U &&
+                near(stuck.actuator.locked_position_radians, 0.0),
             "healthy and stuck actuator owner states did not diverge");
     require(healthy.rigid.altitude_meters > 0.0 &&
                 stuck.rigid.altitude_meters < 0.0 &&
@@ -1552,13 +1628,31 @@ void verify_healthy_stuck_ab(
                 !stuck.outcome.primary_diagnostic.has_value() &&
                 stuck.outcome.related_diagnostics.empty(),
             "contact result or RunOutcome did not distinguish healthy and stuck runs");
+    require(stuck.contact.tick == 10 &&
+                near(stuck.contact.altitude_meters, -0.3955) &&
+                stuck.preterminal_altitude_meters > 0.0 &&
+                stuck.rigid.revision == 10U &&
+                stuck.terminal_step.status ==
+                    kernel::StepStatus::Terminated &&
+                stuck.terminal_step.branch ==
+                    contracts::TransactionBranch::Terminal &&
+                stuck.terminal_step.tick_before == 10 &&
+                stuck.terminal_step.tick_after == 10 &&
+                stuck.terminal_step.candidates.present_count == 0U &&
+                stuck.outcome.final_tick == 10 &&
+                stuck.outcome.final_committed_epoch == 11U &&
+                stuck.outcome.committed_step_count == 11U &&
+                stuck.outcome.terminal_branch_committed &&
+                healthy.contact.tick == kTerminalTick &&
+                near(healthy.rigid.altitude_meters, 12.799),
+            "first satisfying committed boundary was not the terminal step");
 }
 
 void verify_invalid_payload(
     const contracts::ExecutionPlanImage& image) {
     auto live = initialize_session(image, "run.stuck-invalid-payload");
     const auto actuator_before =
-        read_committed_state<yyz::StatefulActuatorState>(
+        read_committed_state<yyz::FaultStateFragment>(
             live, live.provider->actuator_state_block_handle);
     const auto rigid_before = read_committed_state<yyz::VerticalPitchRigidState>(
         live, live.provider->rigid_state_block_handle);
@@ -1581,14 +1675,14 @@ void verify_invalid_payload(
                 live.session->run_outcome() == nullptr,
             "invalid stuck payload entered application evidence or output state");
     const auto actuator_after =
-        read_committed_state<yyz::StatefulActuatorState>(
+        read_committed_state<yyz::FaultStateFragment>(
             live, live.provider->actuator_state_block_handle);
     const auto rigid_after = read_committed_state<yyz::VerticalPitchRigidState>(
         live, live.provider->rigid_state_block_handle);
-    require(actuator_after.fault.mode == actuator_before.fault.mode &&
-                actuator_after.fault.revision == actuator_before.fault.revision &&
-                near(actuator_after.actual_position_radians,
-                     actuator_before.actual_position_radians) &&
+    require(actuator_after.mode == actuator_before.mode &&
+                actuator_after.revision == actuator_before.revision &&
+                near(actuator_after.locked_position_radians,
+                     actuator_before.locked_position_radians) &&
                 rigid_after.revision == rigid_before.revision &&
                 near(rigid_after.altitude_meters, rigid_before.altitude_meters),
             "invalid stuck payload changed committed model state");
@@ -1604,6 +1698,7 @@ void verify_invalid_payload(
 
 enum class FailureCase : std::uint8_t {
     Reducer,
+    Event,
     Evaluation,
     Seal,
     Precommit,
@@ -1623,7 +1718,7 @@ void verify_failure_rollback_retry(
     }
     const auto epoch_before = live.session->committed_epoch();
     const auto actuator_before =
-        read_committed_state<yyz::StatefulActuatorState>(
+        read_committed_state<yyz::FaultStateFragment>(
             live, live.provider->actuator_state_block_handle);
     const auto rigid_before = read_committed_state<yyz::VerticalPitchRigidState>(
         live, live.provider->rigid_state_block_handle);
@@ -1634,6 +1729,10 @@ void verify_failure_rollback_retry(
     case FailureCase::Reducer:
         live.provider->control.reducer_failures_remaining = 1U;
         expected_stage = kernel::RuntimeDiagnosticStage::CommandReduction;
+        break;
+    case FailureCase::Event:
+        live.provider->control.consumer_failures_remaining = 1U;
+        expected_stage = kernel::RuntimeDiagnosticStage::EventConsumption;
         break;
     case FailureCase::Evaluation:
         live.provider->control.load_evaluation_failures_remaining = 1U;
@@ -1652,23 +1751,33 @@ void verify_failure_rollback_retry(
 
     const auto failed = live.session->execute_step();
     const auto actuator_after_failure =
-        read_committed_state<yyz::StatefulActuatorState>(
+        read_committed_state<yyz::FaultStateFragment>(
             live, live.provider->actuator_state_block_handle);
     const auto rigid_after_failure =
         read_committed_state<yyz::VerticalPitchRigidState>(
             live, live.provider->rigid_state_block_handle);
+    const bool retryable =
+        failure_case == FailureCase::Reducer ||
+        failure_case == FailureCase::Event ||
+        failure_case == FailureCase::Seal;
     require(failed.status == kernel::StepStatus::Failed &&
                 failed.primary_diagnostic.has_value() &&
                 failed.primary_diagnostic->stage == expected_stage &&
                 failed.primary_diagnostic->validity_effect ==
-                    contracts::EvidenceValidity::Unknown &&
-                live.session->state() == kernel::SessionState::Initialized &&
+                    (retryable ? contracts::EvidenceValidity::Unknown
+                               : contracts::EvidenceValidity::Invalid) &&
+                failed.primary_diagnostic->disposition ==
+                    (retryable
+                         ? kernel::RuntimeFailureDisposition::RetryStep
+                         : kernel::RuntimeFailureDisposition::FailOperation) &&
+                live.session->state() ==
+                    (retryable ? kernel::SessionState::Initialized
+                               : kernel::SessionState::Failed) &&
                 live.session->committed_epoch() == epoch_before &&
                 live.session->committed_tick() == kFaultTick &&
-                actuator_after_failure.fault.mode ==
-                    actuator_before.fault.mode &&
-                actuator_after_failure.fault.revision ==
-                    actuator_before.fault.revision &&
+                actuator_after_failure.mode == actuator_before.mode &&
+                actuator_after_failure.revision ==
+                    actuator_before.revision &&
                 rigid_after_failure.revision == rigid_before.revision &&
                 near(rigid_after_failure.altitude_meters,
                      rigid_before.altitude_meters) &&
@@ -1677,17 +1786,30 @@ void verify_failure_rollback_retry(
                 live.session->committed_events().empty(),
             "failed stuck transaction leaked state, receipt, event, or queue consumption");
 
+    if (!retryable) {
+        const auto* outcome = live.session->run_outcome();
+        require(outcome != nullptr &&
+                    outcome->final_status == kernel::RunFinalStatus::Failed &&
+                    outcome->validity ==
+                        contracts::EvidenceValidity::Invalid &&
+                    outcome->final_tick == kFaultTick &&
+                    live.session->execute_step().status ==
+                        kernel::StepStatus::Failed,
+                "fatal stuck failure did not freeze an Invalid failed run");
+        return;
+    }
+
     const auto retried = live.session->execute_step();
     const auto actuator_after_retry =
-        read_committed_state<yyz::StatefulActuatorState>(
+        read_committed_state<yyz::FaultStateFragment>(
             live, live.provider->actuator_state_block_handle);
     const auto rigid_after_retry =
         read_committed_state<yyz::VerticalPitchRigidState>(
             live, live.provider->rigid_state_block_handle);
     require(retried.status == kernel::StepStatus::Committed &&
-                actuator_after_retry.fault.mode ==
+                actuator_after_retry.mode ==
                     yyz::ActuatorFaultMode::Stuck &&
-                actuator_after_retry.fault.revision == 1U &&
+                actuator_after_retry.revision == 1U &&
                 rigid_after_retry.revision == rigid_before.revision + 1U &&
                 live.session->pending_command_count() == 0U &&
                 live.session->command_application_receipts().size() == 1U &&
@@ -1711,13 +1833,13 @@ void verify_session_isolation(
                     kernel::StepStatus::Committed,
             "isolated Sessions did not execute their first tick");
     const auto first_state =
-        read_committed_state<yyz::StatefulActuatorState>(
+        read_committed_state<yyz::FaultStateFragment>(
             first, first.provider->actuator_state_block_handle);
     const auto second_state =
-        read_committed_state<yyz::StatefulActuatorState>(
+        read_committed_state<yyz::FaultStateFragment>(
             second, second.provider->actuator_state_block_handle);
-    require(first_state.fault.mode == yyz::ActuatorFaultMode::Stuck &&
-                second_state.fault.mode ==
+    require(first_state.mode == yyz::ActuatorFaultMode::Stuck &&
+                second_state.mode ==
                     yyz::ActuatorFaultMode::Healthy &&
                 first.session->committed_events().size() == 1U &&
                 second.session->committed_events().empty(),
@@ -1759,6 +1881,88 @@ void verify_checkpoint_fail_closed(
             "command-bearing stuck Image checkpoint did not fail closed");
 }
 
+void verify_terminal_decision_fail_closed(
+    const contracts::ExecutionPlanImage& image) {
+    {
+        auto data = image.data();
+        data.evaluator_histories.front().branch_decision_slot_handle = 0U;
+        auto malformed = image_from(std::move(data));
+        auto shared_image =
+            std::make_shared<const contracts::ExecutionPlanImage>(malformed);
+        auto provider = std::make_shared<FixtureProvider>(*shared_image);
+        auto creation = kernel::create_session(shared_image, provider);
+        require(static_cast<bool>(creation),
+                "missing branch slot did not reach Image validation");
+        const auto initialized = creation.session->initialize(
+            {kernel::RunId("run.stuck.missing-branch-slot"),
+             kernel::exact_run_binding(*shared_image)});
+        require(!initialized &&
+                    initialized.result.error ==
+                        kernel::SessionError::InvalidImageStructure &&
+                    creation.session->state() == kernel::SessionState::Failed,
+                "missing periodic branch slot did not fail closed");
+    }
+
+    {
+        auto data = image.data();
+        const auto contact_slot = std::find_if(
+            data.slots.begin(), data.slots.end(), [](const auto& slot) {
+                return slot.contract_id ==
+                       yyz::kContactImpactResultContractId;
+            });
+        require(contact_slot != data.slots.end(),
+                "contact-result slot is absent");
+        data.evaluator_histories.front().branch_decision_slot_handle =
+            contact_slot->handle;
+        auto malformed = image_from(std::move(data));
+        auto live = initialize_session(
+            malformed, "run.stuck.wrong-branch-slot-type");
+        const auto failed = live.session->execute_step();
+        require(failed.status == kernel::StepStatus::Failed &&
+                    failed.result.error ==
+                        kernel::SessionError::ObjectTypeMismatch &&
+                    failed.primary_diagnostic.has_value() &&
+                    failed.primary_diagnostic->validity_effect ==
+                        contracts::EvidenceValidity::Invalid &&
+                    failed.primary_diagnostic->disposition ==
+                        kernel::RuntimeFailureDisposition::FailOperation &&
+                    live.session->state() == kernel::SessionState::Failed,
+                "wrong branch-slot type did not freeze an Invalid run");
+    }
+
+    {
+        auto live = initialize_session(
+            image, "run.stuck.invalid-branch-enum");
+        live.provider->control.forced_branch_decision =
+            contracts::TransactionBranch::Failure;
+        const auto failed = live.session->execute_step();
+        require(failed.status == kernel::StepStatus::Failed &&
+                    failed.result.error ==
+                        kernel::SessionError::TransactionPrecommitFailed &&
+                    failed.primary_diagnostic.has_value() &&
+                    failed.primary_diagnostic->validity_effect ==
+                        contracts::EvidenceValidity::Invalid &&
+                    failed.primary_diagnostic->disposition ==
+                        kernel::RuntimeFailureDisposition::FailOperation &&
+                    live.session->state() == kernel::SessionState::Failed,
+                "invalid branch enum did not freeze an Invalid run");
+    }
+}
+
+void verify_terminal_boundary_is_model_driven(
+    const CompiledFixture& reference) {
+    const auto shifted = compile_fixture(-1.0);
+    const auto result = run_scenario(
+        shifted.image, true, "run.stuck.shifted-ground");
+    require(result.contact.impact && result.contact.tick == 11 &&
+                result.preterminal_altitude_meters > -1.0 &&
+                result.contact.altitude_meters <= -1.0 &&
+                result.terminal_step.tick_before == 11 &&
+                shifted.image.source_semantic_hash() !=
+                    reference.image.source_semantic_hash(),
+            "terminal tick did not follow the compiled ground threshold");
+}
+
 void run_self_check() {
     const auto fixture = compile_fixture();
     verify_image_contract(fixture);
@@ -1767,12 +1971,15 @@ void run_self_check() {
     verify_healthy_stuck_ab(fixture.image, healthy, stuck);
     verify_invalid_payload(fixture.image);
     verify_failure_rollback_retry(fixture.image, FailureCase::Reducer);
+    verify_failure_rollback_retry(fixture.image, FailureCase::Event);
     verify_failure_rollback_retry(fixture.image, FailureCase::Evaluation);
     verify_failure_rollback_retry(fixture.image, FailureCase::Seal);
     verify_failure_rollback_retry(fixture.image, FailureCase::Precommit);
     verify_session_isolation(fixture.image);
     verify_determinism(fixture.image, stuck);
     verify_checkpoint_fail_closed(fixture.image);
+    verify_terminal_decision_fail_closed(fixture.image);
+    verify_terminal_boundary_is_model_driven(fixture);
 
     std::cout << "stuck-actuator A/B healthy_altitude="
               << healthy.rigid.altitude_meters

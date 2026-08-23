@@ -961,6 +961,7 @@ struct EvaluatorCommittedHistoryPlan {
     std::string request_contract_id;
     std::uint32_t committed_history_depth = 0U;
     std::vector<EvaluatorCommittedHistoryMemberPlan> ordered_members;
+    std::string branch_decision_slot_id;
     SourceRef source;
 };
 
@@ -4556,8 +4557,10 @@ inline void lower_evaluator_histories(LoweringContext& context) {
                     evaluator->descriptor.runtime_component.has_value() &&
                     evaluator->descriptor.runtime_component->profile ==
                         gnc::model_sdk::RuntimeCellProfile::Evaluator &&
-                    evaluator->descriptor.runtime_component->schedule.trigger ==
-                        gnc::model_sdk::StaticScheduleTrigger::TerminalSequenceReady &&
+                    (evaluator->descriptor.runtime_component->schedule.trigger ==
+                         gnc::model_sdk::StaticScheduleTrigger::TerminalSequenceReady ||
+                     evaluator->descriptor.runtime_component->schedule.trigger ==
+                         gnc::model_sdk::StaticScheduleTrigger::EveryBoundary) &&
                     callsite->obligation ==
                         gnc::contracts::ExecutionObligation::BoundaryEvaluation;
             evaluator_entry =
@@ -4595,6 +4598,24 @@ inline void lower_evaluator_histories(LoweringContext& context) {
                     evaluator_entry->state_write ==
                         gnc::model_sdk::StaticStateWriteKind::None &&
                     callsite->input_slot_ids.empty();
+            const bool periodic_evaluator =
+                evaluator != nullptr &&
+                evaluator->descriptor.runtime_component->schedule.trigger ==
+                    gnc::model_sdk::StaticScheduleTrigger::EveryBoundary;
+            const auto decision_slot =
+                history_shape == nullptr ||
+                        history_shape->branch_decision_output_port_id.empty()
+                    ? std::string{}
+                    : port_slot_id(
+                          evaluator->occurrence_id,
+                          history_shape->branch_decision_output_port_id);
+            valid = valid &&
+                (periodic_evaluator
+                     ? !decision_slot.empty() &&
+                           std::count(callsite->output_slot_ids.begin(),
+                                      callsite->output_slot_ids.end(),
+                                      decision_slot) == 1
+                     : decision_slot.empty());
         }
         const auto available_boundaries =
             static_cast<std::uint64_t>(
@@ -4662,6 +4683,11 @@ inline void lower_evaluator_histories(LoweringContext& context) {
              callsite->callsite_id,
              history_shape->request_contract_id,
              source.committed_history_depth, std::move(members),
+             history_shape->branch_decision_output_port_id.empty()
+                 ? std::string{}
+                 : port_slot_id(
+                       evaluator->occurrence_id,
+                       history_shape->branch_decision_output_port_id),
              source.source});
     }
     for (const auto& component : context.plan.runtime_components) {
@@ -5637,6 +5663,7 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
                 std::to_string(history.committed_history_depth),
             "ordered-member-count=" +
                 std::to_string(history.ordered_members.size()),
+            "branch-decision-slot=" + history.branch_decision_slot_id,
             "candidate-slot-count=0"};
         for (std::size_t index = 0U;
              index < history.ordered_members.size(); ++index) {
@@ -9598,6 +9625,17 @@ namespace complete_plan_detail {
             encoder.uint32(member.committed_state_slot_handle);
         }
     });
+    if (std::any_of(
+            image.evaluator_histories.begin(),
+            image.evaluator_histories.end(), [](const auto& value) {
+                return value.branch_decision_slot_handle != 0U;
+            })) {
+        encoder.string("gnc.execution-plan-image.evaluator-branch-decision@1");
+        encode_ids(image.evaluator_histories, [&](const auto& value) {
+            encoder.uint32(value.handle);
+            encoder.uint32(value.branch_decision_slot_handle);
+        });
+    }
     if (!image.observation_schedules.empty()) {
         encoder.string("gnc.execution-plan-image.observation-schedule@1");
         encode_ids(image.observation_schedules, [&](const auto& value) {
@@ -9718,9 +9756,35 @@ link_complete_execution_plan(
                 "evaluator history and runtime callsite request contracts differ");
             continue;
         }
+        const auto decision_port = std::find_if(
+            plan.ports.begin(), plan.ports.end(), [&](const auto& port) {
+                return port.occurrence_id == callsite->occurrence_id &&
+                       complete_plan_detail::port_slot_id(
+                           port.occurrence_id, port.port_id) ==
+                           history.branch_decision_slot_id;
+            });
+        const bool has_decision =
+            !history.branch_decision_slot_id.empty();
+        if ((has_decision &&
+             (decision_port == plan.ports.end() ||
+              std::count(callsite->output_slot_ids.begin(),
+                         callsite->output_slot_ids.end(),
+                         history.branch_decision_slot_id) != 1)) ||
+            (!has_decision && decision_port != plan.ports.end())) {
+            diagnostic(
+                outcome.diagnostics,
+                CompleteDiagnosticCode::SourceImageConformanceFailure,
+                history.source, history.history_id,
+                "evaluator branch-decision slot differs from the package-authored output");
+            continue;
+        }
         gnc::model_sdk::StaticEvaluatorHistoryShapeDescriptor expected;
         expected.request_contract_id = history.request_contract_id;
         expected.depth = history.committed_history_depth;
+        if (decision_port != plan.ports.end()) {
+            expected.branch_decision_output_port_id =
+                decision_port->port_id;
+        }
         for (const auto& member : history.ordered_members) {
             expected.ordered_members.push_back(
                 {member.member_id, member.state_schema_id,
@@ -10917,7 +10981,10 @@ link_complete_execution_plan(
             {handle, history.plan_element_id,
              callsite_handles.at(history.evaluator_callsite_id),
              history.request_contract_id,
-             history.committed_history_depth, std::move(members)});
+             history.committed_history_depth, std::move(members),
+             history.branch_decision_slot_id.empty()
+                 ? 0U
+                 : slot_handles.at(history.branch_decision_slot_id)});
         conformance_handles[history.plan_element_id].push_back(handle);
     }
     for (const auto& writer : plan.writer_tokens) {

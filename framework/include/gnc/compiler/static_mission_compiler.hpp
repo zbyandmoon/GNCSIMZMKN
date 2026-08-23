@@ -563,7 +563,6 @@ inline void validate_runtime_component(
                        gnc::model_sdk::TemporalRelation::HeldLatest;
         });
     const bool periodic_schedule =
-        !evaluator &&
         schedule.trigger ==
             gnc::model_sdk::StaticScheduleTrigger::EveryBoundary &&
         schedule.step_interval > 0U &&
@@ -638,13 +637,46 @@ inline void validate_runtime_component(
                 evaluator_entry != runtime.obligation_entries.end() &&
                 evaluator_entry->request_contract_id ==
                     history.request_contract_id;
+            const auto decision_port = history.branch_decision_output_port_id
+                                           .empty()
+                                           ? model.ports.end()
+                                           : std::find_if(
+                                                 model.ports.begin(),
+                                                 model.ports.end(),
+                                                 [&](const auto& port) {
+                                                     return port.port_id ==
+                                                         history.branch_decision_output_port_id;
+                                                 });
+            const bool periodic_evaluator =
+                schedule.trigger ==
+                gnc::model_sdk::StaticScheduleTrigger::EveryBoundary;
+            const bool decision_output_is_exact =
+                evaluator_entry != runtime.obligation_entries.end() &&
+                decision_port != model.ports.end() &&
+                std::count(
+                    evaluator_entry->output_port_ids.begin(),
+                    evaluator_entry->output_port_ids.end(),
+                    history.branch_decision_output_port_id) == 1;
+            valid_history = valid_history &&
+                (periodic_evaluator
+                     ? decision_port != model.ports.end() &&
+                           decision_port->direction ==
+                               gnc::model_sdk::StaticPortDirection::Output &&
+                           decision_port->binding_kind ==
+                               gnc::model_sdk::BindingKind::SampledSignal &&
+                           decision_port->temporal_relation ==
+                               gnc::model_sdk::TemporalRelation::CurrentCycle &&
+                           decision_port->slot_codec.has_value() &&
+                           decision_output_is_exact
+                     : history.branch_decision_output_port_id.empty());
             if (!valid_history) {
                 diagnostics.push_back(
                     {DiagnosticCode::InvalidCatalogDescriptor, source,
                      definition.model_id,
                      "Evaluator history requires a positive depth, ordered "
                      "unique state schema/layout members, and the exact "
-                     "boundary request contract"});
+                     "boundary request contract, and optional periodic "
+                     "branch-decision output"});
             }
         }
     } else if (runtime.evaluator_history_shape.has_value()) {

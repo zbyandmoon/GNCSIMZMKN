@@ -568,6 +568,10 @@ struct StaticEvaluatorHistoryShapeDescriptor {
     std::string request_contract_id;
     std::uint32_t depth = 0U;
     std::vector<StaticEvaluatorHistoryMemberDescriptor> ordered_members;
+    // Optional generic transaction-branch decision produced by a periodic
+    // Evaluator. The compiler resolves this package-authored output port to a
+    // numeric slot; Kernel never interprets the evaluator's domain result.
+    std::string branch_decision_output_port_id;
 };
 
 // Package-owned static facts for one independent runtime boundary. State and

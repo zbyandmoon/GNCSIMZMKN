@@ -92,6 +92,7 @@ struct StaticEvaluatorHistoryWitness {
     std::string request_contract_id;
     std::uint32_t depth = 0U;
     std::vector<StaticEvaluatorHistoryMemberWitness> ordered_members;
+    std::string branch_decision_output_port_id;
 };
 
 struct StaticStateCodecWitness {
@@ -202,6 +203,8 @@ with_static_evaluator_history_witness(
     const StaticEvaluatorHistoryShapeDescriptor& descriptor) noexcept {
     if (implementation.request_contract_id != descriptor.request_contract_id ||
         implementation.depth != descriptor.depth ||
+        implementation.branch_decision_output_port_id !=
+            descriptor.branch_decision_output_port_id ||
         implementation.ordered_members.size() !=
             descriptor.ordered_members.size()) {
         return false;

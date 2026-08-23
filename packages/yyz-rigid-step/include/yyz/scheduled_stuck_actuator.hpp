@@ -59,6 +59,8 @@ inline constexpr std::string_view kCommittedRigidContactSequenceContractId =
     "gnc.contract.yyz.committed-rigid-contact-sequence@1";
 inline constexpr std::string_view kContactImpactResultContractId =
     "gnc.contract.yyz.contact-impact-result@1";
+inline constexpr std::string_view kTerminalBranchDecisionContractId =
+    "gnc.contract.runtime.terminal-branch-decision@1";
 inline constexpr std::string_view kStuckActuatorCommandSchemaId =
     "gnc.command.yyz.actuator-stuck@1";
 inline constexpr std::string_view kStuckActuatorEventSchemaId =
@@ -86,10 +88,12 @@ inline constexpr std::string_view kVerticalPitchRigidObservationLayoutId =
     "gnc.layout.yyz.vertical-pitch-rigid-observation@1";
 inline constexpr std::string_view kContactImpactResultLayoutId =
     "gnc.layout.yyz.contact-impact-result@1";
+inline constexpr std::string_view kTerminalBranchDecisionLayoutId =
+    "gnc.layout.runtime.terminal-branch-decision@1";
 
 inline constexpr std::string_view kRigidContactHistoryMemberId =
     "rigid-contact-state";
-inline constexpr std::uint32_t kRigidContactHistoryDepth = 16U;
+inline constexpr std::uint32_t kRigidContactHistoryDepth = 1U;
 inline constexpr std::uint32_t kStuckActuatorDecisionAuthority = 73U;
 
 enum class ActuatorFaultMode : std::uint8_t {
@@ -103,12 +107,9 @@ struct FaultStateFragment {
     std::uint64_t revision = 0U;
 };
 
-// The fragment is embedded in the actuator owner's complete replacement
-// block. It has no independent identity, lifecycle, schedule, or port.
-struct StatefulActuatorState {
-    double actual_position_radians = 0.0;
-    FaultStateFragment fault;
-};
+// This fragment is the actuator owner's complete replacement block. Healthy
+// surface position is a per-boundary formal output, never a second state
+// authority. The locked position is relevant only after the fault latches.
 
 struct StuckActuatorCommand {
     double locked_position_radians = 0.0;
@@ -133,7 +134,6 @@ struct ScheduledSurfaceDemand {
 };
 
 struct ActuatorStateObservation {
-    double actual_position_radians = 0.0;
     ActuatorFaultMode mode = ActuatorFaultMode::Healthy;
     double locked_position_radians = 0.0;
     std::uint64_t fault_revision = 0U;
@@ -179,6 +179,12 @@ struct ContactImpactResult {
     std::string reason_code;
 };
 
+struct ContactImpactEvaluation {
+    ContactImpactResult result;
+    gnc::contracts::TransactionBranch branch =
+        gnc::contracts::TransactionBranch::Continue;
+};
+
 struct ScheduledDemandDefinition {
     double initial_position_radians = 0.0;
     double first_position_radians = 0.0;
@@ -210,8 +216,8 @@ struct ContactImpactDefinition {
     double ground_altitude_meters = 0.0;
 };
 
-struct StatefulActuatorInitialStateInput {
-    double actual_position_radians = 0.0;
+struct FaultStateInitialInput {
+    double locked_position_radians = 0.0;
 };
 
 struct VerticalPitchRigidInitialStateInput {
@@ -222,7 +228,7 @@ struct VerticalPitchRigidInitialStateInput {
 };
 
 struct StuckActuatorReduction {
-    StatefulActuatorState candidate;
+    FaultStateFragment candidate;
     StuckActuatorEvent event;
 };
 
@@ -286,14 +292,14 @@ using ScheduledDemandCall =
     gnc::foundation::NumericalOutcome<ScheduledSurfaceDemand> (*)(
         const ScheduledDemandDefinition&, std::int64_t);
 using ActuatorStateProjectionCall = ActuatorStateObservation (*)(
-    const StatefulActuatorState&);
+    const FaultStateFragment&);
 using StatefulActuatorCall =
     gnc::foundation::NumericalOutcome<ActualSurfaceOutput> (*)(
-        const StatefulActuatorDefinition&, const StatefulActuatorState&,
+        const StatefulActuatorDefinition&, const FaultStateFragment&,
         const ScheduledSurfaceDemand&);
 using StuckActuatorReductionCall =
     gnc::foundation::NumericalOutcome<StuckActuatorReduction> (*)(
-        const StatefulActuatorDefinition&, const StatefulActuatorState&,
+        const StatefulActuatorDefinition&, const FaultStateFragment&,
         const StuckActuatorCommand&);
 using StuckActuatorEventConsumptionCall =
     StuckActuatorEventConsumed (*)(const StuckActuatorEvent&);
@@ -308,30 +314,30 @@ using VerticalPitchRigidEvolutionCall =
         const VerticalPitchRigidDefinition&,
         const VerticalPitchRigidState&, const PressureSurfaceLoad&);
 using ContactImpactEvaluationCall =
-    gnc::foundation::NumericalOutcome<ContactImpactResult> (*)(
+    gnc::foundation::NumericalOutcome<ContactImpactEvaluation> (*)(
         const ContactImpactDefinition&, const VerticalPitchRigidState&,
         std::int64_t);
 using StatefulActuatorInitialStateCall =
-    gnc::foundation::NumericalOutcome<StatefulActuatorState> (*)(
+    gnc::foundation::NumericalOutcome<FaultStateFragment> (*)(
         const StatefulActuatorDefinition&,
-        const StatefulActuatorInitialStateInput&);
+        const FaultStateInitialInput&);
 using VerticalPitchRigidInitialStateCall =
     gnc::foundation::NumericalOutcome<VerticalPitchRigidState> (*)(
         const VerticalPitchRigidDefinition&,
         const VerticalPitchRigidInitialStateInput&);
 
-using StatefulActuatorStateCloneCall =
-    StatefulActuatorState (*)(const StatefulActuatorState&);
-using StatefulActuatorStateValidateCall =
-    bool (*)(const StatefulActuatorState&) noexcept;
-using StatefulActuatorStateSwapCall =
-    void (*)(StatefulActuatorState&, StatefulActuatorState&) noexcept;
-using StatefulActuatorStateCodec = gnc::model_sdk::InProcessStateCodec<
-    StatefulActuatorStateCloneCall, StatefulActuatorStateValidateCall,
-    StatefulActuatorStateValidateCall, StatefulActuatorStateValidateCall,
-    StatefulActuatorStateSwapCall, ActuatorStateProjectionCall>;
-using StatefulActuatorStateCodecGetter =
-    gnc::model_sdk::InProcessCodecGetter<StatefulActuatorStateCodec>;
+using FaultStateFragmentCloneCall =
+    FaultStateFragment (*)(const FaultStateFragment&);
+using FaultStateFragmentValidateCall =
+    bool (*)(const FaultStateFragment&) noexcept;
+using FaultStateFragmentSwapCall =
+    void (*)(FaultStateFragment&, FaultStateFragment&) noexcept;
+using FaultStateFragmentCodec = gnc::model_sdk::InProcessStateCodec<
+    FaultStateFragmentCloneCall, FaultStateFragmentValidateCall,
+    FaultStateFragmentValidateCall, FaultStateFragmentValidateCall,
+    FaultStateFragmentSwapCall, ActuatorStateProjectionCall>;
+using FaultStateFragmentCodecGetter =
+    gnc::model_sdk::InProcessCodecGetter<FaultStateFragmentCodec>;
 
 using VerticalPitchRigidStateCloneCall =
     VerticalPitchRigidState (*)(const VerticalPitchRigidState&);
@@ -401,11 +407,11 @@ create_contact_impact_runtime_cell(
 evaluate_scheduled_surface_demand(
     const ScheduledDemandDefinition& definition, std::int64_t tick);
 [[nodiscard]] ActuatorStateObservation project_actuator_state(
-    const StatefulActuatorState& state);
+    const FaultStateFragment& state);
 [[nodiscard]] gnc::foundation::NumericalOutcome<ActualSurfaceOutput>
 evaluate_stateful_actuator(
     const StatefulActuatorDefinition& definition,
-    const StatefulActuatorState& effective_state,
+    const FaultStateFragment& effective_state,
     const ScheduledSurfaceDemand& demand);
 [[nodiscard]] bool validate_stuck_actuator_command(
     const StatefulActuatorDefinition& definition,
@@ -413,7 +419,7 @@ evaluate_stateful_actuator(
 [[nodiscard]] gnc::foundation::NumericalOutcome<StuckActuatorReduction>
 reduce_stuck_actuator_command(
     const StatefulActuatorDefinition& definition,
-    const StatefulActuatorState& prior,
+    const FaultStateFragment& prior,
     const StuckActuatorCommand& command);
 [[nodiscard]] StuckActuatorEventConsumed consume_stuck_actuator_event(
     const StuckActuatorEvent& event);
@@ -428,27 +434,27 @@ evolve_vertical_pitch_rigid(
     const VerticalPitchRigidDefinition& definition,
     const VerticalPitchRigidState& prior,
     const PressureSurfaceLoad& load);
-[[nodiscard]] gnc::foundation::NumericalOutcome<ContactImpactResult>
+[[nodiscard]] gnc::foundation::NumericalOutcome<ContactImpactEvaluation>
 evaluate_contact_impact(
     const ContactImpactDefinition& definition,
     const VerticalPitchRigidState& state, std::int64_t tick);
 
-[[nodiscard]] gnc::foundation::NumericalOutcome<StatefulActuatorState>
+[[nodiscard]] gnc::foundation::NumericalOutcome<FaultStateFragment>
 build_stateful_actuator_initial_state(
     const StatefulActuatorDefinition& definition,
-    const StatefulActuatorInitialStateInput& input);
+    const FaultStateInitialInput& input);
 [[nodiscard]] gnc::foundation::NumericalOutcome<VerticalPitchRigidState>
 build_vertical_pitch_rigid_initial_state(
     const VerticalPitchRigidDefinition& definition,
     const VerticalPitchRigidInitialStateInput& input);
 
-[[nodiscard]] StatefulActuatorState clone_stateful_actuator_state(
-    const StatefulActuatorState& state);
+[[nodiscard]] FaultStateFragment clone_stateful_actuator_state(
+    const FaultStateFragment& state);
 [[nodiscard]] bool validate_stateful_actuator_state(
-    const StatefulActuatorState& state) noexcept;
+    const FaultStateFragment& state) noexcept;
 void swap_stateful_actuator_state(
-    StatefulActuatorState& lhs, StatefulActuatorState& rhs) noexcept;
-[[nodiscard]] const StatefulActuatorStateCodec&
+    FaultStateFragment& lhs, FaultStateFragment& rhs) noexcept;
+[[nodiscard]] const FaultStateFragmentCodec&
 stateful_actuator_state_codec() noexcept;
 
 [[nodiscard]] VerticalPitchRigidState clone_vertical_pitch_rigid_state(

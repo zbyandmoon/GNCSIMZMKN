@@ -616,6 +616,9 @@ struct PlanImageEvaluatorHistory {
     std::string request_contract_id;
     std::uint32_t history_depth = 0U;
     std::vector<PlanImageEvaluatorHistoryMember> ordered_members;
+    // Zero for fixed TerminalSequenceReady evaluators. A periodic evaluator
+    // names exactly one typed TransactionBranch output slot here.
+    std::uint32_t branch_decision_slot_handle = 0U;
 };
 
 // Diagnostic/provenance information is deliberately not part of the stable

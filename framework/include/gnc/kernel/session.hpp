@@ -371,6 +371,7 @@ enum class RuntimeDiagnosticStage : std::uint8_t {
 
 enum class RuntimeFailureDisposition : std::uint8_t {
     FailOperation,
+    RetryStep,
 };
 
 [[nodiscard]] std::string_view to_string(

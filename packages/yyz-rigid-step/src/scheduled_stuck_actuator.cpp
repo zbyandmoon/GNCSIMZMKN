@@ -181,18 +181,16 @@ void configure_runtime(
     owner.schema = {
         std::string(kActuatorStateSchemaId), 1U,
         std::string(kActuatorStateLayoutId),
-        {{"actual_position_radians", "float64", "rad",
-          "actuator-owner"},
-         {"fault.mode", "uint8", "1", "fault-fragment"},
-         {"fault.locked_position_radians", "float64", "rad",
+        {{"mode", "uint8", "1", "fault-fragment"},
+         {"locked_position_radians", "float64", "rad",
           "fault-fragment"},
-         {"fault.revision", "uint64", "1", "fault-fragment"}}};
+         {"revision", "uint64", "1", "fault-fragment"}}};
     owner.initial_state_builder_id =
         identity("actuator", "initial-state-builder");
     owner.initial_state_builder_version = "1.0.0";
     owner.initial_state_input_schema = {
         std::string(kActuatorInitialStateSchemaId), 1U,
-        {{"actual_position_radians", CanonicalConfigValueKind::Float64}}};
+        {{"locked_position_radians", CanonicalConfigValueKind::Float64}}};
     owner.evolution = gnc::model_sdk::StaticStateEvolution::InstantPatch;
     owner.initial_state_builder_call_shape_id =
         identity("actuator", "initial-state-builder-call-shape");
@@ -631,30 +629,37 @@ describe_scheduled_stuck_actuator_package() {
          gnc::model_sdk::BindingKind::SampledSignal,
          gnc::model_sdk::PortCardinality::OneOrMore,
          gnc::model_sdk::TemporalRelation::CurrentCycle,
-         slot_codec("contact", "result", kContactImpactResultLayoutId)}};
+         slot_codec("contact", "result", kContactImpactResultLayoutId)},
+        {"terminal-branch-decision",
+         std::string(kTerminalBranchDecisionContractId),
+         gnc::model_sdk::StaticPortDirection::Output,
+         gnc::model_sdk::BindingKind::SampledSignal,
+         gnc::model_sdk::PortCardinality::OneOrMore,
+         gnc::model_sdk::TemporalRelation::CurrentCycle,
+         slot_codec("contact", "branch-decision",
+                    kTerminalBranchDecisionLayoutId)}};
     gnc::model_sdk::StaticRuntimeComponentDescriptor evaluator_runtime;
     configure_runtime(evaluator_runtime, "contact",
                       RuntimeCellProfile::Evaluator);
     evaluator_runtime.obligations = {
         RuntimeExecutionObligation::BoundaryEvaluation};
     evaluator_runtime.obligation_entries = {
-        runtime_entry("contact", "evaluate",
+        runtime_entry("contact", "evaluate-terminal-boundary",
                       RuntimeExecutionObligation::BoundaryEvaluation,
                       CoarsePhase::Evaluation,
                       std::string(kCommittedRigidContactSequenceContractId),
                       std::string(kContactImpactResultContractId),
                       {"committed-rigid-contact-sequence"},
-                      {"contact-impact-result"})};
-    evaluator_runtime.schedule.trigger =
-        gnc::model_sdk::StaticScheduleTrigger::TerminalSequenceReady;
-    evaluator_runtime.schedule.step_interval = 0U;
+                      {"contact-impact-result",
+                       "terminal-branch-decision"})};
     evaluator_runtime.evaluator_history_shape =
         gnc::model_sdk::StaticEvaluatorHistoryShapeDescriptor{
             std::string(kCommittedRigidContactSequenceContractId),
             kRigidContactHistoryDepth,
             {{std::string(kRigidContactHistoryMemberId),
               std::string(kVerticalPitchRigidStateSchemaId),
-              std::string(kVerticalPitchRigidStateLayoutId)}}};
+              std::string(kVerticalPitchRigidStateLayoutId)}},
+            "terminal-branch-decision"};
     evaluator.runtime_component = std::move(evaluator_runtime);
 
     package.models = {std::move(demand), std::move(actuator),
@@ -697,7 +702,7 @@ describe_scheduled_stuck_actuator_implementation(
         append_initial<StatefulActuatorInitialStateCall,
                        &build_stateful_actuator_initial_state>(implementation,
                                                                *model);
-        append_state_codec<StatefulActuatorStateCodecGetter,
+        append_state_codec<FaultStateFragmentCodecGetter,
                            &stateful_actuator_state_codec>(implementation,
                                                            *model);
         append_runtime<ActuatorStateProjectionCall, &project_actuator_state>(
@@ -775,7 +780,8 @@ describe_scheduled_stuck_actuator_implementation(
             kRigidContactHistoryDepth,
             {{std::string(kRigidContactHistoryMemberId),
               std::string(kVerticalPitchRigidStateSchemaId),
-              std::string(kVerticalPitchRigidStateLayoutId)}}};
+              std::string(kVerticalPitchRigidStateLayoutId)}},
+            "terminal-branch-decision"};
         append_definition<ContactImpactDefinitionBuilderCall,
                           &build_contact_impact_definition>(implementation,
                                                             *model);
@@ -787,12 +793,14 @@ describe_scheduled_stuck_actuator_implementation(
             RuntimeExecutionObligation::BoundaryEvaluation,
             StaticEntryKind::BoundaryEvaluation, {}, &history);
         append_slot_codec<ContactImpactResult>(implementation, *model,
-                                               "contact-impact-result");
+                                                "contact-impact-result");
+        append_slot_codec<gnc::contracts::TransactionBranch>(
+            implementation, *model, "terminal-branch-decision");
     }
 
     implementation.state_layouts = {
-        {std::string(kActuatorStateLayoutId), sizeof(StatefulActuatorState),
-         alignof(StatefulActuatorState)},
+        {std::string(kActuatorStateLayoutId), sizeof(FaultStateFragment),
+         alignof(FaultStateFragment)},
         {std::string(kVerticalPitchRigidStateLayoutId),
          sizeof(VerticalPitchRigidState), alignof(VerticalPitchRigidState)}};
     implementation.value_layouts = {
@@ -814,7 +822,11 @@ describe_scheduled_stuck_actuator_implementation(
          std::string(kVerticalPitchRigidObservationLayoutId)},
         {std::string(kContactImpactResultContractId),
          sizeof(ContactImpactResult), alignof(ContactImpactResult),
-         std::string(kContactImpactResultLayoutId)}};
+         std::string(kContactImpactResultLayoutId)},
+        {std::string(kTerminalBranchDecisionContractId),
+         sizeof(gnc::contracts::TransactionBranch),
+         alignof(gnc::contracts::TransactionBranch),
+         std::string(kTerminalBranchDecisionLayoutId)}};
     return implementation;
 }
 
@@ -1015,14 +1027,13 @@ evaluate_scheduled_surface_demand(
 }
 
 ActuatorStateObservation project_actuator_state(
-    const StatefulActuatorState& state) {
-    return {state.actual_position_radians, state.fault.mode,
-            state.fault.locked_position_radians, state.fault.revision};
+    const FaultStateFragment& state) {
+    return {state.mode, state.locked_position_radians, state.revision};
 }
 
 NumericalOutcome<ActualSurfaceOutput> evaluate_stateful_actuator(
     const StatefulActuatorDefinition& definition,
-    const StatefulActuatorState& effective_state,
+    const FaultStateFragment& effective_state,
     const ScheduledSurfaceDemand& demand) {
     if (!validate_stateful_actuator_state(effective_state) ||
         !finite(demand.demanded_position_radians) || demand.tick < 0) {
@@ -1031,8 +1042,8 @@ NumericalOutcome<ActualSurfaceOutput> evaluate_stateful_actuator(
             "actuator state or demand is invalid");
     }
     const double actual =
-        effective_state.fault.mode == ActuatorFaultMode::Stuck
-            ? effective_state.fault.locked_position_radians
+        effective_state.mode == ActuatorFaultMode::Stuck
+            ? effective_state.locked_position_radians
             : std::clamp(demand.demanded_position_radians,
                          definition.minimum_position_radians,
                          definition.maximum_position_radians);
@@ -1044,8 +1055,8 @@ NumericalOutcome<ActualSurfaceOutput> evaluate_stateful_actuator(
     }
     return success(ActualSurfaceOutput{
                        demand.tick, demand.demanded_position_radians, actual,
-                       effective_state.fault.mode,
-                       effective_state.fault.revision},
+                       effective_state.mode,
+                       effective_state.revision},
                    "stateful actuator evaluated");
 }
 
@@ -1061,26 +1072,24 @@ bool validate_stuck_actuator_command(
 
 NumericalOutcome<StuckActuatorReduction> reduce_stuck_actuator_command(
     const StatefulActuatorDefinition& definition,
-    const StatefulActuatorState& prior,
+    const FaultStateFragment& prior,
     const StuckActuatorCommand& command) {
     if (!validate_stateful_actuator_state(prior) ||
         !validate_stuck_actuator_command(definition, command) ||
-        prior.fault.mode != ActuatorFaultMode::Healthy) {
+        prior.mode != ActuatorFaultMode::Healthy) {
         return failure<StuckActuatorReduction>(
             NumericalStatus::DomainError,
             "stuck command cannot be applied to the actuator state");
     }
-    StatefulActuatorState candidate = prior;
-    candidate.actual_position_radians = command.locked_position_radians;
-    candidate.fault.mode = ActuatorFaultMode::Stuck;
-    candidate.fault.locked_position_radians =
-        command.locked_position_radians;
-    ++candidate.fault.revision;
+    FaultStateFragment candidate = prior;
+    candidate.mode = ActuatorFaultMode::Stuck;
+    candidate.locked_position_radians = command.locked_position_radians;
+    ++candidate.revision;
     return success(
         StuckActuatorReduction{
             candidate,
-            {prior.fault.mode, candidate.fault.mode,
-             command.locked_position_radians, candidate.fault.revision}},
+            {prior.mode, candidate.mode,
+             command.locked_position_radians, candidate.revision}},
         "stuck command reduced to a complete actuator state replacement");
 }
 
@@ -1158,41 +1167,43 @@ NumericalOutcome<VerticalPitchRigidState> evolve_vertical_pitch_rigid(
     return success(std::move(next), "vertical pitch rigid state evolved");
 }
 
-NumericalOutcome<ContactImpactResult> evaluate_contact_impact(
+NumericalOutcome<ContactImpactEvaluation> evaluate_contact_impact(
     const ContactImpactDefinition& definition,
     const VerticalPitchRigidState& state, std::int64_t tick) {
     if (!validate_vertical_pitch_rigid_state(state) || tick < 0 ||
         !finite(definition.ground_altitude_meters)) {
-        return failure<ContactImpactResult>(
+        return failure<ContactImpactEvaluation>(
             NumericalStatus::DomainError,
             "contact impact evaluation input is invalid");
     }
     const bool impact =
         state.altitude_meters <= definition.ground_altitude_meters;
-    return success(ContactImpactResult{
-                       tick, impact, state.altitude_meters,
-                       state.vertical_velocity_meters_per_second,
-                       state.pitch_radians,
-                       impact ? "ground-impact" : "clearance-maintained"},
+    return success(ContactImpactEvaluation{
+                       {tick, impact, state.altitude_meters,
+                        state.vertical_velocity_meters_per_second,
+                        state.pitch_radians,
+                        impact ? "ground-impact" : "clearance-maintained"},
+                       impact
+                           ? gnc::contracts::TransactionBranch::Terminal
+                           : gnc::contracts::TransactionBranch::Continue},
                    "contact impact evaluated");
 }
 
-NumericalOutcome<StatefulActuatorState>
+NumericalOutcome<FaultStateFragment>
 build_stateful_actuator_initial_state(
     const StatefulActuatorDefinition& definition,
-    const StatefulActuatorInitialStateInput& input) {
-    if (!finite(input.actual_position_radians) ||
-        input.actual_position_radians < definition.minimum_position_radians ||
-        input.actual_position_radians > definition.maximum_position_radians) {
-        return failure<StatefulActuatorState>(
+    const FaultStateInitialInput& input) {
+    if (!finite(input.locked_position_radians) ||
+        input.locked_position_radians < definition.minimum_position_radians ||
+        input.locked_position_radians > definition.maximum_position_radians) {
+        return failure<FaultStateFragment>(
             NumericalStatus::OutOfRange,
-            "initial actuator position is outside the mechanical range");
+            "initial actuator fault lock is outside the mechanical range");
     }
-    return success(StatefulActuatorState{
-                       input.actual_position_radians,
-                       {ActuatorFaultMode::Healthy,
-                        input.actual_position_radians, 0U}},
-                   "healthy actuator initial state built");
+    return success(FaultStateFragment{
+                       ActuatorFaultMode::Healthy,
+                       input.locked_position_radians, 0U},
+                   "healthy actuator fault state built");
 }
 
 NumericalOutcome<VerticalPitchRigidState>
@@ -1214,30 +1225,26 @@ build_vertical_pitch_rigid_initial_state(
     return success(std::move(state), "vertical pitch rigid initial state built");
 }
 
-StatefulActuatorState clone_stateful_actuator_state(
-    const StatefulActuatorState& state) {
+FaultStateFragment clone_stateful_actuator_state(
+    const FaultStateFragment& state) {
     return state;
 }
 
 bool validate_stateful_actuator_state(
-    const StatefulActuatorState& state) noexcept {
-    return finite(state.actual_position_radians) &&
-           finite(state.fault.locked_position_radians) &&
-           (state.fault.mode == ActuatorFaultMode::Healthy ||
-            state.fault.mode == ActuatorFaultMode::Stuck) &&
-           (state.fault.mode != ActuatorFaultMode::Stuck ||
-            state.actual_position_radians ==
-                state.fault.locked_position_radians);
+    const FaultStateFragment& state) noexcept {
+    return finite(state.locked_position_radians) &&
+           (state.mode == ActuatorFaultMode::Healthy ||
+            state.mode == ActuatorFaultMode::Stuck);
 }
 
 void swap_stateful_actuator_state(
-    StatefulActuatorState& lhs, StatefulActuatorState& rhs) noexcept {
+    FaultStateFragment& lhs, FaultStateFragment& rhs) noexcept {
     using std::swap;
     swap(lhs, rhs);
 }
 
-const StatefulActuatorStateCodec& stateful_actuator_state_codec() noexcept {
-    static const StatefulActuatorStateCodec codec{
+const FaultStateFragmentCodec& stateful_actuator_state_codec() noexcept {
+    static const FaultStateFragmentCodec codec{
         &clone_stateful_actuator_state, &validate_stateful_actuator_state,
         &validate_stateful_actuator_state, &validate_stateful_actuator_state,
         &swap_stateful_actuator_state, &project_actuator_state};

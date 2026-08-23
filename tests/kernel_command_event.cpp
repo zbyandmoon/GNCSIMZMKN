@@ -631,8 +631,9 @@ class TypedOperations final : public kernel::InProcessObjectOperations {
         if constexpr (std::is_same_v<Value, ModeState>) {
             const auto& state = *static_cast<const ModeState*>(object);
             return state.mode == Mode::Standby || state.mode == Mode::Active;
+        } else {
+            return true;
         }
-        return true;
     }
 
     [[nodiscard]] bool supports_nofail_swap() const noexcept override {
@@ -1777,20 +1778,69 @@ void verify_failure_rollback_and_retry(
         },
         kernel::RuntimeDiagnosticStage::ObservationSeal,
         "observation-seal failure leaked staged state, receipt, event, or queue consumption");
-    run_failure_case(
-        "run.precommit-failure",
-        [](ModeOwnerProvider& provider) {
-            provider.control.invalid_candidates_remaining = 1U;
-        },
-        kernel::RuntimeDiagnosticStage::Precommit,
-        "candidate precommit failure leaked staged state, receipt, event, or queue consumption");
-    run_failure_case(
-        "run.unknown-decision",
-        [](ModeOwnerProvider& provider) {
-            provider.control.invalid_decisions_remaining = 1U;
-        },
-        kernel::RuntimeDiagnosticStage::CommandReduction,
-        "unknown reducer decision reached receipt, event, state, or queue publication");
+    {
+        auto live = initialize_session(image, "run.precommit-fatal");
+        require(static_cast<bool>(live.session->submit_command(
+                    command_request(live, "precommit-fatal", Mode::Active))),
+                "precommit-failure command was not queued");
+        const auto before_epoch = live.session->committed_epoch();
+        const auto before_tick = live.session->committed_tick();
+        live.provider->control.invalid_candidates_remaining = 1U;
+        const auto failed = live.session->execute_step();
+        const auto* outcome = live.session->run_outcome();
+        require(failed.status == kernel::StepStatus::Failed &&
+                    failed.primary_diagnostic.has_value() &&
+                    failed.primary_diagnostic->stage ==
+                        kernel::RuntimeDiagnosticStage::Precommit &&
+                    failed.primary_diagnostic->validity_effect ==
+                        contracts::EvidenceValidity::Invalid &&
+                    failed.primary_diagnostic->disposition ==
+                        kernel::RuntimeFailureDisposition::FailOperation &&
+                    live.session->state() == kernel::SessionState::Failed &&
+                    live.session->committed_epoch() == before_epoch &&
+                    live.session->committed_tick() == before_tick &&
+                    committed_mode(live).revision == 0U &&
+                    live.session->pending_command_count() == 1U &&
+                    live.session->command_application_receipts().empty() &&
+                    live.session->committed_events().empty() &&
+                    outcome != nullptr &&
+                    outcome->final_status ==
+                        kernel::RunFinalStatus::Failed &&
+                    outcome->validity ==
+                        contracts::EvidenceValidity::Invalid &&
+                    live.session->execute_step().status ==
+                        kernel::StepStatus::Failed,
+                "candidate precommit failure did not freeze an Invalid run");
+    }
+
+    {
+        auto live = initialize_session(image, "run.invalid-decision-fatal");
+        require(static_cast<bool>(live.session->submit_command(
+                    command_request(live, "invalid-decision", Mode::Active))),
+                "invalid-decision command was not queued");
+        live.provider->control.invalid_decisions_remaining = 1U;
+        const auto failed = live.session->execute_step();
+        const auto* outcome = live.session->run_outcome();
+        require(failed.status == kernel::StepStatus::Failed &&
+                    failed.primary_diagnostic.has_value() &&
+                    failed.primary_diagnostic->stage ==
+                        kernel::RuntimeDiagnosticStage::CommandReduction &&
+                    failed.primary_diagnostic->validity_effect ==
+                        contracts::EvidenceValidity::Invalid &&
+                    failed.primary_diagnostic->disposition ==
+                        kernel::RuntimeFailureDisposition::FailOperation &&
+                    live.session->state() == kernel::SessionState::Failed &&
+                    committed_mode(live).revision == 0U &&
+                    live.session->pending_command_count() == 1U &&
+                    live.session->command_application_receipts().empty() &&
+                    live.session->committed_events().empty() &&
+                    outcome != nullptr &&
+                    outcome->final_status ==
+                        kernel::RunFinalStatus::Failed &&
+                    outcome->validity ==
+                        contracts::EvidenceValidity::Invalid,
+                "invalid reducer decision did not fail closed");
+    }
 
     {
         auto live = initialize_session(image, "run.maintenance-rollback");
@@ -1846,9 +1896,10 @@ void verify_failure_rollback_and_retry(
                     failed.primary_diagnostic->stage ==
                         kernel::RuntimeDiagnosticStage::BoundaryInvocation &&
                     failed.primary_diagnostic->validity_effect ==
-                        contracts::EvidenceValidity::Unknown &&
-                    live.session->state() ==
-                        kernel::SessionState::Initialized &&
+                        contracts::EvidenceValidity::Invalid &&
+                    failed.primary_diagnostic->disposition ==
+                        kernel::RuntimeFailureDisposition::FailOperation &&
+                    live.session->state() == kernel::SessionState::Failed &&
                     live.session->committed_epoch() == before_epoch &&
                     live.session->committed_tick() == before_tick &&
                     committed_mode(live).revision == 0U &&
@@ -1862,21 +1913,14 @@ void verify_failure_rollback_and_retry(
                         1U &&
                     live.session->command_application_receipts().empty() &&
                     live.session->committed_events().empty() &&
-                    live.session->run_outcome() == nullptr,
-                "projection failure leaked a staged command effect or froze a retriable run");
-        const auto retry = live.session->execute_step();
-        require(retry.status == kernel::StepStatus::Committed &&
-                    live.session->state() ==
-                        kernel::SessionState::Initialized &&
-                    live.session->committed_epoch() == before_epoch + 1U &&
-                    live.session->committed_tick() == before_tick + 1 &&
-                    committed_mode(live).mode == Mode::Active &&
-                    committed_mode(live).revision == 1U &&
-                    live.session->pending_command_count() == 0U &&
-                    live.session->command_application_receipts().size() ==
-                        1U &&
-                    live.session->committed_events().size() == 1U,
-                "retriable projection failure did not apply the due command exactly once on retry");
+                    live.session->run_outcome() != nullptr &&
+                    live.session->run_outcome()->final_status ==
+                        kernel::RunFinalStatus::Failed &&
+                    live.session->run_outcome()->validity ==
+                        contracts::EvidenceValidity::Invalid &&
+                    live.session->execute_step().status ==
+                        kernel::StepStatus::Failed,
+                "projection failure leaked staged effects or remained retryable");
     }
 }
 
