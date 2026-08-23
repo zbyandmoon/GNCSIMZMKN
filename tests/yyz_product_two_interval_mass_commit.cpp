@@ -954,11 +954,18 @@ struct MissionControlProbeBundle {
     non_pitch.rigid_state.attitude.value =
         gnc::foundation::quaternion_from_wxyz(
             std::sqrt(1.0 - 0.01 * 0.01), 0.01, 0.0, 0.0);
-    expect_failure(ControlledPropelledRigidMassStepKernel::evaluate(
-                       prepared, mass_definition, propulsion_definition,
-                       control_definition, non_pitch, interval),
-                   NumericalStatus::DomainError,
-                   "non-pure-pitch observation survived");
+    const auto rolled_outcome =
+        ControlledPropelledRigidMassStepKernel::evaluate(
+            prepared, mass_definition, propulsion_definition,
+            control_definition, non_pitch, interval);
+    const auto& rolled = require_value(
+        rolled_outcome, "roll-only observation was rejected");
+    require(near(rolled.guidance.measured_pitch_radians, 0.0) &&
+                near(rolled.guidance.pitch_command_radians,
+                     accepted.guidance.pitch_command_radians) &&
+                near(rolled.controller.moment_command_newton_meters,
+                     accepted.controller.moment_command_newton_meters),
+            "roll-only attitude changed the forward-axis pitch control");
     ControlledPropelledRigidMassStepDefinition nonideal =
         control_definition;
     nonideal.actuator.realization_gain = 1.1;
@@ -974,7 +981,8 @@ struct MissionControlProbeBundle {
                        control_definition, stale, interval),
                    NumericalStatus::DomainError,
                    "stale committed observation survived");
-    checks.emplace_back("mission-control-three-invalid-input-rejections");
+    checks.emplace_back(
+        "mission-control-general-attitude-and-two-invalid-inputs");
     return {accepted, std::move(checks)};
 }
 

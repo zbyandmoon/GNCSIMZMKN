@@ -1,6 +1,7 @@
 #include "ref_yyz_complete_composition.hpp"
 
 #include <yyz/mass_commit.hpp>
+#include <yyz/qualification_00a.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -41,6 +42,37 @@ constexpr std::string_view kInertialFrame =
 constexpr std::string_view kBodyFrame = "frame.fixture.yyz.body@1";
 constexpr std::string_view kMassState = "mass.fixture.yyz.vehicle@1";
 constexpr std::string_view kDocument = "fixtures/ref-yyz-001/source.json";
+constexpr std::string_view kCanonicalEntity =
+    "vehicle.yyz.00a.abstract-engineering@1";
+constexpr std::string_view kCanonicalClock =
+    "clock.yyz.00a.100hz@1";
+constexpr std::string_view kCanonicalMassState =
+    "mass.yyz.00a.vehicle@1";
+constexpr std::string_view kCanonicalDocument =
+    "fixtures/ref-yyz-00a-canonical/source.json";
+
+struct CompositionProfile {
+    std::string_view entity;
+    std::string_view clock;
+    std::string_view inertial_frame;
+    std::string_view body_frame;
+    std::string_view mass_state;
+    std::string_view configuration;
+    std::string_view document;
+    const gnc::packages::yyz::Canonical00AProductProfile*
+        canonical_product = nullptr;
+};
+
+[[nodiscard]] CompositionProfile baseline_profile() {
+    return {kEntity,
+            kClock,
+            kInertialFrame,
+            kBodyFrame,
+            kMassState,
+            "configuration.fixture.yyz.clean@1",
+            kDocument,
+            nullptr};
+}
 
 void require(bool condition, std::string_view message) {
     if (!condition) {
@@ -52,33 +84,39 @@ void require(bool condition, std::string_view message) {
     return {std::string(kDocument), std::move(path)};
 }
 
+[[nodiscard]] SourceRef ref(const CompositionProfile& profile,
+                            std::string path) {
+    return {std::string(profile.document), std::move(path)};
+}
+
 [[nodiscard]] std::string occurrence_id(std::size_t index) {
     return "occurrence.ref-yyz." + std::to_string(index);
 }
 
 [[nodiscard]] CanonicalConfigValue fixture_value(
     std::string_view model_id, std::string_view field_id,
-    CanonicalConfigValueKind kind, bool initial_state) {
+    CanonicalConfigValueKind kind, bool initial_state,
+    const CompositionProfile& profile) {
     switch (kind) {
     case CanonicalConfigValueKind::String:
         if (field_id.find("clock") != std::string_view::npos) {
-            return std::string(kClock);
+            return std::string(profile.clock);
         }
         if (field_id.find("mass_state") != std::string_view::npos) {
-            return std::string(kMassState);
+            return std::string(profile.mass_state);
         }
         if (field_id.find("inertial") != std::string_view::npos) {
-            return std::string(kInertialFrame);
+            return std::string(profile.inertial_frame);
         }
         if (field_id.find("body_frame") != std::string_view::npos ||
             field_id == "context.frame_id") {
-            return std::string(kBodyFrame);
+            return std::string(profile.body_frame);
         }
         if (field_id.find("configuration_id") != std::string_view::npos) {
-            return std::string("configuration.fixture.yyz.clean@1");
+            return std::string(profile.configuration);
         }
         if (field_id.find("subject") != std::string_view::npos) {
-            return std::string("vehicle.fixture.yyz@1");
+            return std::string(profile.entity);
         }
         if (field_id == "predicates.0.predicate_id" ||
             field_id == "predicates.0.reason_code") {
@@ -164,6 +202,54 @@ void require(bool condition, std::string_view message) {
         throw std::runtime_error("unmapped REF-YYZ enum field: " +
                                  std::string(field_id));
     case CanonicalConfigValueKind::Float64:
+        if (initial_state && profile.canonical_product != nullptr) {
+            const auto& state =
+                profile.canonical_product->initial_rigid_state;
+            const auto& attitude = state.attitude.value;
+            if (field_id == "position.x_meters") {
+                return state.position.value(0);
+            }
+            if (field_id == "position.y_meters") {
+                return state.position.value(1);
+            }
+            if (field_id == "position.z_meters") {
+                return state.position.value(2);
+            }
+            if (field_id == "velocity.x_meters_per_second") {
+                return state.velocity.value(0);
+            }
+            if (field_id == "velocity.y_meters_per_second") {
+                return state.velocity.value(1);
+            }
+            if (field_id == "velocity.z_meters_per_second") {
+                return state.velocity.value(2);
+            }
+            if (field_id == "attitude.w") {
+                return attitude.w();
+            }
+            if (field_id == "attitude.x") {
+                return attitude.x();
+            }
+            if (field_id == "attitude.y") {
+                return attitude.y();
+            }
+            if (field_id == "attitude.z") {
+                return attitude.z();
+            }
+            if (field_id == "angular_rate.x_radians_per_second") {
+                return state.angular_rate.value(0);
+            }
+            if (field_id == "angular_rate.y_radians_per_second") {
+                return state.angular_rate.value(1);
+            }
+            if (field_id == "angular_rate.z_radians_per_second") {
+                return state.angular_rate.value(2);
+            }
+            if (field_id == "mass_kilograms") {
+                return profile.canonical_product
+                    ->initial_mass_kilograms;
+            }
+        }
         if (initial_state && field_id == "attitude.w") {
             return 1.0;
         }
@@ -284,7 +370,7 @@ void require(bool condition, std::string_view message) {
 [[nodiscard]] CanonicalConfigBlock config_for(
     const gnc::model_sdk::StaticConfigSchemaDescriptor& schema,
     std::string_view model_id, std::string_view provenance_prefix,
-    bool initial_state,
+    bool initial_state, const CompositionProfile& profile,
     std::vector<SourceConfigFieldProvenance>& provenance) {
     CanonicalConfigBlock result;
     result.schema_id = schema.schema_id;
@@ -293,10 +379,11 @@ void require(bool condition, std::string_view message) {
         result.fields.push_back(
             {field.field_id,
              fixture_value(model_id, field.field_id, field.value_kind,
-                           initial_state)});
+                           initial_state, profile)});
         provenance.push_back(
             {field.field_id,
-             ref(std::string(provenance_prefix) + "/" + field.field_id)});
+             ref(profile, std::string(provenance_prefix) + "/" +
+                              field.field_id)});
     }
     return result;
 }
@@ -309,17 +396,20 @@ void require(bool condition, std::string_view message) {
 void append_configuration_provenance(
     const CanonicalConfigBlock& configuration,
     std::string_view provenance_prefix,
+    const CompositionProfile& profile,
     std::vector<SourceConfigFieldProvenance>& provenance) {
     for (const auto& field : configuration.fields) {
         provenance.push_back(
             {field.field_id,
-             ref(std::string(provenance_prefix) + "/" + field.field_id)});
+             ref(profile, std::string(provenance_prefix) + "/" +
+                              field.field_id)});
     }
 }
 
 [[nodiscard]] CanonicalConfigBlock product_configuration_for(
     const StaticModelDescriptor& model,
     std::string_view provenance_prefix,
+    const CompositionProfile& profile,
     std::vector<SourceConfigFieldProvenance>& provenance) {
     using namespace gnc::packages::yyz;
     CanonicalConfigBlock configuration;
@@ -329,8 +419,8 @@ void append_configuration_provenance(
             std::string(kForceMomentClosureModelIdentity),
             std::string(kForceMomentClosureModelVersion),
             ModelExecutionForm::Closure};
-        definition.body_frame.id = std::string(kBodyFrame);
-        definition.clock_domain.id = std::string(kClock);
+        definition.body_frame.id = std::string(profile.body_frame);
+        definition.clock_domain.id = std::string(profile.clock);
         definition.configuration_revision = 11;
         definition.numerical_policy = numerical_policy();
         configuration = canonical_force_moment_closure_config(definition);
@@ -349,7 +439,7 @@ void append_configuration_provenance(
             ModelExecutionForm::PureQuery};
         definition.source_id = "aero.body";
         definition.configuration_id =
-            "configuration.fixture.yyz.clean@1";
+            std::string(profile.configuration);
         definition.reference_area_square_meters = 1.0;
         definition.reference_span_meters = 1.0;
         definition.reference_chord_meters = 1.0;
@@ -371,8 +461,9 @@ void append_configuration_provenance(
             std::string(kUniformEnvironmentModelIdentity),
             std::string(kUniformEnvironmentModelVersion),
             ModelExecutionForm::PureQuery};
-        definition.inertial_frame.id = std::string(kInertialFrame);
-        definition.clock_domain.id = std::string(kClock);
+        definition.inertial_frame.id =
+            std::string(profile.inertial_frame);
+        definition.clock_domain.id = std::string(profile.clock);
         definition.configuration_revision = 11;
         definition.gravity.value =
             gnc::foundation::Vec3{0.0, 0.0, -9.80665};
@@ -394,10 +485,15 @@ void append_configuration_provenance(
             std::string(kAltitudePitchGuidanceModelIdentity);
         definition.model_version =
             std::string(kAltitudePitchGuidanceModelVersion);
-        definition.inertial_frame.id = std::string(kInertialFrame);
-        definition.clock_domain.id = std::string(kClock);
+        definition.inertial_frame.id =
+            std::string(profile.inertial_frame);
+        definition.clock_domain.id = std::string(profile.clock);
         definition.configuration_revision = 11;
-        definition.target_altitude_meters = 1000.0;
+        definition.target_altitude_meters =
+            profile.canonical_product == nullptr
+                ? 1000.0
+                : profile.canonical_product
+                      ->altitude_command_meters;
         definition.altitude_error_gain_radians_per_meter = 0.02;
         definition.vertical_speed_gain_radian_seconds_per_meter = 0.05;
         definition.pitch_command_limit_radians = 0.04;
@@ -415,7 +511,7 @@ void append_configuration_provenance(
     } else {
         configuration = config_for(
             model.configuration, model.definition.model_id,
-            provenance_prefix, false, provenance);
+            provenance_prefix, false, profile, provenance);
         return configuration;
     }
     require(configuration.schema_id == model.configuration.schema_id &&
@@ -425,7 +521,7 @@ void append_configuration_provenance(
                     model.configuration.fields.size(),
             "canonical product configuration differs from Catalog schema");
     append_configuration_provenance(
-        configuration, provenance_prefix, provenance);
+        configuration, provenance_prefix, profile, provenance);
     return configuration;
 }
 
@@ -441,7 +537,8 @@ namespace {
 
 [[nodiscard]] CompleteStaticCompositionSource make_source(
     const StaticPackageDescriptor& package, bool include_navigation,
-    bool include_runwide_evaluation, double base_step_seconds,
+    bool include_runwide_evaluation, const CompositionProfile& profile,
+    double base_step_seconds,
     std::int64_t terminal_tick) {
     CompleteStaticCompositionSource source;
     source.source_version =
@@ -449,17 +546,18 @@ namespace {
     source.mission_id =
         "mission.fixture.yyz.lookup-altitude-hold@1";
     source.plan_id = "plan.ref-yyz.complete";
-    source.mission_source = ref("mission");
-    source.clock = {std::string(kClock), base_step_seconds, 0,
-                    terminal_tick, ref("clock")};
+    source.mission_source = ref(profile, "mission");
+    source.clock = {std::string(profile.clock), base_step_seconds, 0,
+                    terminal_tick, ref(profile, "clock")};
     source.entities.push_back(
-        {std::string(kEntity),
+        {std::string(profile.entity),
          gnc::compiler::EntityLifecycle::ActiveAtInitialize,
-         ref("entities/vehicle/identity"),
-         ref("entities/vehicle/lifecycle")});
+         ref(profile, "entities/vehicle/identity"),
+         ref(profile, "entities/vehicle/lifecycle")});
     const ScopeKey vehicle_scope{ScopeKind::Vehicle,
-                                 std::string(kEntity)};
-    source.scopes.push_back({vehicle_scope, ref("scopes/vehicle")});
+                                 std::string(profile.entity)};
+    source.scopes.push_back(
+        {vehicle_scope, ref(profile, "scopes/vehicle")});
 
     std::vector<std::size_t> selected_model_indices;
     for (std::size_t index = 0U; index < package.models.size(); ++index) {
@@ -484,24 +582,30 @@ namespace {
         occurrence.occurrence_id = occurrence_id(index);
         occurrence.model_id = model.definition.model_id;
         occurrence.model_version = model.definition.model_version;
-        occurrence.source = ref("occurrences/" + occurrence.occurrence_id);
-        occurrence.subject_entity_id = std::string(kEntity);
+        occurrence.source =
+            ref(profile, "occurrences/" + occurrence.occurrence_id);
+        occurrence.subject_entity_id = std::string(profile.entity);
         occurrence.subject_source =
-            ref("occurrences/" + occurrence.occurrence_id + "/subject");
+            ref(profile, "occurrences/" + occurrence.occurrence_id +
+                             "/subject");
         if (model.placement !=
             gnc::model_sdk::ModelPlacement::Environment) {
             occurrence.scope = vehicle_scope;
             occurrence.scope_source =
-                ref("occurrences/" + occurrence.occurrence_id + "/scope");
+                ref(profile, "occurrences/" + occurrence.occurrence_id +
+                                 "/scope");
         }
         occurrence.placement = model.placement;
         occurrence.placement_source =
-            ref("occurrences/" + occurrence.occurrence_id + "/placement");
+            ref(profile, "occurrences/" + occurrence.occurrence_id +
+                             "/placement");
         occurrence.configuration_source =
-            ref("occurrences/" + occurrence.occurrence_id + "/config");
+            ref(profile, "occurrences/" + occurrence.occurrence_id +
+                             "/config");
         occurrence.configuration = product_configuration_for(
             model,
             "occurrences/" + occurrence.occurrence_id + "/config/fields",
+            profile,
             occurrence.configuration_field_sources);
         for (auto& field : occurrence.configuration.fields) {
             if (field.field_id.find("fixed_step") != std::string::npos) {
@@ -514,8 +618,8 @@ namespace {
             occurrence.asset_bindings.push_back(
                 {asset.role, asset.asset_schema_id,
                  "aero-table.fixture.yyz.multiaffine@1",
-                 ref("occurrences/" + occurrence.occurrence_id +
-                     "/assets/" + asset.role)});
+                 ref(profile, "occurrences/" + occurrence.occurrence_id +
+                                  "/assets/" + asset.role)});
         }
         source.occurrences.push_back(std::move(occurrence));
 
@@ -526,12 +630,12 @@ namespace {
             CompleteSourceInitialBinding initial;
             initial.owner_occurrence_id = occurrence_id(index);
             initial.source =
-                ref("initial/" + initial.owner_occurrence_id);
+                ref(profile, "initial/" + initial.owner_occurrence_id);
             initial.builder_inputs = config_for(
                 state_owner.initial_state_input_schema,
                 model.definition.model_id,
                 "initial/" + initial.owner_occurrence_id + "/fields",
-                true, initial.field_sources);
+                true, profile, initial.field_sources);
             source.initial_bindings.push_back(std::move(initial));
         }
     }
@@ -591,7 +695,7 @@ namespace {
                  occurrence_id(providers.front().first),
                  providers.front().second->port_id,
                  occurrence_id(consumer_index), input.port_id,
-                 ref("bindings/" + binding_id)});
+                 ref(profile, "bindings/" + binding_id)});
         }
     }
 
@@ -641,7 +745,7 @@ namespace {
                     {invocation_id, occurrence_id(caller_index),
                      entry.obligation, requirement.requirement_id,
                      occurrence_id(providers.front()),
-                     ref("invocations/" + invocation_id)});
+                     ref(profile, "invocations/" + invocation_id)});
                 if (requirement.kind == StaticInvocationKind::Closure) {
                     closure_invocation = invocation_id;
                 }
@@ -653,12 +757,12 @@ namespace {
     source.integration_scopes.push_back(
         {"integration.ref-yyz", vehicle_scope, continuous_owner,
          continuous_owner, {closure_invocation},
-         ref("integration/ref-yyz")});
+         ref(profile, "integration/ref-yyz")});
 
     CompleteSourceTransaction transaction;
     transaction.transaction_id = "transaction.ref-yyz";
     transaction.scope = vehicle_scope;
-    transaction.source = ref("transactions/ref-yyz");
+    transaction.source = ref(profile, "transactions/ref-yyz");
     std::map<std::pair<std::string, std::string>, std::string>
         owner_by_schema_layout;
     for (const auto index : selected_model_indices) {
@@ -684,7 +788,8 @@ namespace {
                 gnc::packages::yyz::
                     kCommittedMissionResultModelIdentity) {
                 evaluator.history_id = "history.ref-yyz";
-                evaluator.source = ref("evaluators/ref-yyz/history");
+                evaluator.source =
+                    ref(profile, "evaluators/ref-yyz/history");
             } else {
                 require(model.definition.model_id ==
                             gnc::packages::yyz::
@@ -692,7 +797,7 @@ namespace {
                         "REF graph contains an unknown terminal evaluator");
                 evaluator.history_id = "history.ref-yyz.runwide";
                 evaluator.source =
-                    ref("evaluators/ref-yyz/runwide-history");
+                    ref(profile, "evaluators/ref-yyz/runwide-history");
             }
             require(model.runtime_component->evaluator_history_shape
                         .has_value(),
@@ -725,7 +830,7 @@ namespace {
     source.evaluator_histories = std::move(evaluators);
     source.package_build_locks.push_back(
         {package.package_id, package.package_version,
-         "build.ref-yyz.release", ref("packages/yyz/build")});
+         "build.ref-yyz.release", ref(profile, "packages/yyz/build")});
     return source;
 }
 
@@ -760,11 +865,176 @@ namespace {
     return *found;
 }
 
+void configure_00a_rate_shape(
+    CompleteStaticCompositionSource& source,
+    const CompositionProfile& profile, std::int64_t terminal_tick,
+    double fixed_step_seconds, std::int64_t navigation_interval,
+    std::int64_t guidance_interval, std::int64_t controller_interval,
+    std::int64_t actuator_interval, std::int64_t observation_interval,
+    std::string_view provenance_prefix,
+    std::string_view observation_id) {
+    require(terminal_tick > 0 && fixed_step_seconds > 0.0 &&
+                navigation_interval > 0 && guidance_interval > 0 &&
+                controller_interval > 0 && actuator_interval > 0 &&
+                observation_interval > 0 &&
+                navigation_interval <=
+                    static_cast<std::int64_t>(
+                        (std::numeric_limits<std::uint32_t>::max)()) &&
+                guidance_interval <=
+                    static_cast<std::int64_t>(
+                        (std::numeric_limits<std::uint32_t>::max)()) &&
+                controller_interval <=
+                    static_cast<std::int64_t>(
+                        (std::numeric_limits<std::uint32_t>::max)()) &&
+                actuator_interval <=
+                    static_cast<std::int64_t>(
+                        (std::numeric_limits<std::uint32_t>::max)()) &&
+                observation_interval <=
+                    static_cast<std::int64_t>(
+                        (std::numeric_limits<std::uint32_t>::max)()),
+            "00A rate profile contains a non-positive value");
+    const auto& navigation = occurrence_for(
+        source,
+        gnc::packages::yyz::kTruthPassthroughNavigationModelIdentity);
+    const auto& guidance = occurrence_for(
+        source, gnc::packages::yyz::kAltitudePitchGuidanceModelIdentity);
+    const auto& controller = occurrence_for(
+        source, gnc::packages::yyz::kPitchMomentControllerModelIdentity);
+    const auto& actuator = occurrence_for(
+        source, gnc::packages::yyz::kIdealBodyMomentActuatorModelIdentity);
+    auto& terminal_window_evaluator = occurrence_for(
+        source,
+        gnc::packages::yyz::kCommittedMissionResultModelIdentity);
+    auto& accumulator = occurrence_for(
+        source,
+        gnc::packages::yyz::kCommittedMissionAccumulatorModelIdentity);
+    auto& runwide_evaluator = occurrence_for(
+        source,
+        gnc::packages::yyz::kRunwideCommittedMissionResultModelIdentity);
+
+    const auto configure_predicates =
+        [&](CompleteSourceOccurrence& occurrence,
+            double duration_threshold, std::string_view suffix) {
+            std::size_t configured_predicates = 0U;
+            for (auto& field : occurrence.configuration.fields) {
+                if (field.field_id == "predicates.0.threshold") {
+                    field.value = 0.0;
+                    ++configured_predicates;
+                } else if (field.field_id ==
+                           "predicates.1.threshold") {
+                    field.value = duration_threshold;
+                    ++configured_predicates;
+                } else if (field.field_id ==
+                           "predicates.2.threshold") {
+                    field.value =
+                        (std::numeric_limits<double>::max)();
+                    ++configured_predicates;
+                }
+            }
+            require(configured_predicates == 3U,
+                    "00A evaluator predicate configuration is incomplete");
+            std::size_t configured_sources = 0U;
+            for (auto& provenance :
+                 occurrence.configuration_field_sources) {
+                if (provenance.field_id ==
+                        "predicates.0.threshold" ||
+                    provenance.field_id ==
+                        "predicates.1.threshold" ||
+                    provenance.field_id ==
+                        "predicates.2.threshold") {
+                    provenance.source = ref(
+                        profile, std::string(provenance_prefix) + "/" +
+                                     std::string(suffix) + "/" +
+                                     provenance.field_id);
+                    ++configured_sources;
+                }
+            }
+            require(configured_sources == 3U,
+                    "00A evaluator predicate provenance is incomplete");
+        };
+
+    const double terminal_window_duration_seconds =
+        static_cast<double>(
+            gnc::packages::yyz::kCommittedMissionHistoryDepth - 1U) *
+            fixed_step_seconds -
+        1.0e-12;
+    const double runwide_duration_seconds =
+        static_cast<double>(terminal_tick) * fixed_step_seconds;
+    configure_predicates(terminal_window_evaluator,
+                         terminal_window_duration_seconds,
+                         "terminal-window-evaluator");
+    configure_predicates(accumulator, runwide_duration_seconds,
+                         "committed-mission-accumulator");
+    configure_predicates(runwide_evaluator, runwide_duration_seconds,
+                         "runwide-evaluator");
+
+    const auto schedule_ref = [&](std::string_view component) {
+        return ref(profile, std::string(provenance_prefix) +
+                                "/schedules/" + std::string(component));
+    };
+    source.occurrence_schedule_overrides = {
+        {navigation.occurrence_id,
+         static_cast<std::uint32_t>(navigation_interval), 0U, 0U,
+         schedule_ref("navigation")},
+        {guidance.occurrence_id,
+         static_cast<std::uint32_t>(guidance_interval), 0U, 0U,
+         schedule_ref("guidance")},
+        {controller.occurrence_id,
+         static_cast<std::uint32_t>(controller_interval), 0U,
+         static_cast<std::uint32_t>(guidance_interval - 1),
+         schedule_ref("controller")},
+        {actuator.occurrence_id,
+         static_cast<std::uint32_t>(actuator_interval), 0U,
+         static_cast<std::uint32_t>(controller_interval - 1),
+         schedule_ref("actuator")},
+    };
+
+    const auto& guidance_to_controller = binding_for(
+        source, guidance, "guidance-output", controller,
+        "guidance-output");
+    const auto& controller_to_actuator = binding_for(
+        source, controller, "controller-output", actuator,
+        "controller-output");
+    const auto temporal_ref = [&](std::string_view edge) {
+        return ref(profile, std::string(provenance_prefix) +
+                                "/temporal/" + std::string(edge));
+    };
+    source.binding_temporal_overrides = {
+        {guidance_to_controller.binding_id,
+         guidance_to_controller.provider_occurrence_id,
+         guidance_to_controller.provider_port_id,
+         guidance_to_controller.consumer_occurrence_id,
+         guidance_to_controller.consumer_port_id,
+         std::string(
+             gnc::packages::yyz::
+                 kAltitudePitchGuidanceOutputContractIdentity),
+         gnc::model_sdk::BindingKind::SampledSignal,
+         gnc::model_sdk::TemporalRelation::HeldLatest,
+         temporal_ref("guidance-to-controller")},
+        {controller_to_actuator.binding_id,
+         controller_to_actuator.provider_occurrence_id,
+         controller_to_actuator.provider_port_id,
+         controller_to_actuator.consumer_occurrence_id,
+         controller_to_actuator.consumer_port_id,
+         std::string(
+             gnc::packages::yyz::
+                 kPitchMomentControllerOutputContractIdentity),
+         gnc::model_sdk::BindingKind::SampledSignal,
+         gnc::model_sdk::TemporalRelation::HeldLatest,
+         temporal_ref("controller-to-actuator")},
+    };
+    source.observation_schedules.push_back(
+        {std::string(observation_id),
+         static_cast<std::uint32_t>(observation_interval), 0U,
+         ref(profile, std::string(provenance_prefix) +
+                          "/observations/committed-rigid-mass")});
+}
+
 } // namespace
 
 [[nodiscard]] CompleteStaticCompositionSource make_complete_source(
     const StaticPackageDescriptor& package) {
-    return make_source(package, false, false, 0.1, 2);
+    return make_source(package, false, false, baseline_profile(), 0.1, 2);
 }
 
 gnc::compiler::CompleteOutcome<gnc::contracts::ExecutionPlanImage>
@@ -851,126 +1121,14 @@ gnc::compiler::CompleteStaticCompositionSource
 make_00a_target_rate_source(
     const gnc::model_sdk::StaticPackageDescriptor& package,
     std::int64_t terminal_tick) {
-    auto source = make_source(package, true, true, 0.01, terminal_tick);
+    auto source = make_source(package, true, true, baseline_profile(),
+                              0.01, terminal_tick);
     source.mission_id =
         "mission.qualification.yyz.00a-target-rate@1";
     source.plan_id = "plan.qualification.yyz.00a-target-rate";
-
-    const auto& navigation = occurrence_for(
-        source,
-        gnc::packages::yyz::kTruthPassthroughNavigationModelIdentity);
-    const auto& guidance = occurrence_for(
-        source, gnc::packages::yyz::kAltitudePitchGuidanceModelIdentity);
-    const auto& controller = occurrence_for(
-        source, gnc::packages::yyz::kPitchMomentControllerModelIdentity);
-    const auto& actuator = occurrence_for(
-        source, gnc::packages::yyz::kIdealBodyMomentActuatorModelIdentity);
-    auto& terminal_window_evaluator = occurrence_for(
-        source,
-        gnc::packages::yyz::kCommittedMissionResultModelIdentity);
-    auto& accumulator = occurrence_for(
-        source,
-        gnc::packages::yyz::kCommittedMissionAccumulatorModelIdentity);
-    auto& runwide_evaluator = occurrence_for(
-        source,
-        gnc::packages::yyz::kRunwideCommittedMissionResultModelIdentity);
-
-    const auto configure_predicates = [&](CompleteSourceOccurrence& occurrence,
-                                          double duration_threshold,
-                                          std::string_view provenance_prefix) {
-        std::size_t configured_predicates = 0U;
-        for (auto& field : occurrence.configuration.fields) {
-            if (field.field_id == "predicates.0.threshold") {
-                field.value = 0.0;
-                ++configured_predicates;
-            } else if (field.field_id == "predicates.1.threshold") {
-                field.value = duration_threshold;
-                ++configured_predicates;
-            } else if (field.field_id == "predicates.2.threshold") {
-                field.value = (std::numeric_limits<double>::max)();
-                ++configured_predicates;
-            }
-        }
-        require(configured_predicates == 3U,
-                "target evaluator predicate configuration is incomplete");
-        std::size_t configured_sources = 0U;
-        for (auto& provenance :
-             occurrence.configuration_field_sources) {
-            if (provenance.field_id == "predicates.0.threshold" ||
-                provenance.field_id == "predicates.1.threshold" ||
-                provenance.field_id == "predicates.2.threshold") {
-                provenance.source = ref(
-                    std::string(provenance_prefix) + "/" +
-                    provenance.field_id);
-                ++configured_sources;
-            }
-        }
-        require(configured_sources == 3U,
-                "target evaluator predicate provenance is incomplete");
-    };
-
-    constexpr double kTargetStepSeconds = 0.01;
-    const double terminal_window_duration_seconds =
-        static_cast<double>(
-            gnc::packages::yyz::kCommittedMissionHistoryDepth - 1U) *
-            kTargetStepSeconds -
-        1.0e-12;
-    const double runwide_duration_seconds =
-        static_cast<double>(terminal_tick) * kTargetStepSeconds;
-    configure_predicates(
-        terminal_window_evaluator, terminal_window_duration_seconds,
-        "target-rate/terminal-window-evaluator");
-    configure_predicates(
-        accumulator, runwide_duration_seconds,
-        "target-rate/committed-mission-accumulator");
-    configure_predicates(
-        runwide_evaluator, runwide_duration_seconds,
-        "target-rate/runwide-evaluator");
-
-    source.occurrence_schedule_overrides = {
-        {navigation.occurrence_id, 1U, 0U, 0U,
-         ref("target-rate/schedules/navigation")},
-        {guidance.occurrence_id, 5U, 0U, 0U,
-         ref("target-rate/schedules/guidance")},
-        {controller.occurrence_id, 2U, 0U, 4U,
-         ref("target-rate/schedules/controller")},
-        {actuator.occurrence_id, 1U, 0U, 1U,
-         ref("target-rate/schedules/actuator")},
-    };
-
-    const auto& guidance_to_controller = binding_for(
-        source, guidance, "guidance-output", controller,
-        "guidance-output");
-    const auto& controller_to_actuator = binding_for(
-        source, controller, "controller-output", actuator,
-        "controller-output");
-    source.binding_temporal_overrides = {
-        {guidance_to_controller.binding_id,
-         guidance_to_controller.provider_occurrence_id,
-         guidance_to_controller.provider_port_id,
-         guidance_to_controller.consumer_occurrence_id,
-         guidance_to_controller.consumer_port_id,
-         std::string(
-             gnc::packages::yyz::
-                 kAltitudePitchGuidanceOutputContractIdentity),
-         gnc::model_sdk::BindingKind::SampledSignal,
-         gnc::model_sdk::TemporalRelation::HeldLatest,
-         ref("target-rate/temporal/guidance-to-controller")},
-        {controller_to_actuator.binding_id,
-         controller_to_actuator.provider_occurrence_id,
-         controller_to_actuator.provider_port_id,
-         controller_to_actuator.consumer_occurrence_id,
-         controller_to_actuator.consumer_port_id,
-         std::string(
-             gnc::packages::yyz::
-                 kPitchMomentControllerOutputContractIdentity),
-         gnc::model_sdk::BindingKind::SampledSignal,
-         gnc::model_sdk::TemporalRelation::HeldLatest,
-         ref("target-rate/temporal/controller-to-actuator")},
-    };
-    source.observation_schedules.push_back(
-        {"observation.00a.committed-rigid-mass", 4U, 0U,
-         ref("target-rate/observations/committed-rigid-mass")});
+    configure_00a_rate_shape(
+        source, baseline_profile(), terminal_tick, 0.01, 1, 5, 2, 1,
+        4, "target-rate", "observation.00a.committed-rigid-mass");
     return source;
 }
 
@@ -983,6 +1141,57 @@ compile_00a_target_rate_image(std::int64_t terminal_tick) {
             "build.ref-yyz.release");
     const auto source =
         make_00a_target_rate_source(package, terminal_tick);
+    return gnc::compiler::compile_and_link_complete_execution_plan(
+        source, {package}, {implementation});
+}
+
+gnc::compiler::CompleteStaticCompositionSource
+make_00a_canonical_source(
+    const gnc::model_sdk::StaticPackageDescriptor& package) {
+    const auto mapped =
+        gnc::packages::yyz::Canonical00AInitialMappingQuery::evaluate(
+            gnc::packages::yyz::
+                canonical_00a_initial_mapping_definition(),
+            gnc::packages::yyz::canonical_00a_author_input());
+    require(mapped.has_value(),
+            "canonical 00A package mapping rejected author facts");
+    const auto& product = mapped.value();
+    const CompositionProfile profile{
+        kCanonicalEntity,
+        kCanonicalClock,
+        product.inertial_frame.id,
+        product.body_frame.id,
+        kCanonicalMassState,
+        "configuration.fixture.yyz.clean@1",
+        kCanonicalDocument,
+        &product};
+    auto source = make_source(
+        package, true, true, profile, product.fixed_step_seconds,
+        product.terminal_tick);
+    source.mission_id =
+        "mission.yyz.00a.abstract-engineering-baseline@1";
+    source.plan_id =
+        "plan.yyz.00a.abstract-engineering-baseline";
+    configure_00a_rate_shape(
+        source, profile, product.terminal_tick,
+        product.fixed_step_seconds,
+        product.navigation_interval_ticks,
+        product.guidance_interval_ticks,
+        product.controller_interval_ticks,
+        product.actuator_interval_ticks,
+        product.observation_interval_ticks, "canonical-00a",
+        "observation.00a.canonical.committed-rigid-mass");
+    return source;
+}
+
+gnc::compiler::CompleteOutcome<gnc::contracts::ExecutionPlanImage>
+compile_00a_canonical_image() {
+    const auto package =
+        gnc::packages::yyz::describe_yyz_rigid_step_package();
+    const auto implementation =
+        gnc::packages::yyz::describe_yyz_rigid_step_implementation(
+            "build.ref-yyz.release");
+    const auto source = make_00a_canonical_source(package);
     return gnc::compiler::compile_and_link_complete_execution_plan(
         source, {package}, {implementation});
 }

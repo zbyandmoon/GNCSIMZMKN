@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string_view>
 #include <type_traits>
@@ -3983,15 +3984,27 @@ AltitudePitchGuidanceKernel::evaluate(
             "committed-observation-attitude", attitude.evidence().flags);
     }
     const auto& q = attitude.value();
-    if (!near(q.x(), 0.0, policy) || !near(q.z(), 0.0, policy) ||
-        q.w() <= 0.0) {
-        return mass_commit_failure<AltitudePitchGuidanceOutput>(
-            kAltitudePitchGuidanceKernelIdentity,
-            NumericalStatus::DomainError, "pure-pitch-projection",
-            attitude.evidence().flags);
+    double pitch = 0.0;
+    if (near(q.x(), 0.0, policy) && near(q.z(), 0.0, policy) &&
+        q.w() > 0.0) {
+        // Preserve the accepted pure-pitch arithmetic exactly for the
+        // existing reference asset and its frozen oracle.
+        pitch = -2.0 * std::atan2(q.y(), q.w());
+    } else {
+        const auto body_to_inertial =
+            gnc::foundation::passive_rotation_matrix(
+                q, definition.attitude_policy);
+        if (!body_to_inertial.has_value()) {
+            return mass_commit_failure<AltitudePitchGuidanceOutput>(
+                kAltitudePitchGuidanceKernelIdentity,
+                body_to_inertial.status(), "attitude-forward-axis",
+                attitude.evidence().flags |
+                    body_to_inertial.evidence().flags);
+        }
+        const Vec3 forward = body_to_inertial.value().col(0);
+        const double horizontal = std::hypot(forward(0), forward(1));
+        pitch = -std::atan2(forward(2), horizontal);
     }
-
-    const double pitch = -2.0 * std::atan2(q.y(), q.w());
     const double pitch_rate = observation.state.angular_rate.value(1);
     const double altitude_error = definition.target_altitude_meters -
                                   observation.state.position.value(2);
@@ -5143,17 +5156,17 @@ CommittedMissionAccumulatorKernel::accumulate(
             kCommittedMissionAccumulatorIntervalEvolutionIdentity,
             NumericalStatus::DomainError, "definition-or-policy");
     }
+    if (!validate_committed_mission_accumulator_state(committed)) {
+        return mass_commit_failure<CommittedMissionAccumulatorState>(
+            kCommittedMissionAccumulatorIntervalEvolutionIdentity,
+            NumericalStatus::DomainError, "committed-aggregate");
+    }
     if (committed.terminal_result_present) {
         return NumericalOutcome<CommittedMissionAccumulatorState>::with_value(
             NumericalStatus::Success, committed,
             mass_commit_evidence(
                 kCommittedMissionAccumulatorIntervalEvolutionIdentity,
                 "earliest-terminal-result-frozen"));
-    }
-    if (!validate_committed_mission_accumulator_state(committed)) {
-        return mass_commit_failure<CommittedMissionAccumulatorState>(
-            kCommittedMissionAccumulatorIntervalEvolutionIdentity,
-            NumericalStatus::DomainError, "committed-aggregate");
     }
 
     const NumericalPolicy& policy = definition.numerical_policy;
@@ -5501,6 +5514,151 @@ namespace {
         });
 }
 
+[[nodiscard]] bool same_vector(const Vec3& lhs,
+                               const Vec3& rhs) noexcept {
+    return lhs(0) == rhs(0) && lhs(1) == rhs(1) && lhs(2) == rhs(2);
+}
+
+[[nodiscard]] bool same_matrix(const Mat3& lhs,
+                               const Mat3& rhs) noexcept {
+    for (Eigen::Index row = 0; row < 3; ++row) {
+        for (Eigen::Index column = 0; column < 3; ++column) {
+            if (lhs(row, column) != rhs(row, column)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool same_quaternion(
+    const gnc::foundation::QuaternionStorage& lhs,
+    const gnc::foundation::QuaternionStorage& rhs) noexcept {
+    return lhs.w() == rhs.w() && lhs.x() == rhs.x() &&
+           lhs.y() == rhs.y() && lhs.z() == rhs.z();
+}
+
+[[nodiscard]] bool same_sample_context(const SampleContext& lhs,
+                                       const SampleContext& rhs) noexcept {
+    return lhs.frame == rhs.frame &&
+           lhs.clock_domain == rhs.clock_domain &&
+           lhs.sample_time.tick == rhs.sample_time.tick &&
+           lhs.sample_time.seconds == rhs.sample_time.seconds &&
+           lhs.configuration_revision == rhs.configuration_revision &&
+           lhs.quality == rhs.quality;
+}
+
+[[nodiscard]] bool same_rigid_state(const RigidState& lhs,
+                                    const RigidState& rhs) noexcept {
+    return same_vector(lhs.position.value, rhs.position.value) &&
+           same_vector(lhs.velocity.value, rhs.velocity.value) &&
+           same_quaternion(lhs.attitude.value, rhs.attitude.value) &&
+           same_vector(lhs.angular_rate.value, rhs.angular_rate.value);
+}
+
+[[nodiscard]] bool same_mass_state(const MassState& lhs,
+                                   const MassState& rhs) noexcept {
+    return same_sample_context(lhs.context, rhs.context) &&
+           lhs.mass_state_id == rhs.mass_state_id &&
+           lhs.mass_kilograms == rhs.mass_kilograms &&
+           same_vector(lhs.body_origin_to_center_of_mass.value,
+                       rhs.body_origin_to_center_of_mass.value) &&
+           same_matrix(lhs.inertia_about_center_of_mass.value,
+                       rhs.inertia_about_center_of_mass.value);
+}
+
+[[nodiscard]] bool same_mission_boundary(
+    const CommittedRigidMassBoundary& lhs,
+    const CommittedRigidMassBoundary& rhs) noexcept {
+    return same_sample_context(lhs.rigid_context, rhs.rigid_context) &&
+           same_rigid_state(lhs.rigid_state, rhs.rigid_state) &&
+           same_mass_state(lhs.mass_state, rhs.mass_state);
+}
+
+[[nodiscard]] bool same_mission_boundary_identity(
+    const CommittedRigidMassBoundary& lhs,
+    const CommittedRigidMassBoundary& rhs) noexcept {
+    return lhs.rigid_context.frame == rhs.rigid_context.frame &&
+           lhs.rigid_context.clock_domain ==
+               rhs.rigid_context.clock_domain &&
+           lhs.rigid_context.configuration_revision ==
+               rhs.rigid_context.configuration_revision &&
+           lhs.mass_state.context.frame == rhs.mass_state.context.frame &&
+           lhs.mass_state.context.clock_domain ==
+               rhs.mass_state.context.clock_domain &&
+           lhs.mass_state.context.configuration_revision ==
+               rhs.mass_state.context.configuration_revision &&
+           lhs.mass_state.mass_state_id == rhs.mass_state.mass_state_id;
+}
+
+[[nodiscard]] bool same_mission_metrics(const MissionMetrics& lhs,
+                                        const MissionMetrics& rhs) noexcept {
+    return lhs.duration_seconds == rhs.duration_seconds &&
+           lhs.downrange_meters == rhs.downrange_meters &&
+           lhs.vertical_displacement_meters ==
+               rhs.vertical_displacement_meters &&
+           lhs.remaining_mass_kilograms ==
+               rhs.remaining_mass_kilograms &&
+           lhs.consumed_mass_kilograms == rhs.consumed_mass_kilograms &&
+           lhs.speed_meters_per_second == rhs.speed_meters_per_second;
+}
+
+[[nodiscard]] bool same_mission_summary(
+    const MissionMetricSummary& lhs,
+    const MissionMetricSummary& rhs) noexcept {
+    return lhs.evaluated_sample_count == rhs.evaluated_sample_count &&
+           same_mission_metrics(lhs.terminal, rhs.terminal) &&
+           lhs.peak_speed_meters_per_second ==
+               rhs.peak_speed_meters_per_second &&
+           lhs.peak_speed_tick == rhs.peak_speed_tick &&
+           lhs.maximum_downrange_meters ==
+               rhs.maximum_downrange_meters &&
+           lhs.maximum_downrange_tick == rhs.maximum_downrange_tick &&
+           lhs.minimum_remaining_mass_kilograms ==
+               rhs.minimum_remaining_mass_kilograms &&
+           lhs.minimum_remaining_mass_tick ==
+               rhs.minimum_remaining_mass_tick;
+}
+
+[[nodiscard]] bool valid_terminal_predicate_result(
+    const CommittedMissionResultOutput& result) noexcept {
+    const MissionPredicateEvaluation* selected = nullptr;
+    for (std::size_t index = 0U;
+         index < result.terminal_predicates.size(); ++index) {
+        const auto& predicate = result.terminal_predicates[index];
+        if (predicate.predicate_id.empty() ||
+            predicate.reason_code.empty() ||
+            (predicate.action != MissionAction::Complete &&
+             predicate.action != MissionAction::Abort) ||
+            predicate.priority < 0) {
+            return false;
+        }
+        for (std::size_t previous = 0U; previous < index; ++previous) {
+            if (predicate.predicate_id ==
+                result.terminal_predicates[previous].predicate_id) {
+                return false;
+            }
+        }
+        if (predicate.met &&
+            (selected == nullptr ||
+             predicate.priority > selected->priority ||
+             (predicate.priority == selected->priority &&
+              predicate.predicate_id < selected->predicate_id))) {
+            selected = &predicate;
+        }
+    }
+    if (selected == nullptr) {
+        return false;
+    }
+    return result.termination.action == selected->action &&
+           result.termination.reason_code == selected->reason_code &&
+           result.termination.priority == selected->priority &&
+           ((result.status == MissionResultStatus::Completed &&
+             selected->action == MissionAction::Complete) ||
+            (result.status == MissionResultStatus::Aborted &&
+             selected->action == MissionAction::Abort));
+}
+
 } // namespace
 
 CommittedMissionAccumulatorState
@@ -5531,21 +5689,67 @@ bool validate_committed_mission_accumulator_state_invariants(
         state.opening_boundary.rigid_context.sample_time.tick;
     const auto latest_tick =
         state.latest_boundary.rigid_context.sample_time.tick;
+    const auto opening_time =
+        state.opening_boundary.rigid_context.sample_time.seconds;
+    const auto latest_time =
+        state.latest_boundary.rigid_context.sample_time.seconds;
     if (!valid_mission_boundary_shape(state.opening_boundary) ||
         !valid_mission_boundary_shape(state.latest_boundary) ||
+        !same_mission_boundary_identity(state.opening_boundary,
+                                        state.latest_boundary) ||
         latest_tick < opening_tick ||
-        state.latest_boundary.rigid_context.sample_time.seconds <
-            state.opening_boundary.rigid_context.sample_time.seconds ||
+        (latest_tick == opening_tick && latest_time != opening_time) ||
+        (latest_tick > opening_tick && latest_time <= opening_time) ||
         state.latest_boundary.mass_state.mass_kilograms >
-            state.opening_boundary.mass_state.mass_kilograms ||
+            state.opening_boundary.mass_state.mass_kilograms) {
+        return false;
+    }
+    const auto tick_count =
+        static_cast<std::uint64_t>(latest_tick) -
+        static_cast<std::uint64_t>(opening_tick) + 1U;
+    if (tick_count >
+            static_cast<std::uint64_t>(
+                std::numeric_limits<std::size_t>::max()) ||
         state.metrics.evaluated_sample_count !=
-            static_cast<std::size_t>(latest_tick - opening_tick + 1) ||
+            static_cast<std::size_t>(tick_count) ||
         state.metrics.peak_speed_tick < opening_tick ||
         state.metrics.peak_speed_tick > latest_tick ||
         state.metrics.maximum_downrange_tick < opening_tick ||
         state.metrics.maximum_downrange_tick > latest_tick ||
         state.metrics.minimum_remaining_mass_tick < opening_tick ||
         state.metrics.minimum_remaining_mass_tick > latest_tick) {
+        return false;
+    }
+    const MissionMetrics terminal_metrics =
+        mission_metrics(state.opening_boundary, state.latest_boundary);
+    const double opening_speed =
+        state.opening_boundary.rigid_state.velocity.value.norm();
+    if (!same_mission_metrics(state.metrics.terminal, terminal_metrics) ||
+        terminal_metrics.duration_seconds < 0.0 ||
+        terminal_metrics.remaining_mass_kilograms <= 0.0 ||
+        terminal_metrics.consumed_mass_kilograms < 0.0 ||
+        terminal_metrics.speed_meters_per_second < 0.0 ||
+        state.metrics.peak_speed_meters_per_second < opening_speed ||
+        state.metrics.peak_speed_meters_per_second <
+            terminal_metrics.speed_meters_per_second ||
+        state.metrics.maximum_downrange_meters < 0.0 ||
+        state.metrics.maximum_downrange_meters <
+            terminal_metrics.downrange_meters ||
+        state.metrics.minimum_remaining_mass_kilograms <= 0.0 ||
+        state.metrics.minimum_remaining_mass_kilograms >
+            state.opening_boundary.mass_state.mass_kilograms ||
+        state.metrics.minimum_remaining_mass_kilograms >
+            terminal_metrics.remaining_mass_kilograms) {
+        return false;
+    }
+    if (tick_count == 1U &&
+        (state.metrics.peak_speed_meters_per_second != opening_speed ||
+         state.metrics.peak_speed_tick != opening_tick ||
+         state.metrics.maximum_downrange_meters != 0.0 ||
+         state.metrics.maximum_downrange_tick != opening_tick ||
+         state.metrics.minimum_remaining_mass_kilograms !=
+             state.opening_boundary.mass_state.mass_kilograms ||
+         state.metrics.minimum_remaining_mass_tick != opening_tick)) {
         return false;
     }
     if (!state.terminal_result_present) {
@@ -5556,12 +5760,14 @@ bool validate_committed_mission_accumulator_state_invariants(
             result.status == MissionResultStatus::Aborted) &&
            result.initial_tick == opening_tick &&
            result.final_tick == latest_tick &&
-           result.metrics.evaluated_sample_count ==
-               state.metrics.evaluated_sample_count &&
-           result.terminal_boundary.rigid_context.sample_time.tick ==
-               latest_tick &&
+           result.final_time_seconds == latest_time &&
+           result.termination.trigger_time_seconds == latest_time &&
+           same_mission_summary(result.metrics, state.metrics) &&
+           same_mission_boundary(result.terminal_boundary,
+                                 state.latest_boundary) &&
            !result.termination.reason_code.empty() &&
-           result.termination.priority >= 0;
+           result.termination.priority >= 0 &&
+           valid_terminal_predicate_result(result);
 }
 
 bool validate_committed_mission_accumulator_state(

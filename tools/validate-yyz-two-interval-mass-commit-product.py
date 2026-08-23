@@ -67,7 +67,7 @@ MISSION_CONTROL_DIRECT_CHECKS = {
     "mission-controller-to-current-cycle-actuation",
     "mission-control-propulsion-single-transport",
     "mission-controlled-candidate-oracle-anchors",
-    "mission-control-three-invalid-input-rejections",
+    "mission-control-general-attitude-and-two-invalid-inputs",
 }
 MISSION_TWO_INTERVAL_DIRECT_CHECKS = {
     "mission-interval-zero-committed-feedback",

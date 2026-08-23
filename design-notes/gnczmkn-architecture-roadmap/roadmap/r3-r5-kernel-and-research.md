@@ -251,6 +251,8 @@ StepOutcome 记录 base/committed epoch、phase reached、delta set、terminatio
 
 每项差异分类、引用 oracle/ADR/model id。无法解释项阻断切换。
 
+2026-08-23 的 `R3-YYZ-001` canonical 00A 切片已对 initial truth、cadence/held timing、opening navigation/guidance/controller/actuator/propulsion、environment/air-data 与 aerodynamic domain 形成产品/独立 reference comparison。全部可得字段通过逐字段 tolerance；最大绝对差为 tick 0 near-zero North velocity 的 `1.347066989204615e-14`。exact R0 aero asset 的 Mach 轴上限为 `0.6`，canonical opening query 为 `0.6176470588235294`，真实 Session 因而在第一段导数前 fail closed，三个 dt ladder 均提交零 interval。difference report 保留一个无法生成 tick 1～3000 trajectory 的 unresolved item，该项继续阻断 terminal science verdict 与 runner cutover。
+
 ### 2.14 R3.14 runner/active project 切换
 
 - CLI build/validate/run/list/explain 使用 new Application/Compiler/Session；

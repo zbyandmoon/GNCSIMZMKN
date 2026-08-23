@@ -27,6 +27,13 @@ make_00a_target_rate_source(
     const gnc::model_sdk::StaticPackageDescriptor& package,
     std::int64_t terminal_tick);
 
+// Canonical 00A abstract-engineering profile. The package-owned mapping
+// supplies the 31.2304/121.4737 launch-local ENU initial condition, 680 kg
+// mass, 30 s duration and 1/5/2/1/4 cadence to the ordinary source chain.
+[[nodiscard]] gnc::compiler::CompleteStaticCompositionSource
+make_00a_canonical_source(
+    const gnc::model_sdk::StaticPackageDescriptor& package);
+
 // Full fixture facade for Kernel tests. Its implementation owns the package
 // dependency, leaving the consumer translation unit free of YYZ concrete
 // headers, identifiers, and catalog calls.
@@ -41,6 +48,10 @@ compile_multirate_held_output_qualification_image();
 [[nodiscard]] gnc::compiler::CompleteOutcome<
     gnc::contracts::ExecutionPlanImage>
 compile_00a_target_rate_image(std::int64_t terminal_tick);
+
+[[nodiscard]] gnc::compiler::CompleteOutcome<
+    gnc::contracts::ExecutionPlanImage>
+compile_00a_canonical_image();
 
 // Compiles the same executable composition through the ordinary Catalog and
 // linker path while one Runtime Cell deliberately omits the optional

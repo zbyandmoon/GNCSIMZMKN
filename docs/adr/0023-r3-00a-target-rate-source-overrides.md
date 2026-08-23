@@ -20,7 +20,7 @@ The interval-1 REF-YYZ graph and the 2:1 held-output qualification establish the
 5. The optional extension has a dedicated conditional semantic-encoding domain. Source semantic hash, descriptor hash, proof identity and Image fingerprint therefore change when target-rate facts change. Sources without the extension preserve the established semantic bytes and interval-1 Image fingerprint.
 6. Observation cadence is a static source/plan/proof/Image fact for this R3 target-conformance slice. It does not create an observation runtime sink, R4 Field, Artifact or Dataset.
 7. The executable slice uses a production `TruthPassthroughNavigation` RuntimeComponent, the existing real YYZ guidance, controller and ideal actuator, a short run of at least 10 ticks, and a 3000-tick endurance run. Determinism and Session isolation are mandatory evidence.
-8. This decision freezes rate shape and temporal freshness only. Canonical scientific inputs, geodetic mapping, real asset selection, the difference report and the final science verdict remain open in `R3-YYZ-001`.
+8. This decision freezes rate shape and temporal freshness only. ADR-0024 and ADR-0025 subsequently freeze the canonical launch mapping, passive attitude, exact qualification assets and opening difference method. The tick 1–3000 trajectory and final science verdict remain open in `R3-YYZ-001` because the exact opening aerodynamic query is outside the selected asset domain.
 
 ## Consequences
 

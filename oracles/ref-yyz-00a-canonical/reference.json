@@ -1,0 +1,270 @@
+{
+  "aerodynamic_domain": {
+    "alpha_axis_rad": [
+      "-0.1",
+      "0.1"
+    ],
+    "asset_id": "aero-table.fixture.yyz.multiaffine@1",
+    "beta_axis_rad": [
+      "-0.05",
+      "0.05"
+    ],
+    "detail": "table-query",
+    "failure_tick": 0,
+    "inside": false,
+    "mach_axis": [
+      "0.2",
+      "0.6"
+    ],
+    "model_id": "gnc.package.yyz.aerodynamic-table.multiaffine.experimental@1",
+    "status": "OutOfRange"
+  },
+  "cadence_and_hold": {
+    "base_dt_s": "0.01",
+    "controller_source_for_actuator_ticks_0_through_10": [
+      0,
+      0,
+      2,
+      2,
+      4,
+      4,
+      6,
+      6,
+      8,
+      8,
+      10
+    ],
+    "due_ticks_0_through_10": {
+      "actuator": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "controller": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10
+      ],
+      "guidance": [
+        0,
+        5,
+        10
+      ],
+      "navigation": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "observation": [
+        0,
+        4,
+        8
+      ]
+    },
+    "guidance_source_for_controller_ticks_0_through_10": [
+      0,
+      0,
+      0,
+      5,
+      5,
+      10
+    ],
+    "interval_ticks": {
+      "actuator": 1,
+      "controller": 2,
+      "guidance": 5,
+      "navigation": 1,
+      "observation": 4
+    },
+    "terminal_tick": 3000
+  },
+  "downstream_model_reexpression": {
+    "frozen_interval_rk4": "classical RK4/FrozenInterval retained; no derivative stage is evaluated after the opening failure",
+    "metrics_and_terminal": "committed-boundary formulas retained; no terminal committed boundary exists",
+    "propulsion_mass_guidance_control_actuator": "guidance, controller, ideal actuator, propulsion and opening mass outputs are independently evaluated; mass candidate awaits a successful force closure"
+  },
+  "dt_ladder": {
+    "committed_intervals": [
+      0,
+      0,
+      0
+    ],
+    "status": "not-evaluated-domain-failure-before-first-derivative",
+    "steps_s": [
+      "0.01",
+      "0.005",
+      "0.0025"
+    ]
+  },
+  "implementation": {
+    "asset_hashes_verified": true,
+    "decimal_precision_digits": 80,
+    "identity": "tools.yyz-00a-canonical-decimal-reference@1",
+    "independence": "fixture-only Decimal formulas; no product kernel, adapter, C++ trace, or prior expected trajectory is imported",
+    "source_sha256": "b4e045237a87d85592b19d62863df95065ecf956146c4a131d7c0d890c41ab98"
+  },
+  "mapping": {
+    "body_down_enu": [
+      "0",
+      "0",
+      "-1"
+    ],
+    "body_forward_enu": [
+      "1",
+      "-6.8598258732795717740332240021171912059852974270699039381414165420430360767301671E-82",
+      "0"
+    ],
+    "body_frame_id": "frame.yyz.body-forward-right-down@1",
+    "body_right_enu": [
+      "-6.8598258732795717740332240021171912059852974270699039381414165420430360767301671E-82",
+      "-1",
+      "0"
+    ],
+    "double_cover_equivalent": true,
+    "double_cover_max_abs": "0",
+    "inertial_frame_id": "frame.yyz.00a.launch-local-enu@1",
+    "nonunit_strategy": {
+      "normalize_with_flag": "accepted-with-Normalized-flag",
+      "strict": "DomainError/non-unit-quaternion"
+    },
+    "passive_basis_roundtrip_max_abs": "1E-161",
+    "position_enu_m": [
+      "0",
+      "0",
+      "1E+3"
+    ],
+    "q_i_b_wxyz": [
+      "0",
+      "1",
+      "-3.4299129366397858870166120010585956029926487135349519690707082710215180383650835E-82",
+      "0"
+    ],
+    "velocity_enu_mps": [
+      "2.2E+2",
+      "-1.5091616921215057902873092804657820653167654339553788663911116392494679368806368E-79",
+      "0"
+    ]
+  },
+  "opening_air_data": {
+    "airspeed_mps": "2.1E+2",
+    "alpha_rad": "0",
+    "beta_rad": "0",
+    "density_kgpm3": "1.225",
+    "dynamic_pressure_pa": "27011.25",
+    "gravity_enu_mps2": [
+      "0",
+      "0",
+      "-9.80665"
+    ],
+    "mach": "0.61764705882352941176470588235294117647058823529411764705882352941176470588235294",
+    "relative_velocity_body_mps": [
+      "2.1E+2",
+      "6.85982587327957177403322400211719120598529742706990393814141654204303607673017E-81",
+      "0"
+    ],
+    "relative_velocity_enu_mps": [
+      "2.1E+2",
+      "-1.5091616921215057902873092804657820653167654339553788663911116392494679368806368E-79",
+      "0"
+    ],
+    "speed_of_sound_mps": "3.4E+2",
+    "tick": 0,
+    "wind_enu_mps": [
+      "1E+1",
+      "0",
+      "0"
+    ]
+  },
+  "opening_formal_outputs": {
+    "actuator_moment_nm": [
+      "0",
+      "0",
+      "0"
+    ],
+    "aerodynamic_coefficients": "unavailable-OutOfRange",
+    "center_of_mass_body_m": [
+      "0.2",
+      "0",
+      "0"
+    ],
+    "closure_wrench": "unavailable-OutOfRange",
+    "controller_damping_moment_nm": "0",
+    "controller_moment_nm": "0",
+    "controller_pitch_error_rad": "0",
+    "controller_proportional_moment_nm": "0",
+    "controller_raw_moment_nm": "0",
+    "guidance_altitude_error_m": "0",
+    "guidance_altitude_feedback_rad": "0",
+    "guidance_command_rad": "0",
+    "guidance_control_asset_values": {
+      "altitude_error_gain_rad_per_m": "0.02",
+      "moment_command_limit_Nm": "25",
+      "pitch_command_limit_rad": "0.04",
+      "pitch_error_gain_Nm_per_rad": "5E+2",
+      "pitch_rate_gain_Nm_s_per_rad": "8E+1",
+      "realization_gain": "1",
+      "vertical_speed_gain_rad_s_per_m": "0.05"
+    },
+    "guidance_measured_pitch_rad": "0",
+    "guidance_measured_pitch_rate_radps": "0",
+    "guidance_raw_command_rad": "0",
+    "guidance_vertical_speed_feedback_rad": "0",
+    "mass_flow_kgps": "0.5",
+    "navigation_position_enu_m": [
+      "0",
+      "0",
+      "1E+3"
+    ],
+    "navigation_velocity_enu_mps": [
+      "2.2E+2",
+      "-1.5091616921215057902873092804657820653167654339553788663911116392494679368806368E-79",
+      "0"
+    ],
+    "opening_angular_rate_body_radps": [
+      "0",
+      "0",
+      "0"
+    ],
+    "opening_mass_kg": "6.8E+2",
+    "propulsion_force_body_n": [
+      "1E+2",
+      "0",
+      "0"
+    ]
+  },
+  "reference_id": "REFERENCE-YYZ-00A-CANONICAL-001",
+  "schema_version": "gnczmkn.yyz-00a-independent-reference/1",
+  "trajectory": {
+    "committed_intervals": 0,
+    "intermediate": "unavailable-domain-failure-before-first-interval",
+    "opening": "mapped-and-compared",
+    "requested_duration_s": "3E+1",
+    "requested_terminal_tick": 3000,
+    "status": "domain-locked-at-opening",
+    "terminal": "unavailable-domain-failure-before-first-interval"
+  },
+  "verdict": {
+    "candidate_terminal_science_verdict": false,
+    "claim_bounds": "mapping, source identity, deterministic fail-closed execution, and independent opening-domain agreement only",
+    "status": "domain-blocked"
+  }
+}

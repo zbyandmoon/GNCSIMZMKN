@@ -64,7 +64,8 @@ add_library(
     yyz_rigid_step
     STATIC
         packages/yyz-rigid-step/src/rigid_step.cpp
-        packages/yyz-rigid-step/src/mass_commit.cpp)
+        packages/yyz-rigid-step/src/mass_commit.cpp
+        packages/yyz-rigid-step/src/qualification_00a.cpp)
 target_include_directories(
     yyz_rigid_step
     PUBLIC
@@ -166,6 +167,14 @@ if(GNC_BUILD_TESTS)
         PRIVATE yyz_rigid_step)
     gnc_enable_warnings(
         gnc_yyz_two_interval_mass_commit_product_probe)
+
+    # R3 00A author facts: launch-local ENU/passive-Hamilton pure mapping.
+    add_executable(
+        gnc_yyz_00a_initial_mapping_probe
+        tests/yyz_00a_initial_mapping.cpp)
+    target_link_libraries(
+        gnc_yyz_00a_initial_mapping_probe PRIVATE yyz_rigid_step)
+    gnc_enable_warnings(gnc_yyz_00a_initial_mapping_probe)
 
     # R1 CAVH product slice: typed envelope, Eq17/Eq18 and TDCT formulas.
     add_executable(
@@ -290,6 +299,21 @@ if(GNC_BUILD_TESTS)
             gnc_kernel_yyz_target_rate_probe PRIVATE /bigobj)
     endif()
     gnc_enable_warnings(gnc_kernel_yyz_target_rate_probe)
+
+    # R3 canonical 00A source/image and real Session domain evidence.
+    add_executable(
+        gnc_kernel_yyz_00a_canonical_probe
+        tests/kernel_yyz_00a_canonical.cpp
+        tests/support/ref_yyz_complete_composition.cpp
+        tests/support/ref_yyz_session_adapter.cpp)
+    target_link_libraries(
+        gnc_kernel_yyz_00a_canonical_probe
+        PRIVATE compiler kernel_session yyz_rigid_step)
+    if(MSVC)
+        target_compile_options(
+            gnc_kernel_yyz_00a_canonical_probe PRIVATE /bigobj)
+    endif()
+    gnc_enable_warnings(gnc_kernel_yyz_00a_canonical_probe)
 
     # R3 bounded command/event slice over a qualification-only ModeOwner.
     add_executable(
@@ -519,6 +543,9 @@ if(GNC_BUILD_TESTS)
         NAME r1.yyz-two-interval-mass-commit.probe
         COMMAND gnc_yyz_two_interval_mass_commit_product_probe --self-check)
     add_test(
+        NAME r3.yyz-00a-initial-mapping.probe
+        COMMAND gnc_yyz_00a_initial_mapping_probe --self-check)
+    add_test(
         NAME r1.cavh-formula.probe
         COMMAND gnc_cavh_formula_product_probe --self-check)
     add_test(
@@ -548,6 +575,9 @@ if(GNC_BUILD_TESTS)
     add_test(
         NAME r3.kernel-yyz-target-rate.probe
         COMMAND gnc_kernel_yyz_target_rate_probe --self-check)
+    add_test(
+        NAME r3.kernel-yyz-00a-canonical.probe
+        COMMAND gnc_kernel_yyz_00a_canonical_probe --self-check)
     add_test(
         NAME r3.kernel-command-event.probe
         COMMAND gnc_kernel_command_event_probe --self-check)
@@ -1109,6 +1139,23 @@ if(GNC_BUILD_TESTS)
             ${CMAKE_CURRENT_SOURCE_DIR}/oracles/ref-yyz-001/reference.json
             --probe
             $<TARGET_FILE:gnc_yyz_mission_composition_probe>)
+    add_test(
+        NAME r3.yyz-00a-canonical.oracle
+        COMMAND
+            ${Python3_EXECUTABLE}
+            -I
+            -B
+            ${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_yyz_00a_canonical_reference.py
+            --repository-root
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            --source
+            ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ref-yyz-00a-canonical/source.json
+            --reference
+            ${CMAKE_CURRENT_SOURCE_DIR}/oracles/ref-yyz-00a-canonical/reference.json
+            --report
+            ${CMAKE_CURRENT_SOURCE_DIR}/reports/r3-yyz-001-00a-difference.json
+            --probe
+            $<TARGET_FILE:gnc_kernel_yyz_00a_canonical_probe>)
     add_test(
         NAME r0.legacy-sync-commit.oracle
         COMMAND

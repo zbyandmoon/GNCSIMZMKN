@@ -1,5 +1,6 @@
 #include <gnc/compiler/static_mission_compiler.hpp>
 #include <yyz/mass_commit.hpp>
+#include <yyz/qualification_00a.hpp>
 
 #include <algorithm>
 #include <any>
@@ -1522,6 +1523,22 @@ void verify_guidance_control_actuation_definition_builders() {
                     original_guidance.value().saturated,
             "guidance definition builder changed kernel output");
 
+    const auto canonical_mapping =
+        Canonical00AInitialMappingQuery::evaluate(
+            canonical_00a_initial_mapping_definition(),
+            canonical_00a_author_input());
+    require(canonical_mapping.has_value(),
+            "canonical heading attitude mapping failed in product consumer");
+    auto heading_observation = original_navigation.value();
+    heading_observation.state.attitude =
+        canonical_mapping.value().initial_rigid_state.attitude;
+    const auto heading_guidance = AltitudePitchGuidanceKernel::evaluate(
+        guidance_definition, heading_observation);
+    require(heading_guidance.has_value() &&
+                std::abs(heading_guidance.value()
+                             .measured_pitch_radians) <= 2.0e-12,
+            "guidance rejected or misprojected a level east-heading attitude");
+
     PitchMomentControllerDefinition controller_definition;
     controller_definition.model_id =
         std::string(kPitchMomentControllerModelIdentity);
@@ -1877,6 +1894,149 @@ void verify_committed_history_evaluator() {
         }
         return true;
     };
+
+    const auto same_metrics = [](const MissionMetrics& lhs,
+                                 const MissionMetrics& rhs) {
+        return lhs.duration_seconds == rhs.duration_seconds &&
+               lhs.downrange_meters == rhs.downrange_meters &&
+               lhs.vertical_displacement_meters ==
+                   rhs.vertical_displacement_meters &&
+               lhs.remaining_mass_kilograms ==
+                   rhs.remaining_mass_kilograms &&
+               lhs.consumed_mass_kilograms ==
+                   rhs.consumed_mass_kilograms &&
+               lhs.speed_meters_per_second ==
+                   rhs.speed_meters_per_second;
+    };
+    const auto same_summary = [&same_metrics](
+                                  const MissionMetricSummary& lhs,
+                                  const MissionMetricSummary& rhs) {
+        return lhs.evaluated_sample_count ==
+                   rhs.evaluated_sample_count &&
+               same_metrics(lhs.terminal, rhs.terminal) &&
+               lhs.peak_speed_meters_per_second ==
+                   rhs.peak_speed_meters_per_second &&
+               lhs.peak_speed_tick == rhs.peak_speed_tick &&
+               lhs.maximum_downrange_meters ==
+                   rhs.maximum_downrange_meters &&
+               lhs.maximum_downrange_tick ==
+                   rhs.maximum_downrange_tick &&
+               lhs.minimum_remaining_mass_kilograms ==
+                   rhs.minimum_remaining_mass_kilograms &&
+               lhs.minimum_remaining_mass_tick ==
+                   rhs.minimum_remaining_mass_tick;
+    };
+    const auto same_boundary = [](const CommittedRigidMassBoundary& lhs,
+                                  const CommittedRigidMassBoundary& rhs) {
+        return exactly(lhs.rigid_context, rhs.rigid_context) &&
+               exactly(lhs.rigid_state, rhs.rigid_state) &&
+               exactly(lhs.mass_state.context, rhs.mass_state.context) &&
+               lhs.mass_state.mass_state_id ==
+                   rhs.mass_state.mass_state_id &&
+               lhs.mass_state.mass_kilograms ==
+                   rhs.mass_state.mass_kilograms &&
+               exactly(lhs.mass_state.body_origin_to_center_of_mass.value,
+                       rhs.mass_state.body_origin_to_center_of_mass.value) &&
+               exactly(lhs.mass_state.inertia_about_center_of_mass.value,
+                       rhs.mass_state.inertia_about_center_of_mass.value);
+    };
+    const auto same_accumulator =
+        [&same_boundary, &same_summary, &same_result](
+            const CommittedMissionAccumulatorState& lhs,
+            const CommittedMissionAccumulatorState& rhs) {
+            return lhs.initialized == rhs.initialized &&
+                   same_boundary(lhs.opening_boundary,
+                                 rhs.opening_boundary) &&
+                   same_boundary(lhs.latest_boundary,
+                                 rhs.latest_boundary) &&
+                   same_summary(lhs.metrics, rhs.metrics) &&
+                   lhs.terminal_result_present ==
+                       rhs.terminal_result_present &&
+                   same_result(lhs.terminal_result,
+                               rhs.terminal_result);
+        };
+
+    CommittedMissionAccumulatorState impossible_empty;
+    impossible_empty.terminal_result_present = true;
+    const auto rejected_empty =
+        CommittedMissionAccumulatorKernel::accumulate(
+            accumulator_definition.value(), impossible_empty,
+            assembled.committed_samples.back());
+    require(!validate_committed_mission_accumulator_state(
+                impossible_empty) &&
+                !rejected_empty.has_value() &&
+                rejected_empty.status() ==
+                    gnc::foundation::NumericalStatus::DomainError &&
+                rejected_empty.evidence().detail ==
+                    "committed-aggregate",
+            "uninitialized terminal accumulator bypassed validation");
+
+    const auto require_rejected_terminal_mutation =
+        [&accumulator_definition, &assembled](
+            const CommittedMissionAccumulatorState& mutation,
+            std::string_view message) {
+            const auto rejected =
+                CommittedMissionAccumulatorKernel::accumulate(
+                    accumulator_definition.value(), mutation,
+                    assembled.committed_samples.back());
+            require(!validate_committed_mission_accumulator_state(
+                        mutation) &&
+                        !rejected.has_value() &&
+                        rejected.status() ==
+                            gnc::foundation::NumericalStatus::DomainError &&
+                        rejected.evidence().detail ==
+                            "committed-aggregate",
+                    message);
+        };
+    auto mismatched_result = online;
+    mismatched_result.terminal_result.metrics.terminal.downrange_meters +=
+        1.0;
+    require_rejected_terminal_mutation(
+        mismatched_result,
+        "terminal result metrics mutation bypassed validation");
+    auto mismatched_boundary = online;
+    mismatched_boundary.terminal_result.terminal_boundary.rigid_state
+        .position.value(0) += 1.0;
+    require_rejected_terminal_mutation(
+        mismatched_boundary,
+        "terminal result boundary mutation bypassed validation");
+    auto mismatched_tick = online;
+    --mismatched_tick.terminal_result.final_tick;
+    require_rejected_terminal_mutation(
+        mismatched_tick,
+        "terminal result tick mutation bypassed validation");
+    auto mismatched_result_count = online;
+    --mismatched_result_count.terminal_result.metrics
+          .evaluated_sample_count;
+    require_rejected_terminal_mutation(
+        mismatched_result_count,
+        "terminal result count mutation bypassed validation");
+    auto mismatched_state_count = online;
+    --mismatched_state_count.metrics.evaluated_sample_count;
+    require_rejected_terminal_mutation(
+        mismatched_state_count,
+        "accumulator tick/count mutation bypassed validation");
+    auto mismatched_latest_metrics = online;
+    mismatched_latest_metrics.metrics.terminal.speed_meters_per_second +=
+        1.0;
+    require_rejected_terminal_mutation(
+        mismatched_latest_metrics,
+        "recomputable terminal metrics mutation bypassed validation");
+    auto impossible_extremum = online;
+    impossible_extremum.metrics.peak_speed_meters_per_second = 0.0;
+    require_rejected_terminal_mutation(
+        impossible_extremum,
+        "history-free extrema bound mutation bypassed validation");
+
+    const auto frozen = CommittedMissionAccumulatorKernel::accumulate(
+        accumulator_definition.value(), online,
+        assembled.committed_samples.front());
+    require(frozen.has_value() &&
+                frozen.evidence().detail ==
+                    "earliest-terminal-result-frozen" &&
+                same_accumulator(frozen.value(), online),
+            "valid earliest terminal accumulator was not idempotent");
+
     require(same_result(direct.value(), online.terminal_result) &&
                 same_result(direct.value(), runwide.value()),
             "direct, online, and runwide mission results diverged");

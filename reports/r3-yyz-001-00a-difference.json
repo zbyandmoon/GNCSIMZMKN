@@ -1,0 +1,572 @@
+{
+  "all_available_fields_accepted": true,
+  "candidate_terminal_science_verdict": false,
+  "dt_ladder": {
+    "committed_intervals": [
+      0,
+      0,
+      0
+    ],
+    "status": "not-evaluated-domain-failure-before-first-derivative",
+    "steps_s": [
+      "0.01",
+      "0.005",
+      "0.0025"
+    ]
+  },
+  "exact_comparisons": [
+    {
+      "accepted": true,
+      "actual": "e981118b136b3e6872da40a00c296153b9ad26e144c7882341b64b30b219574c",
+      "expected": "e981118b136b3e6872da40a00c296153b9ad26e144c7882341b64b30b219574c",
+      "field": "image_fingerprint"
+    },
+    {
+      "accepted": true,
+      "actual": 3000,
+      "expected": 3000,
+      "field": "horizon_ticks"
+    },
+    {
+      "accepted": true,
+      "actual": 0,
+      "expected": 0,
+      "field": "failure_tick"
+    },
+    {
+      "accepted": true,
+      "actual": "gnc.package.yyz.aerodynamic-table.multiaffine.experimental@1",
+      "expected": "gnc.package.yyz.aerodynamic-table.multiaffine.experimental@1",
+      "field": "model_id"
+    },
+    {
+      "accepted": true,
+      "actual": "aero-table.fixture.yyz.multiaffine@1",
+      "expected": "aero-table.fixture.yyz.multiaffine@1",
+      "field": "asset_id"
+    },
+    {
+      "accepted": true,
+      "actual": "OutOfRange",
+      "expected": "OutOfRange",
+      "field": "domain_status"
+    },
+    {
+      "accepted": true,
+      "actual": "table-query",
+      "expected": "table-query",
+      "field": "domain_detail"
+    },
+    {
+      "accepted": true,
+      "actual": "InvocationFailed",
+      "expected": "InvocationFailed",
+      "field": "session_error"
+    },
+    {
+      "accepted": true,
+      "actual": 0,
+      "expected": 0,
+      "field": "committed_intervals"
+    }
+  ],
+  "maximum_absolute_error": {
+    "accepted": true,
+    "field": "velocity_enu_mps[1]",
+    "limit": "2.000000000000026941339784092E-12",
+    "tick": 0,
+    "value": "1.347066989204615E-14"
+  },
+  "maximum_relative_error": {
+    "absolute_error": "1.347066989204615E-14",
+    "absolute_tolerance": "2e-12",
+    "acceptance_basis": "combined absolute/relative rule; the absolute term governs this near-zero reference component",
+    "accepted": true,
+    "combined_absolute_limit": "2.000000000000026941339784092E-12",
+    "field": "velocity_enu_mps[1]",
+    "limit": "2.000000000000026941339784092E-12",
+    "relative_tolerance": "2e-12",
+    "tick": 0,
+    "value": "1"
+  },
+  "numeric_comparisons": [
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "position_enu_m[0]",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "position_enu_m[1]",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "1E+3",
+      "field": "position_enu_m[2]",
+      "limit": "2.002E-9",
+      "reference": "1E+3",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "2.2E+2",
+      "field": "velocity_enu_mps[0]",
+      "limit": "4.42E-10",
+      "reference": "2.2E+2",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "1.347066989204615E-14",
+      "accepted": true,
+      "actual": "1.347066989204615E-14",
+      "field": "velocity_enu_mps[1]",
+      "limit": "2.000000000000026941339784092E-12",
+      "reference": "-1.50916169212150579028730928E-79",
+      "relative_error": "1",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "velocity_enu_mps[2]",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "q_i_b_wxyz_sign_aligned[0]",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "1",
+      "field": "q_i_b_wxyz_sign_aligned[1]",
+      "limit": "4E-12",
+      "reference": "1",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "3.0615158845559431E-17",
+      "accepted": true,
+      "actual": "3.0615158845559431E-17",
+      "field": "q_i_b_wxyz_sign_aligned[2]",
+      "limit": "2.000000000000000061230317691E-12",
+      "reference": "-3.429912936639785887016612001E-82",
+      "relative_error": "1",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "q_i_b_wxyz_sign_aligned[3]",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "opening_angular_rate_body_radps[0]",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "opening_angular_rate_body_radps[1]",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "opening_angular_rate_body_radps[2]",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "1E-17",
+      "accepted": true,
+      "actual": "0.20000000000000001",
+      "field": "center_of_mass_body_m[0]",
+      "limit": "2.40000000000000002E-12",
+      "reference": "0.2",
+      "relative_error": "4.99999999999999975E-17",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "center_of_mass_body_m[1]",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "center_of_mass_body_m[2]",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "6.8E+2",
+      "field": "opening_mass_kg",
+      "limit": "1.362E-9",
+      "reference": "6.8E+2",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "guidance_altitude_error_m",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "guidance_raw_command_rad",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "guidance_command_rad",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "controller_pitch_error_rad",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "controller_raw_moment_nm",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "controller_moment_nm",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0.5",
+      "field": "mass_flow_kgps",
+      "limit": "3E-12",
+      "reference": "0.5",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "actuator_moment_nm[0]",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "actuator_moment_nm[1]",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "actuator_moment_nm[2]",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "1E+2",
+      "field": "propulsion_force_body_n[0]",
+      "limit": "2.02E-10",
+      "reference": "1E+2",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "propulsion_force_body_n[1]",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "propulsion_force_body_n[2]",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "gravity_enu_mps2[0]",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "gravity_enu_mps2[1]",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "3E-16",
+      "accepted": true,
+      "actual": "-9.8066500000000003",
+      "field": "gravity_enu_mps2[2]",
+      "limit": "2.16133000000000006E-11",
+      "reference": "-9.80665",
+      "relative_error": "3.059148638933784634126374279E-17",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "1E+1",
+      "field": "wind_enu_mps[0]",
+      "limit": "2.2E-11",
+      "reference": "1E+1",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "wind_enu_mps[1]",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "wind_enu_mps[2]",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "1.225",
+      "field": "density_kgpm3",
+      "limit": "4.45E-12",
+      "reference": "1.225",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "3.4E+2",
+      "field": "speed_of_sound_mps",
+      "limit": "6.82E-10",
+      "reference": "3.4E+2",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "2.1E+2",
+      "field": "airspeed_mps",
+      "limit": "4.22E-10",
+      "reference": "2.1E+2",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "2.823529411764705882352941176E-17",
+      "accepted": true,
+      "actual": "0.61764705882352944",
+      "field": "mach",
+      "limit": "3.23529411764705888E-12",
+      "reference": "0.6176470588235294117647058824",
+      "relative_error": "4.571428571428571219591836734E-17",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "2.1E+2",
+      "field": "relative_velocity_enu_mps[0]",
+      "limit": "4.22E-10",
+      "reference": "2.1E+2",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "1.347066989204615E-14",
+      "accepted": true,
+      "actual": "1.347066989204615E-14",
+      "field": "relative_velocity_enu_mps[1]",
+      "limit": "2.000000000000026941339784092E-12",
+      "reference": "-1.50916169212150579028730928E-79",
+      "relative_error": "1",
+      "tick": 0
+    },
+    {
+      "absolute_error": "0",
+      "accepted": true,
+      "actual": "0",
+      "field": "relative_velocity_enu_mps[2]",
+      "limit": "2E-12",
+      "reference": "0",
+      "relative_error": "0",
+      "tick": 0
+    },
+    {
+      "absolute_error": "1E-17",
+      "accepted": true,
+      "actual": "0.20000000000000001",
+      "field": "domain_mach[0]",
+      "limit": "2.40000000000000002E-12",
+      "reference": "0.2",
+      "relative_error": "4.99999999999999975E-17",
+      "tick": 0
+    },
+    {
+      "absolute_error": "2E-17",
+      "accepted": true,
+      "actual": "0.59999999999999998",
+      "field": "domain_mach[1]",
+      "limit": "3.2E-12",
+      "reference": "0.6",
+      "relative_error": "3.333333333333333333333333333E-17",
+      "tick": 0
+    }
+  ],
+  "product_image_fingerprint": "e981118b136b3e6872da40a00c296153b9ad26e144c7882341b64b30b219574c",
+  "reference_id": "REFERENCE-YYZ-00A-CANONICAL-001",
+  "report_id": "DIFF-YYZ-00A-CANONICAL-001",
+  "schema_version": "gnczmkn.yyz-00a-difference-report/1",
+  "status": "domain-agreement-with-trajectory-blocker",
+  "tolerance": {
+    "absolute": "2e-12",
+    "identity_and_status": "exact",
+    "numeric_acceptance_rule": "absolute_error <= absolute + relative * max(abs(actual), abs(reference))",
+    "relative": "2e-12",
+    "source": "accepted REF-YYZ mission-composition numerical policy"
+  },
+  "trajectory_coverage": {
+    "intermediate": "unavailable-domain-failure-before-first-interval",
+    "last_compared_tick": 0,
+    "opening": "compared",
+    "requested_terminal_tick": 3000,
+    "terminal": "unavailable-domain-failure-before-first-interval"
+  },
+  "unresolved": [
+    {
+      "first_unavailable_tick": 1,
+      "id": "canonical-30-second-trajectory",
+      "reason": "opening Mach 0.6176470588235294 exceeds accepted aero-table maximum 0.6",
+      "required_owner_choice": "select and qualify an aero/environment asset combination whose declared domain contains the author opening input, or revise the author input"
+    }
+  ],
+  "unresolved_count": 1
+}

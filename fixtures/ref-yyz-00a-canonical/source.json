@@ -1,0 +1,173 @@
+{
+  "schema_version": "gnczmkn.yyz-00a-abstract-engineering-source/1",
+  "fixture_id": "REF-YYZ-00A-CANONICAL-001",
+  "profile_id": "profile.yyz.00a.abstract-engineering-baseline@1",
+  "mission_id": "mission.yyz.00a.abstract-engineering-baseline@1",
+  "plan_id": "plan.yyz.00a.abstract-engineering-baseline",
+  "status": "executable-domain-locked",
+  "claim_scope": "Abstract engineering qualification for source mapping, deterministic product execution, domain preservation, and independent agreement. No real-aircraft accuracy, stability, overshoot, or completed 30-second trajectory claim is made.",
+  "author_input": {
+    "duration_s": "30",
+    "base_rate_hz": 100,
+    "component_rates_hz": {
+      "navigation": 100,
+      "guidance": 20,
+      "controller": 50,
+      "actuator": 100,
+      "observation": 25
+    },
+    "latitude_deg": "31.2304",
+    "longitude_deg": "121.4737",
+    "altitude_m": "1000",
+    "speed_mps": "220",
+    "heading_deg": "90",
+    "flight_path_angle_deg": "0",
+    "bank_deg": "0",
+    "mass_kg": "680",
+    "altitude_command_m": "1000"
+  },
+  "mapping": {
+    "query_identity": "gnc.yyz.qualification-00a.launch-local-enu-mapping@1",
+    "query_version": "1.0.0",
+    "inertial_frame_id": "frame.yyz.00a.launch-local-enu@1",
+    "body_frame_id": "frame.yyz.body-forward-right-down@1",
+    "launch_anchor": {
+      "latitude_deg": "31.2304",
+      "longitude_deg": "121.4737",
+      "datum_altitude_m": "0"
+    },
+    "inertial_axes": ["East", "North", "Up"],
+    "body_axes": ["forward", "right", "down"],
+    "heading_convention": "clockwise-from-North",
+    "flight_path_angle_convention": "positive-Up",
+    "bank_convention": "positive-right-wing-down",
+    "position_formula": "[0, 0, altitude-datum_altitude]",
+    "velocity_formula": "[V*cos(gamma)*sin(heading), V*cos(gamma)*cos(heading), V*sin(gamma)]",
+    "attitude_formula": "construct forward/right/down basis in ENU, transpose to active matrix, derive q_I_B, normalize, and verify the passive matrix",
+    "domain": "Only the exact 31.2304/121.4737 launch anchor is accepted. Earth rotation, curvature, ellipsoid conversion, and changing tangent planes are excluded for this 30-second profile."
+  },
+  "runtime_profile": {
+    "clock_domain_id": "clock.yyz.00a.100hz@1",
+    "subject_id": "vehicle.yyz.00a.abstract-engineering@1",
+    "mass_state_id": "mass.yyz.00a.vehicle@1",
+    "configuration_id": "configuration.fixture.yyz.clean@1",
+    "configuration_revision": 11,
+    "fixed_step_s": "0.01",
+    "initial_tick": 0,
+    "terminal_tick": 3000,
+    "interval_ticks": {
+      "navigation": 1,
+      "guidance": 5,
+      "controller": 2,
+      "actuator": 1,
+      "observation": 4
+    },
+    "hold_policy": {
+      "guidance_to_controller": "HeldLatest",
+      "controller_to_actuator": "HeldLatest"
+    },
+    "image_fingerprint": "e981118b136b3e6872da40a00c296153b9ad26e144c7882341b64b30b219574c",
+    "interval_one_image_fingerprint": "7d1fbe1fa09ca555420ed3cc14a05d1f2994c6501b17cd3991355520fc8e6f14"
+  },
+  "asset_index_lock": {
+    "path": "fixtures/ref-yyz-001/asset-index.json",
+    "sha256": "570750a2d54d0a2ba67689b3da553ff100dfdf07bae4bddf7897de1f55ae122e",
+    "identity": "asset-index.fixture.yyz.r0-qualification@1",
+    "promotion_policy": "Each selected payload is consumed byte-for-byte through its indexed identity and source case. Canonical changes are limited to the explicit author initial state, duration, cadence, frame mapping, and duration termination threshold."
+  },
+  "promoted_assets": [
+    {
+      "role": "environment",
+      "asset_id": "environment.fixture.yyz.uniform@1",
+      "revision": 1,
+      "index_role": "environment",
+      "source_path": "fixtures/ref-yyz-frozen-interval/cases.json",
+      "source_sha256": "17609b48b02c43bfe9e103218cba04210bcb93938fbfbc332935225461cf0bc6",
+      "source_pointer": "/cases/CASE-YYZ-FROZEN-INTERVAL-COMPOSED-TRAJECTORY/environment_sample",
+      "applicability": "Uniform gravity, wind, density, and speed of sound in the declared launch-local ENU frame over finite samples."
+    },
+    {
+      "role": "mass_properties",
+      "asset_id": "mass-properties.fixture.yyz.constant-geometry@1",
+      "revision": 1,
+      "index_role": "mass_properties",
+      "source_path": "fixtures/ref-yyz-frozen-interval/cases.json",
+      "source_sha256": "17609b48b02c43bfe9e103218cba04210bcb93938fbfbc332935225461cf0bc6",
+      "source_pointer": "/cases/CASE-YYZ-FROZEN-INTERVAL-COMPOSED-TRAJECTORY/mass_properties_sample",
+      "canonical_override": "The author-provided opening mass is 680 kg. Center of mass and inertia bytes remain unchanged; no inertia scaling is applied.",
+      "applicability": "Positive scalar mass with the accepted constant center of mass and SPD inertia."
+    },
+    {
+      "role": "aerodynamics",
+      "asset_id": "aero-table.fixture.yyz.multiaffine@1",
+      "asset_schema_id": "gnc.asset.yyz.aerodynamic-table.multiaffine@1",
+      "revision": 1,
+      "index_role": "aerodynamics",
+      "source_path": "fixtures/ref-yyz-frozen-interval/cases.json",
+      "source_sha256": "17609b48b02c43bfe9e103218cba04210bcb93938fbfbc332935225461cf0bc6",
+      "source_pointer": "/cases/CASE-YYZ-FROZEN-INTERVAL-COMPOSED-TRAJECTORY/aero_lookup",
+      "applicability": "Inclusive Mach [0.2,0.6], alpha [-0.1,0.1] rad, beta [-0.05,0.05] rad, zero body rates, zero surface state, and configuration.fixture.yyz.clean@1. Queries outside the closed box fail without clamping."
+    },
+    {
+      "role": "propulsion",
+      "asset_id": "propulsion-response.fixture.yyz.main@1",
+      "revision": 1,
+      "index_role": "propulsion",
+      "source_path": "fixtures/ref-yyz-frozen-interval/cases.json",
+      "source_sha256": "17609b48b02c43bfe9e103218cba04210bcb93938fbfbc332935225461cf0bc6",
+      "source_pointer": "/cases/CASE-YYZ-FROZEN-INTERVAL-COMPOSED-TRAJECTORY/propulsion_response",
+      "applicability": "Fixed +B-x 100 N thrust, declared application point and intrinsic moment, and 0.5 kg/s scalar burn."
+    },
+    {
+      "role": "guidance_control",
+      "asset_id": "guidance-control.fixture.yyz.altitude-pitch@1",
+      "revision": 1,
+      "index_role": "guidance_control",
+      "source_path": "fixtures/ref-yyz-mission-composition/cases.json",
+      "source_sha256": "c506a2e5c3e193de40f0cd3815df077f6a1dcd48e592671949d8eacf453a5a2d",
+      "source_pointer": "/cases/CASE-YYZ-MISSION-COMPOSITION-BASELINE/guidance_control",
+      "applicability": "Altitude/pitch command, bounded pitch-moment controller, and ideal unit-gain +B-y realization with the indexed gains and limits."
+    },
+    {
+      "role": "numerical_policy",
+      "asset_id": "numerical.fixture.yyz.rk4-frozen-interval@1",
+      "revision": 1,
+      "index_role": "numerical_policy",
+      "source_path": "fixtures/ref-yyz-mission-composition/cases.json",
+      "source_sha256": "c506a2e5c3e193de40f0cd3815df077f6a1dcd48e592671949d8eacf453a5a2d",
+      "source_pointer": "/model",
+      "canonical_override": "FrozenInterval classical RK4 remains unchanged; the author base step is 0.01 s and the offline ladder requests 0.01/0.005/0.0025 s.",
+      "applicability": "Finite rigid/mass state and successful opening environment, air-data, aero, propulsion, closure, and control evaluations."
+    },
+    {
+      "role": "termination_observation",
+      "asset_id": "termination-observation.fixture.yyz.two-interval@1",
+      "revision": 1,
+      "index_role": "termination_observation",
+      "source_path": "fixtures/ref-yyz-mission-composition/cases.json",
+      "source_sha256": "c506a2e5c3e193de40f0cd3815df077f6a1dcd48e592671949d8eacf453a5a2d",
+      "source_pointer": "/cases/CASE-YYZ-MISSION-COMPOSITION-BASELINE",
+      "canonical_override": "The canonical duration predicate is 30 s at tick 3000; mass-floor zero and unreachable downrange remain the other plan predicates.",
+      "applicability": "Committed-boundary metrics and earliest terminal decision under the existing priority and tie-break policy."
+    }
+  ],
+  "comparison_policy": {
+    "identity_and_status": "exact",
+    "float_absolute_tolerance": "2e-12",
+    "float_relative_tolerance": "2e-12",
+    "tolerance_source": "accepted REF-YYZ mission-composition numerical policy",
+    "terminal_verdict_rule": "A candidate terminal science verdict is permitted only when unresolved_count is zero."
+  },
+  "expected_domain_outcome": {
+    "requested_horizon_ticks": 3000,
+    "failure_tick": 0,
+    "model_id": "gnc.package.yyz.aerodynamic-table.multiaffine.experimental@1",
+    "asset_id": "aero-table.fixture.yyz.multiaffine@1",
+    "input_mach": "0.61764705882352941176470588235294117647058823529411764705882352941176470588235294",
+    "closed_mach_domain": ["0.2", "0.6"],
+    "status": "OutOfRange",
+    "detail": "table-query",
+    "committed_intervals": 0,
+    "trajectory_status": "unavailable-after-opening-domain-failure"
+  }
+}

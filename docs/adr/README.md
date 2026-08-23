@@ -31,3 +31,5 @@ ADR 记录已经收窄到实现层的关键选择，并连接需求、架构分�
 - [0021 R3 process-local REF-YYZ checkpoint and branch restore](0021-r3-process-local-ref-yyz-checkpoint-branch-restore.md)
 - [0022 R3 plan-derived held sampled outputs](0022-r3-plan-derived-held-sampled-outputs.md)
 - [0023 R3 00A target-rate source overrides](0023-r3-00a-target-rate-source-overrides.md)
+- [0024 R3 00A launch-local ENU initial mapping](0024-r3-00a-launch-local-enu-initial-mapping.md)
+- [0025 R3 00A passive attitude and exact qualification profile](0025-r3-00a-passive-attitude-and-qualification-profile.md)

@@ -1,9 +1,9 @@
 # REF-YYZ-001 科学、行为与 target conformance bundle 设计
 
-- 文档状态：R0 qualification implemented；R3 target-rate runtime conformance 已形成可执行切片，完整科学输入、差异报告与 science verdict 保持开放
-- 实现成熟度：`REF-YYZ-001` fixture-local R0 qualification bundle 已达到 `executable`；R3 另有 `target_conformance/science_verdict_pending` 产品运行证据，该证据不构成完整 00A 科学验收或 R3 gate 结论
-- 任务：`R0-SCI-003`（backlog 为 `done`）
-- 日期：2026-08-10
+- 文档状态：R0 qualification implemented；R3 target-rate runtime conformance 与 canonical 00A opening/domain difference 切片均已执行，tick 1～3000 trajectory 和 science verdict 受精确气动域阻断
+- 实现成熟度：`REF-YYZ-001` fixture-local R0 qualification bundle 已达到 `executable`；R3 target-rate 工程运行保留 `target_conformance/science_verdict_pending`，canonical profile 已达到 `executable-domain-locked`，当前证据不构成完整 00A 轨迹验收或 R3 gate 结论
+- 任务：`R0-SCI-003`（backlog 为 `done`）；R3 executable update：`R3-YYZ-001`（`review`）
+- 日期：2026-08-23
 - Authority owner role：Scientific Authority
 - 协作 owner roles：Validation Lead、Runtime Numerics Lead、Model SDK Lead、Architecture Lead
 
@@ -53,11 +53,20 @@ Validator 不得把 `illustrative`、`target_pending` 或 `needs_decision` 计�
 | `00a-yyz-end-to-end-walkthrough.md` | 19,743 | `5e9078a4df7f1bd53b6f83bce2c040f274adcb3de61d54066d6acf58d0552767` | target 端到端对象与示例 |
 | `15-reference-vertical-designs-and-object-placement.md` | 58,741 | `7e01ec0c882c97293af15442440caa91d68ade8f5e51972a36c39c981acb576d` | YYZ target 对象、闭合、周期与验证设计 |
 
+R3 canonical addendum 将 owner-authorized 00A facts 与已接受 R0 bytes 固定在独立 profile 中：
+
+| Source | Raw SHA-256 | 当前权威范围 |
+| --- | --- | --- |
+| `fixtures/ref-yyz-00a-canonical/source.json` | `b4e045237a87d85592b19d62863df95065ecf956146c4a131d7c0d890c41ab98` | canonical author facts、mapping/domain、mission/profile identities、asset refs 与 expected domain outcome |
+| `fixtures/ref-yyz-001/asset-index.json` | `570750a2d54d0a2ba67689b3da553ff100dfdf07bae4bddf7897de1f55ae122e` | 七项 R0 qualification asset identity/revision/source index |
+| `fixtures/ref-yyz-frozen-interval/cases.json` | `17609b48b02c43bfe9e103218cba04210bcb93938fbfbc332935225461cf0bc6` | environment、mass、aero、propulsion exact payloads |
+| `fixtures/ref-yyz-mission-composition/cases.json` | `c506a2e5c3e193de40f0cd3815df077f6a1dcd48e592671949d8eacf453a5a2d` | guidance/control、numerical、termination/observation exact payloads |
+
 Manifest 当前三条 seed fact 的状态是：
 
-- `FACT-YYZ-PLAN-RATE`：100/20 = 5 的整数算术可以成为 exact target conformance fact；20 Hz 是否为 canonical scientific mission rate 仍待决；
-- `FACT-YYZ-STEP-COMMIT`：pre-commit failure 不推进 epoch、成功 observation 绑定 ModelCommit 是 target transaction fact；在 R3 前只能做结构/状态机 fixture，不能冒充实际 run；
-- `FACT-YYZ-TRAJECTORY`：没有 source、模型、expected、tolerance 或 independent implementation，当前不可执行。
+- `FACT-YYZ-PLAN-RATE`：ADR-0023 已固定 canonical 00A 的 100 Hz base、20 Hz guidance 与完整 `1/5/2/1/4` cadence；Compiler、proof、Image 和 Session 均已执行；
+- `FACT-YYZ-STEP-COMMIT`：pre-commit failure 保持 epoch/tick/state，成功 observation 绑定 ModelCommit；target-rate 3000-tick 工程运行与 canonical tick-0 domain failure 均沿真实 R3 Session 路径形成证据；
+- `FACT-YYZ-TRAJECTORY`：canonical source、exact assets、opening expected、per-field tolerance、独立实现与 difference report 已形成；accepted aero domain 在 opening 阶段拒绝 Mach `0.6176470588235294`，因此 tick 1～3000 trajectory 保持 unavailable，report 记录一个 unresolved item。
 
 ### 3.2 Frozen Legacy source
 
@@ -119,7 +128,7 @@ R0-LEG-001 的 YYZ 双跑观察为：
 
 `REF-YYZ-6DOF-CORE-001` 已实现并接受 fixture-local 惯性笛卡尔刚体核心：supplied uniform gravity、常正质量、常对称正定体轴惯量、质心处总力、质心总力矩、被动 Hamilton `q_I_B`、固定步长经典 RK4，以及每次导数求值前和提交前归一化。独立 60 位 Decimal reference 与 C++17 probe 覆盖公式 intermediates、解析匀速平移、解析主轴自旋、非主轴无外力矩高精度轨迹、姿态与角速度四阶收敛、转动能与角动量模守恒、ExactGrid 终止、阶段失败整候选丢弃和七类输入域拒绝。
 
-`REF-YYZ-001` 现已在已接受的 fixture-local applicability domain 内提供 canonical R0 qualification source、uniform environment、coefficient lookup 与适用域、propulsion、mass evolution、制导控制、两区间闭环轨迹、terminal 和逐叶 tolerance/difference report。R3 target-conformance 切片已沿产品 navigation/guidance/controller/ideal-actuator 链执行精确多速率短跑与 3000-tick 长跑。该运行继续使用 fixture-local scientific parameters；00A canonical mission、30 秒稳定性与 pitch overshoot、真实 controller/allocator/actuator 与资产、Legacy 全轨迹差异及终端科学判定仍处于后续范围。
+`REF-YYZ-001` 现已在已接受的 fixture-local applicability domain 内提供 canonical R0 qualification source、uniform environment、coefficient lookup 与适用域、propulsion、mass evolution、制导控制、两区间闭环轨迹、terminal 和逐叶 tolerance/difference report。R3 target-conformance 切片已沿产品 navigation/guidance/controller/ideal-actuator 链执行精确多速率短跑与 3000-tick 长跑。R3 canonical profile 进一步固定 owner-authorized mission、launch-local ENU/passive attitude mapping、`680 kg`/`220 m/s` opening state、七项 exact R0 assets、独立 Decimal opening reference 和 scientific difference report。该 profile 在第一份 aerodynamic query 上保持 accepted `[0.2,0.6]` Mach domain 并受控停止；30 秒 trajectory、terminal metrics/verdict 与任何稳定性或 pitch overshoot 声明均保持未形成。
 
 ## 4. Scenario 冲突与 authority decision
 
@@ -133,17 +142,17 @@ R0-LEG-001 的 YYZ 双跑观察为：
 
 | Id | 决策问题 | 关闭时必须提交的 evidence |
 | --- | --- | --- |
-| `YYZ-DEC-001` | canonical independent-science mission | signed decision、research question、source revision、validity domain |
+| `YYZ-DEC-001` | canonical independent-science mission | ADR-0025 已关闭：`mission.yyz.00a.abstract-engineering-baseline@1` 只声明抽象工程资格的内部一致性、确定性、domain preservation 与独立实现一致性 |
 | `YYZ-DEC-002` | target rate set 与 20/10 Hz 差异 | ADR-0023 已关闭：interval `1/5/2/1/4`、全零 offset、HeldLatest age `4/1`；`r3.kernel-yyz-target-rate.probe` 提供 source/proof/Image 与执行证据 |
-| `YYZ-DEC-003` | geodetic/launch Cartesian mapping | frame ids、origin、axis、geometry、conversion formula/cases |
-| `YYZ-DEC-004` | attitude convention | direction、Hamilton order、angular-rate definition、normalization/domain、Legacy adapter tests |
-| `YYZ-DEC-005` | environment | Earth/gravity/atmosphere/wind definitions、constants/assets、domain |
-| `YYZ-DEC-006` | aero | coefficient definition/axes、asset provenance、interpolation/extrapolation、domain |
-| `YYZ-DEC-007` | guidance/control/allocation | equations、state/mechanism、limits、feedback ports、verification cases |
-| `YYZ-DEC-008` | actuator/propulsion/mass | equations、sample/interval relation、state ownership、limits、configuration semantics |
-| `YYZ-DEC-009` | form/closure/numerics | force/moment balance、inertia policy、closure strategy、RK method、failure semantics |
-| `YYZ-DEC-010` | terminal/metric | predicate priority、grid policy、observation boundary、overshoot definition/threshold |
-| `YYZ-DEC-011` | independent reference/tolerance | independent implementation plan、precision、dt ladder、field norms/limits |
+| `YYZ-DEC-003` | geodetic/launch Cartesian mapping | ADR-0024 已关闭：exact launch anchor、`frame.yyz.00a.launch-local-enu@1`、ENU axes、analytic position/velocity 与 non-anchor fail-closed cases |
+| `YYZ-DEC-004` | attitude convention | ADR-0025 已关闭：passive Hamilton `q_I_B`、forward/right/down basis、body `omega_BI_B`、right-wing-down bank、`q/-q` 与 non-unit policies |
+| `YYZ-DEC-005` | environment | ADR-0025 已关闭当前 profile：`environment.fixture.yyz.uniform@1` exact bytes/domain；Earth rotation/curvature 与 changing tangent plane 排除 |
+| `YYZ-DEC-006` | aero | ADR-0025 已关闭当前 profile：`aero-table.fixture.yyz.multiaffine@1` exact bytes、strict trilinear lookup 与 closed axes；opening Mach 超域证据保留 |
+| `YYZ-DEC-007` | guidance/control/allocation | ADR-0025 已关闭当前 profile：`guidance-control.fixture.yyz.altitude-pitch@1` exact gains/limits 与 ideal realization；无 allocator 扩展 |
+| `YYZ-DEC-008` | actuator/propulsion/mass | ADR-0025 已关闭当前 profile：exact ideal actuator、`propulsion-response.fixture.yyz.main@1`、constant-geometry mass bytes；opening mass override 为 `680 kg`，惯量不缩放 |
+| `YYZ-DEC-009` | form/closure/numerics | ADR-0025 已关闭当前 profile：accepted Closure、FrozenInterval classical RK4 与 failure semantics；author base step 为 `0.01 s` |
+| `YYZ-DEC-010` | terminal/metric | ADR-0025 已关闭当前 profile：committed-boundary earliest predicate、30 s duration/tick 3000、terminal-observation ordering；不采用 6.4% overshoot expected |
+| `YYZ-DEC-011` | independent reference/tolerance | ADR-0025 已关闭 comparison method：80-digit Decimal、exact identity/status、abs/rel `2e-12`、`0.01/0.005/0.0025` ladder；domain failure prevents derivative/convergence samples |
 | `YYZ-DEC-012` | payload/schema/integrity | approved sidecars or ADR/schema、canonicalization、aggregate hash、compatibility |
 
 Owner decision 必须引用具体 bytes/revision。Meeting note、口头选择、默认参数或本设计作者的计算不能代替批准记录。
@@ -193,32 +202,34 @@ REF-YYZ-001
 
 | 00A 内容 | 当前分类 | 激活后的验收方式 |
 | --- | --- | --- |
-| mission id、definition/version、初始 author input | `illustrative-author-input` | 经 scenario owner 采用后做 schema、unit、range、source-map 与 byte hash 检查 |
+| mission id、definition/version、初始 author input | `approved/executable-domain-locked` | ADR-0024/0025 与 frozen source hash；package query 重算 mapping、duration/rates 并执行 domain checks |
 | 100/50/25/20 Hz → interval 1/2/4/5 | `structural-exact/executable` | ADR-0023 已采用；整数算术 exact，proof 指回 source refs，短跑验证完整调用与 age 序列 |
 | base tick 10,000,000 ns、30 s → 3000 intervals | `structural-exact/executable` | target source 已采用，integer duration/grid exact；两次运行均提交 terminal tick 3000 |
 | 60 Hz at 100 Hz → 5/3，拒绝编译 | `negative-structural` | stable category/stage/subject/source refs；message text 不作 identity |
-| `asset://...@sha256:91b7` | `illustrative/rejected-as-integrity` | 替换为真实 asset id + 全长 SHA-256；短写不能通过 |
+| `asset://...@sha256:91b7` | `illustrative/rejected-as-integrity` | canonical profile 已替换为七个真实 asset id、revision、source pointer 与三个全长 SHA-256 locks；短写继续拒绝 |
 | graph/plan/proof/run ids 中的短后缀 | `illustrative` | 由批准 canonical inputs 实际派生，validator 重算 |
 | tick 2500 高度 1001.73/候选 1001.69/5 patches | `needs_provenance` | 分离 transaction structure 与科学数值；后者只来自 approved trajectory |
 | pitch 1.84°、elevator -0.62° | `needs_provenance` | 对应 formula/trajectory fact、FieldId、unit/frame/time/commit ref |
-| pitch overshoot 6.4% / threshold 8% | `needs_decision` | metric definition、window、input observations、producer/hash 与批准门限 |
+| pitch overshoot 6.4% / threshold 8% | `rejected-for-current-claim` | owner 将 R3 claim 限于抽象工程资格一致性；当前无 completed trajectory，也不采用或反向拟合该数值 |
 
 ### 6.2 Machine-valid artifact matrix
 
 | Candidate case | 最低 payload | Exact invariants | 科学/runtime 状态 |
 | --- | --- | --- | --- |
-| `YYZ-CONF-SOURCE-001` | Mission source + SourceMap + full asset refs | ids、versions、units、rates、duration、hash | source values 待 scenario approval |
+| `YYZ-CONF-SOURCE-001` | Mission source + SourceMap + full asset refs | ids、versions、units、rates、duration、hash | canonical programmatic source 已采用 author facts；frozen JSON 记录 full source/asset locks，无 parser/public schema claim |
 | `YYZ-CONF-PLAN-001` | canonical graph、BindingPlan、ExecutionPlanDescriptor、proof index | subject/source/edge/operator refs；rate intervals | programmatic target source 已通过 Compiler→proof→Image；完整 source-file schema 保持开放 |
-| `YYZ-CONF-BINDING-001` | RunBinding 与 immutable plan/source/package refs | no structural mutation；binding hash 可重算 | R3 exact Image/RunBinding 已执行，science inputs 保持 pending |
-| `YYZ-CONF-STEP-SUCCESS-001` | published epoch、deltas/candidate、journal、validation、ModelCommit | operator order、owner uniqueness、epoch +1、commit refs | tick 31 与 tick 3000 target runtime 已执行；数值 verdict 仍由 science lane 给出 |
-| `YYZ-CONF-STEP-FAIL-001` | 同一步的 pre-commit injected failure | committed state/epoch/tick/hash exact unchanged | executor pending，但 transaction fixture 可机验 |
+| `YYZ-CONF-BINDING-001` | RunBinding 与 immutable plan/source/package refs | no structural mutation；binding hash 可重算 | target-rate 与 distinct canonical exact Image/RunBinding 均已执行；canonical opening science inputs 已固定 |
+| `YYZ-CONF-STEP-SUCCESS-001` | published epoch、deltas/candidate、journal、validation、ModelCommit | operator order、owner uniqueness、epoch +1、commit refs | tick 31 与 tick 3000 target runtime 已执行；canonical profile 在 first step 前的 aero query fail closed |
+| `YYZ-CONF-STEP-FAIL-001` | 同一步的 pre-commit failure | committed state/epoch/tick/hash exact unchanged | canonical tick-0 OutOfRange 已由 real Session 验证为 tick/epoch 0、zero interval commits；transaction injections继续覆盖其他 stages |
 | `YYZ-CONF-OBS-001` | ObservationBatch + semantic CSV mapping | FieldId、sample tick/time、ModelCommit ref、column mapping | interval 4/offset 0 已进入 Source→Plan→Proof→Image；runtime sink 与 CSV 保持 pending |
 | `YYZ-CONF-DIAG-001` | 100/60 invalid schedule | compile rejected；stage/subject/source/ratio exact | Compiler pending |
 | `YYZ-CONF-EVIDENCE-001` | RunManifest、LineageEdge、dataset/metric/report refs | all refs resolve to committed artifacts；hash closure | R4 producer pending |
 
 Case id 仅是本设计候选。若现有 schema 已经固定别的 identity，实施采用权威 schema，不新增平行 contract。
 
-R3 当前可执行记录为 `r3.kernel-yyz-target-rate.probe`：生产 `TruthPassthroughNavigation` 保持同 tick truth provenance；guidance→controller age 序列受最大值 4 约束，controller→actuator age 序列受最大值 1 约束；tick-31 短跑覆盖完整 cadence、bit determinism、controlled/zero-control 可区分性和共享 provider 的双 Session 隔离。两次 3000-tick 运行均在 tick 3000 完成，冻结任务结果为 `Aborted / remaining-mass-floor / priority 300 / remaining mass 85 kg`。该记录统一标记 `target_conformance/science_verdict_pending`。
+R3 target-rate 可执行记录为 `r3.kernel-yyz-target-rate.probe`：生产 `TruthPassthroughNavigation` 保持同 tick truth provenance；guidance→controller age 序列受最大值 4 约束，controller→actuator age 序列受最大值 1 约束；tick-31 短跑覆盖完整 cadence、bit determinism、controlled/zero-control 可区分性和共享 provider 的双 Session 隔离。两次 3000-tick 工程运行均在 tick 3000 完成，正式 runwide result 为 `Complete / duration-complete`，覆盖 tick 0～3000、3001 个 committed samples 和 30.0 s；该记录继续标记 `target_conformance/science_verdict_pending`。
+
+R3 canonical 记录由 `r3.kernel-yyz-00a-canonical.probe` 与 `r3.yyz-00a-canonical.oracle` 形成。canonical Image fingerprint 为 `e981118b136b3e6872da40a00c296153b9ad26e144c7882341b64b30b219574c`。真实 Session 已初始化 `[0,0,1000] m`、`[220,0,0] m/s`、`680 kg` 与 level-east passive attitude，并对 requested 3000-tick horizon 执行第一步。uniform wind 令 relative airspeed 为 `210 m/s`，Mach `0.6176470588235294` 超出 exact aero table 上限 `0.6`；产品与独立 reference 均报告 tick-0 `OutOfRange / table-query`，trajectory committed intervals 为零。difference report 接受全部可得 opening fields，最大绝对差 `1.347066989204615e-14` 位于 tick-0 near-zero North velocity，abs/rel tolerance 为 `2e-12`，`unresolved_count=1`，terminal science verdict 未形成。
 
 ### 6.3 成功 step 与失败 step
 
@@ -461,7 +472,7 @@ Legacy CSV 初值/trajectory input、published output、candidate state 和 summ
 | Retire | 24 节点、201 列、priority 数字、registration/provider/lookup 名、CSV 列序/路径、free-text reason、old Mission shape | accidental structure，不进入 target expected |
 | Retire | dynamic pressure 伪造 actual force、mutable query `last_input_` | 15 已要求删除/纯化；应有 guard |
 | NeedsDecision | 最近行 aero、三通道平均 `F_CA`、roll-rate=0、`dt<=0` 初始化、mass/inertia silent clamps | 尚无 owner 决策，不能计 pass |
-| NeedsDecision | 00A vs 15 rate、scenario/frame/mass/assets、overshoot 6.4% | 阻断相关 fact |
+| NeedsDecision | canonical opening Mach 与 accepted aero domain 的兼容选择 | 速率、scenario、frame、mass 与 exact assets 已由 ADR-0023～0025 固定；owner 需选择新的 qualified aero/environment asset 组合或修订 author speed，overshoot 6.4% 已退出当前 claim |
 | Fix | 当前无自动批准项 | 只有 defect id、独立复现、影响、owner decision 和替代 evidence 齐全后才能使用 |
 
 ## 12. Difference report
@@ -477,6 +488,8 @@ Legacy CSV 初值/trajectory input、published output、candidate state 和 summ
 - raw evidence refs 和 validator version。
 
 Summary 必须分别给出 `match`、`approved_difference`、`retired`、`target_pending`、`unresolved` 和 `invalid`。G1 需要 `unresolved = 0`；`target_pending` 只能用于明确属于后续 R1–R3 runtime 的项，不能隐藏 R0 本应完成的 source/formula/reference 缺口。
+
+当前 `reports/r3-yyz-001-00a-difference.json` 采用 exact identity/status 与逐字段 abs/rel `2e-12`。所有可得 opening comparisons 均 accepted；near-zero North velocity 在 tick 0 形成最大绝对差 `1.347066989204615e-14` 和最大相对差 `1`，该字段由绝对阈值控制。唯一 unresolved row 是 opening domain failure 后缺失的 tick 1～3000 trajectory。`candidate_terminal_science_verdict=false`。
 
 ## 13. 完整性、派生与重放
 
@@ -578,7 +591,7 @@ Mutation fixture 不得绕过 production parser 或直接断言一个独立测�
 
 - 证据 lane 审查：target 结构、Legacy 观察和 independent truth 三者分离，未用一个 lane 填补另一个 lane 的空缺；
 - 来源审查：target seed、archive、关键 mission/assets/source 与既有 run hash 均可回溯；
-- 科学审查：没有擅自选择 20/10 Hz、680/120 kg、frame、aero、quaternion、overshoot 或 tolerance；所有选择进入 decision ledger；
+- 科学审查：20 Hz、680 kg、launch-local ENU、passive quaternion、exact R0 assets 与 tolerance 已由 owner-authorized facts 和 ADR-0023～0025 固定；aero domain incompatibility 保持显式，overshoot 未进入 claim；
 - 失败审查：short hash、convention、domain、time/commit、observation、metric、difference 和 determinism 都有生产 mutation；
-- 架构审查：R0 只设计 standalone artifacts/validators；R1–R3 类型与 runtime 保持未实现，target 与 Legacy 零链接；
-- 状态审查：manifest、backlog、schema、产品和冻结 Legacy 均未修改；本设计不是 owner approval 或任务完成声明。
+- 架构审查：R3 canonical profile 已沿 package query、Compiler、Image 与 Session 执行；independent reference 与产品/Legacy 零 kernel/link/runtime 依赖；
+- 状态审查：R3-YYZ-001 保持 `review` 与 `assignee:null`，R3-FIX-001/R3-DIA-001/R4+ 未启动；该状态不构成 owner gate approval 或任务完成声明。
