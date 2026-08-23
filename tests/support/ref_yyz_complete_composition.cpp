@@ -50,6 +50,10 @@ constexpr std::string_view kCanonicalMassState =
     "mass.yyz.00a.vehicle@1";
 constexpr std::string_view kCanonicalDocument =
     "fixtures/ref-yyz-00a-canonical/source.json";
+constexpr std::string_view kBaselineAerodynamicAsset =
+    "aero-table.fixture.yyz.multiaffine@1";
+constexpr std::string_view kCanonicalAerodynamicAsset =
+    "aero-table.fixture.yyz.00a-synthetic-multiaffine@2";
 
 struct CompositionProfile {
     std::string_view entity;
@@ -59,6 +63,7 @@ struct CompositionProfile {
     std::string_view mass_state;
     std::string_view configuration;
     std::string_view document;
+    std::string_view aerodynamic_asset;
     const gnc::packages::yyz::Canonical00AProductProfile*
         canonical_product = nullptr;
 };
@@ -71,6 +76,7 @@ struct CompositionProfile {
             kMassState,
             "configuration.fixture.yyz.clean@1",
             kDocument,
+            kBaselineAerodynamicAsset,
             nullptr};
 }
 
@@ -446,7 +452,7 @@ void append_configuration_provenance(
         definition.body_origin_to_application.value =
             gnc::foundation::Vec3{0.2, 0.0, -25.0 / 18.0};
         definition.table_asset_id =
-            "aero-table.fixture.yyz.multiaffine@1";
+            std::string(profile.aerodynamic_asset);
         configuration = canonical_aerodynamic_table_config(definition);
         const auto rebuilt = build_aerodynamic_table_definition(
             configuration, definition.table_asset_id);
@@ -617,7 +623,7 @@ namespace {
                     "REF graph contains an unmapped product asset role");
             occurrence.asset_bindings.push_back(
                 {asset.role, asset.asset_schema_id,
-                 "aero-table.fixture.yyz.multiaffine@1",
+                 std::string(profile.aerodynamic_asset),
                  ref(profile, "occurrences/" + occurrence.occurrence_id +
                                   "/assets/" + asset.role)});
         }
@@ -1164,6 +1170,7 @@ make_00a_canonical_source(
         kCanonicalMassState,
         "configuration.fixture.yyz.clean@1",
         kCanonicalDocument,
+        kCanonicalAerodynamicAsset,
         &product};
     auto source = make_source(
         package, true, true, profile, product.fixed_step_seconds,

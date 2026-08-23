@@ -251,7 +251,7 @@ StepOutcome 记录 base/committed epoch、phase reached、delta set、terminatio
 
 每项差异分类、引用 oracle/ADR/model id。无法解释项阻断切换。
 
-2026-08-23 的 `R3-YYZ-001` canonical 00A 切片已对 initial truth、cadence/held timing、opening navigation/guidance/controller/actuator/propulsion、environment/air-data 与 aerodynamic domain 形成产品/独立 reference comparison。全部可得字段通过逐字段 tolerance；最大绝对差为 tick 0 near-zero North velocity 的 `1.347066989204615e-14`。exact R0 aero asset 的 Mach 轴上限为 `0.6`，canonical opening query 为 `0.6176470588235294`，真实 Session 因而在第一段导数前 fail closed，三个 dt ladder 均提交零 interval。difference report 保留一个无法生成 tick 1～3000 trajectory 的 unresolved item，该项继续阻断 terminal science verdict 与 runner cutover。
+2026-08-23 的 `R3-YYZ-001` canonical 00A 切片已对 initial truth、cadence/held timing、opening air-data/三线性 coefficient lookup、严格气动域、双 3000-interval product trajectory、terminal outcome 与 determinism 形成产品/独立 reference comparison。冻结的 R0 气动资产在 opening Mach `0.6176470588235294` 继续 fail closed；owner 授权的 synthetic multiaffine successor 保留旧域结果，经真实 tick 9 查询触发唯一一次有限域调整后覆盖完整实际查询包线。两次真实 Session 均以 `Completed / duration-complete` 到达 tick 3000，difference report 的 `unresolved_count=0`，verdict 为 `abstract_engineering_target_conformance`。独立 reference 只重算 opening 与资产关系，未复制 3000-step Session/RK4；真实飞行器气动、地理/大气变化、稳定性和独立收敛仍是科学差距。本切片不授权 runner cutover 或阶段门决定。
 
 ### 2.14 R3.14 runner/active project 切换
 

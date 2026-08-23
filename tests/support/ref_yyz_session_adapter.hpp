@@ -11,9 +11,19 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace gnc::tests::ref_yyz {
+
+inline constexpr std::string_view kBaselineAerodynamicAssetId =
+    "aero-table.fixture.yyz.multiaffine@1";
+inline constexpr std::string_view kCanonicalAerodynamicAssetId =
+    "aero-table.fixture.yyz.00a-synthetic-multiaffine@2";
+
+// Returns one of the two frozen test assets. Unknown identities fail closed.
+[[nodiscard]] packages::yyz::AerodynamicTableAsset
+make_aerodynamic_fixture_asset(std::string_view asset_id);
 
 enum class FailurePhase : std::uint8_t {
     None,
@@ -166,6 +176,19 @@ struct OpeningBoundaryProbe {
     double dynamic_pressure = 0.0;
     double mach = 0.0;
     std::array<double, 6U> aerodynamic_coefficients{};
+    bool aerodynamic_envelope_initialized = false;
+    double opening_airspeed = 0.0;
+    double opening_alpha = 0.0;
+    double opening_beta = 0.0;
+    double opening_dynamic_pressure = 0.0;
+    double opening_mach = 0.0;
+    std::array<double, 6U> opening_aerodynamic_coefficients{};
+    double minimum_mach = 0.0;
+    double maximum_mach = 0.0;
+    double minimum_alpha = 0.0;
+    double maximum_alpha = 0.0;
+    double minimum_beta = 0.0;
+    double maximum_beta = 0.0;
     std::size_t closure_contribution_count = 0U;
     std::array<double, 3U> held_force{};
     std::array<double, 3U> held_moment{};
@@ -183,6 +206,7 @@ struct OpeningBoundaryProbe {
 struct StepIntervalProbe {
     std::int64_t opening_tick = -1;
     std::size_t rk4_derivative_evaluations = 0U;
+    double held_pitch_moment_newton_meters = 0.0;
     double integration_mass_kilograms = 0.0;
     double mass_candidate_kilograms = 0.0;
     std::array<double, 3U> rigid_candidate_position{};

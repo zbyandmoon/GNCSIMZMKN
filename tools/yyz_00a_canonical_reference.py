@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Independent Decimal reference for the canonical YYZ 00A opening boundary.
+"""Independent Decimal reference for canonical YYZ 00A opening evidence.
 
 This module reads fixture assets only. It imports no product package, Kernel
 adapter, C++ output, or existing YYZ expected trajectory. Mapping, cadence,
-air data and every opening formal output available before the aerodynamic
-query are independently recomputed. The accepted aero domain stops the
-canonical profile before a force closure, RK4 candidate or trajectory exists.
+air data, successor generation and the opening aerodynamic lookup are
+independently recomputed. The 3000-interval trajectory is intentionally left
+to the real product Session and is checked as product evidence by the
+difference-report verifier.
 """
 
 from __future__ import annotations
@@ -205,6 +206,186 @@ def find_selected_asset(
     return matches[0]
 
 
+def trilinear_coefficients(
+    payload: Dict[str, Any],
+    mach: Decimal,
+    alpha: Decimal,
+    beta: Decimal,
+) -> List[Decimal]:
+    axes = [
+        [D(value) for value in payload["mach_axis"]],
+        [D(value) for value in payload["alpha_axis_rad"]],
+        [D(value) for value in payload["beta_axis_rad"]],
+    ]
+    coordinates = [mach, alpha, beta]
+    brackets: List[Tuple[int, Decimal]] = []
+    for axis, coordinate in zip(axes, coordinates):
+        if coordinate < axis[0] or coordinate > axis[-1]:
+            raise ValueError("strict trilinear query is outside the asset")
+        lower = len(axis) - 2
+        for index in range(len(axis) - 1):
+            if axis[index] <= coordinate <= axis[index + 1]:
+                lower = index
+                break
+        weight = (coordinate - axis[lower]) / (
+            axis[lower + 1] - axis[lower]
+        )
+        brackets.append((lower, weight))
+
+    rows = payload["coefficient_rows_CA_CY_CN_Cl_Cm_Cn"]
+    result = [D(0)] * 6
+    alpha_count = len(axes[1])
+    beta_count = len(axes[2])
+    for mach_corner in range(2):
+        mach_index = brackets[0][0] + mach_corner
+        mach_factor = (
+            D(1) - brackets[0][1]
+            if mach_corner == 0
+            else brackets[0][1]
+        )
+        for alpha_corner in range(2):
+            alpha_index = brackets[1][0] + alpha_corner
+            alpha_factor = (
+                D(1) - brackets[1][1]
+                if alpha_corner == 0
+                else brackets[1][1]
+            )
+            for beta_corner in range(2):
+                beta_index = brackets[2][0] + beta_corner
+                beta_factor = (
+                    D(1) - brackets[2][1]
+                    if beta_corner == 0
+                    else brackets[2][1]
+                )
+                row_index = (
+                    mach_index * alpha_count * beta_count
+                    + alpha_index * beta_count
+                    + beta_index
+                )
+                factor = mach_factor * alpha_factor * beta_factor
+                for coefficient in range(6):
+                    result[coefficient] += (
+                        factor * D(rows[row_index][coefficient])
+                    )
+    return result
+
+
+def normalized_successor_payload(asset: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "mach_axis": asset["mach_axis"],
+        "alpha_axis_rad": asset["alpha_axis_radians"],
+        "beta_axis_rad": asset["beta_axis_radians"],
+        "coefficient_rows_CA_CY_CN_Cl_Cm_Cn": asset[
+            "coefficient_rows_ca_cy_cn_cl_cm_cn"
+        ],
+    }
+
+
+def verify_successor_generation(
+    baseline: Dict[str, Any], successor: Dict[str, Any]
+) -> None:
+    base = baseline["payload"]
+    payload = normalized_successor_payload(successor)
+    if payload["mach_axis"] != [D("0.2"), D("0.6"), D("0.8")]:
+        raise RuntimeError("synthetic successor Mach axis changed")
+    if payload["alpha_axis_rad"] != [
+        D("-3.141592653589793"),
+        D("-0.1"),
+        D("0.1"),
+        D("3.141592653589793"),
+    ]:
+        raise RuntimeError("synthetic successor alpha axis changed")
+    if payload["beta_axis_rad"] != [
+        D("-1.5707963267948966"),
+        D("-0.05"),
+        D("0.05"),
+        D("1.5707963267948966"),
+    ]:
+        raise RuntimeError("synthetic successor beta axis changed")
+    rows = payload["coefficient_rows_CA_CY_CN_Cl_Cm_Cn"]
+    if len(rows) != 48:
+        raise RuntimeError("synthetic successor row count changed")
+
+    base_rows = base["coefficient_rows_CA_CY_CN_Cl_Cm_Cn"]
+    tolerance = D("2e-14")
+    row_index = 0
+    for mach in (D("0.2"), D("0.6"), D("0.8")):
+        mach_weight = (mach - D("0.2")) / D("0.4")
+        for alpha in (
+            D("-3.141592653589793"),
+            D("-0.1"),
+            D("0.1"),
+            D("3.141592653589793"),
+        ):
+            alpha_weight = (alpha + D("0.1")) / D("0.2")
+            for beta in (
+                D("-1.5707963267948966"),
+                D("-0.05"),
+                D("0.05"),
+                D("1.5707963267948966"),
+            ):
+                beta_weight = (beta + D("0.05")) / D("0.1")
+                expected = [D(0)] * 6
+                for mach_corner in range(2):
+                    mach_factor = (
+                        D(1) - mach_weight
+                        if mach_corner == 0
+                        else mach_weight
+                    )
+                    for alpha_corner in range(2):
+                        alpha_factor = (
+                            D(1) - alpha_weight
+                            if alpha_corner == 0
+                            else alpha_weight
+                        )
+                        for beta_corner in range(2):
+                            beta_factor = (
+                                D(1) - beta_weight
+                                if beta_corner == 0
+                                else beta_weight
+                            )
+                            corner = base_rows[
+                                mach_corner * 4
+                                + alpha_corner * 2
+                                + beta_corner
+                            ]
+                            factor = (
+                                mach_factor * alpha_factor * beta_factor
+                            )
+                            for coefficient in range(6):
+                                expected[coefficient] += (
+                                    factor * D(corner[coefficient])
+                                )
+                actual = [D(value) for value in rows[row_index]]
+                for actual_value, expected_value in zip(actual, expected):
+                    limit = tolerance * max(D(1), abs(expected_value))
+                    if abs(actual_value - expected_value) > limit:
+                        raise RuntimeError(
+                            "synthetic successor generation changed at "
+                            f"row {row_index}: actual={actual_value} "
+                            f"expected={expected_value} "
+                            f"difference={abs(actual_value - expected_value)}"
+                        )
+                row_index += 1
+
+    for mach in (D("0.2"), D("0.35"), D("0.599")):
+        for alpha in (D("-0.099"), D("-0.017"), D("0.099")):
+            for beta in (D("-0.049"), D("0.011"), D("0.049")):
+                old_value = trilinear_coefficients(
+                    base, mach, alpha, beta
+                )
+                new_value = trilinear_coefficients(
+                    payload, mach, alpha, beta
+                )
+                for old_coefficient, new_coefficient in zip(
+                    old_value, new_value
+                ):
+                    if abs(old_coefficient - new_coefficient) > D("2e-15"):
+                        raise RuntimeError(
+                            "synthetic successor changed the old domain"
+                        )
+
+
 def verify_asset_locks(
     source: Dict[str, Any], repository_root: Path
 ) -> Dict[str, Dict[str, Any]]:
@@ -221,14 +402,42 @@ def verify_asset_locks(
         role = promoted["role"]
         if role in selected:
             raise RuntimeError(f"duplicate promoted asset role {role!r}")
-        if promoted["revision"] != 1:
-            raise RuntimeError(
-                f"promoted {role} has an unsupported revision"
-            )
         source_path = repository_root / promoted["source_path"]
         if sha256_path(source_path) != promoted["source_sha256"]:
             raise RuntimeError(
                 f"promoted {role} source SHA-256 mismatch"
+            )
+        if role == "aerodynamics":
+            if promoted["revision"] != 2:
+                raise RuntimeError("aerodynamic successor revision changed")
+            indexed = find_selected_asset(
+                asset_index, promoted["base_index_role"]
+            )
+            successor_document = load_decimal_json(source_path)
+            successor = successor_document["asset"]
+            if (
+                promoted["successor_of_asset_id"] != indexed["asset_id"]
+                or successor["asset_id"] != promoted["asset_id"]
+                or successor["asset_schema_id"]
+                != promoted["asset_schema_id"]
+                or successor["revision"] != promoted["revision"]
+            ):
+                raise RuntimeError(
+                    "synthetic aerodynamic identity lock changed"
+                )
+            verify_successor_generation(indexed, successor)
+            selected[role] = {
+                "role": role,
+                "asset_id": successor["asset_id"],
+                "asset_schema_id": successor["asset_schema_id"],
+                "payload": normalized_successor_payload(successor),
+                "baseline_asset_id": indexed["asset_id"],
+                "baseline_payload": indexed["payload"],
+            }
+            continue
+        if promoted["revision"] != 1:
+            raise RuntimeError(
+                f"promoted {role} has an unsupported revision"
             )
         indexed = find_selected_asset(asset_index, promoted["index_role"])
         if indexed["asset_id"] != promoted["asset_id"]:
@@ -384,8 +593,8 @@ def build_reference_document(
         alpha_axis = [D(value) for value in aerodynamic["alpha_axis_rad"]]
         beta_axis = [D(value) for value in aerodynamic["beta_axis_rad"]]
         # The canonical body components have zero vertical/side velocity in
-        # exact arithmetic. Tiny Decimal series residuals remain far inside
-        # the angle domain and do not affect the Mach rejection.
+        # exact arithmetic. The direct product probe records the binary64
+        # residual separately.
         alpha = D(0)
         beta = D(0)
         domain_inside = (
@@ -393,9 +602,28 @@ def build_reference_document(
             and alpha_axis[0] <= alpha <= alpha_axis[-1]
             and beta_axis[0] <= beta <= beta_axis[-1]
         )
-        if domain_inside:
+        if not domain_inside:
             raise RuntimeError(
-                "canonical independent query unexpectedly entered aero domain"
+                "canonical independent query did not enter successor domain"
+            )
+        coefficients = trilinear_coefficients(
+            aerodynamic, mach, alpha, beta
+        )
+        baseline = assets["aerodynamics"]["baseline_payload"]
+        baseline_inside = (
+            D(baseline["mach_axis"][0])
+            <= mach
+            <= D(baseline["mach_axis"][-1])
+            and D(baseline["alpha_axis_rad"][0])
+            <= alpha
+            <= D(baseline["alpha_axis_rad"][-1])
+            and D(baseline["beta_axis_rad"][0])
+            <= beta
+            <= D(baseline["beta_axis_rad"][-1])
+        )
+        if baseline_inside:
+            raise RuntimeError(
+                "frozen baseline unexpectedly accepts the opening query"
             )
 
         base_rate = int(author["base_rate_hz"])
@@ -535,43 +763,79 @@ def build_reference_document(
                     for key, value in guidance_control.items()
                     if isinstance(value, (Decimal, int))
                 },
-                "aerodynamic_coefficients": "unavailable-OutOfRange",
-                "closure_wrench": "unavailable-OutOfRange",
+                "aerodynamic_coefficients": vector_text(coefficients),
+                "closure_wrench": (
+                    "product-Session evidence; no independent Python "
+                    "trajectory integration is performed"
+                ),
             },
             "aerodynamic_domain": {
                 "model_id": "gnc.package.yyz.aerodynamic-table.multiaffine.experimental@1",
                 "asset_id": assets["aerodynamics"]["asset_id"],
+                "baseline_asset_id": assets["aerodynamics"][
+                    "baseline_asset_id"
+                ],
+                "baseline_mach_axis": vector_text(
+                    [D(value) for value in baseline["mach_axis"]]
+                ),
+                "baseline_alpha_axis_rad": vector_text(
+                    [D(value) for value in baseline["alpha_axis_rad"]]
+                ),
+                "baseline_beta_axis_rad": vector_text(
+                    [D(value) for value in baseline["beta_axis_rad"]]
+                ),
                 "mach_axis": vector_text(mach_axis),
                 "alpha_axis_rad": vector_text(alpha_axis),
                 "beta_axis_rad": vector_text(beta_axis),
-                "inside": False,
-                "status": "OutOfRange",
+                "baseline_opening_status": "OutOfRange",
+                "inside": True,
+                "status": "Success",
                 "detail": "table-query",
-                "failure_tick": 0,
+                "opening_coefficients": vector_text(coefficients),
+                "generation_verified": True,
+                "old_domain_equivalence_verified": True,
             },
             "downstream_model_reexpression": {
-                "propulsion_mass_guidance_control_actuator": "guidance, controller, ideal actuator, propulsion and opening mass outputs are independently evaluated; mass candidate awaits a successful force closure",
-                "frozen_interval_rk4": "classical RK4/FrozenInterval retained; no derivative stage is evaluated after the opening failure",
-                "metrics_and_terminal": "committed-boundary formulas retained; no terminal committed boundary exists",
+                "propulsion_mass_guidance_control_actuator": "guidance, controller, ideal actuator, propulsion, opening mass, air data, and aerodynamic coefficients are independently evaluated",
+                "frozen_interval_rk4": "classical RK4/FrozenInterval is exercised only by the real product Session; this Decimal reference does not integrate a parallel trajectory",
+                "metrics_and_terminal": "terminal status, aggregate consistency, actual query envelope, and determinism are consumed from the C++ product probe and compared with owner-approved source expectations",
             },
             "trajectory": {
                 "requested_duration_s": decimal_text(duration),
                 "requested_terminal_tick": terminal_tick,
                 "opening": "mapped-and-compared",
-                "intermediate": "unavailable-domain-failure-before-first-interval",
-                "terminal": "unavailable-domain-failure-before-first-interval",
-                "committed_intervals": 0,
-                "status": "domain-locked-at-opening",
+                "python_integration": "not-performed",
+                "product_terminal_expectation": {
+                    "status": source["expected_product_outcome"][
+                        "terminal_status"
+                    ],
+                    "reason": source["expected_product_outcome"][
+                        "terminal_reason"
+                    ],
+                    "tick": source["expected_product_outcome"][
+                        "terminal_tick"
+                    ],
+                    "committed_intervals": source[
+                        "expected_product_outcome"
+                    ]["committed_intervals"],
+                },
+                "actual_query_envelope_expectation": source[
+                    "expected_product_outcome"
+                ]["actual_query_envelope"],
+                "deterministic_repetitions": source[
+                    "expected_product_outcome"
+                ]["deterministic_repetitions"],
+                "status": "product-evidence-required",
             },
             "dt_ladder": {
                 "steps_s": ["0.01", "0.005", "0.0025"],
-                "committed_intervals": [0, 0, 0],
-                "status": "not-evaluated-domain-failure-before-first-derivative",
+                "status": "not-recomputed-for-canonical-product-trajectory",
             },
+            "owner_resolution": source["owner_resolution"],
             "verdict": {
-                "status": "domain-blocked",
-                "candidate_terminal_science_verdict": False,
-                "claim_bounds": "mapping, source identity, deterministic fail-closed execution, and independent opening-domain agreement only",
+                "status": "abstract_engineering_target_conformance",
+                "candidate_terminal_science_verdict": True,
+                "claim_bounds": "abstract-engineering source, mapping, synthetic asset, cadence, deterministic product execution, and terminal evidence; no real-aircraft accuracy claim",
             },
         }
 

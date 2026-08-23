@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Daily verifier for frozen independent 00A expected data and diff report."""
+"""Daily verifier for frozen independent 00A evidence and diff report."""
 
 from __future__ import annotations
 
@@ -44,18 +44,31 @@ def main() -> int:
         raise RuntimeError("frozen canonical 00A difference report is stale")
     if not recomputed_report["all_available_fields_accepted"]:
         raise RuntimeError("canonical available-field comparison failed")
-    if recomputed_report["unresolved_count"] != 1:
-        raise RuntimeError("canonical unresolved trajectory count changed")
-    if recomputed_report["candidate_terminal_science_verdict"]:
-        raise RuntimeError("terminal verdict was emitted with unresolved work")
+    if recomputed_report["unresolved_count"] != 0:
+        raise RuntimeError("canonical unresolved conformance count changed")
+    if not recomputed_report["candidate_terminal_science_verdict"]:
+        raise RuntimeError("canonical target-conformance verdict is missing")
+    if recomputed_report["verdict"] != (
+        "abstract_engineering_target_conformance"
+    ):
+        raise RuntimeError("canonical verdict phrase changed")
+    terminal = recomputed_report["terminal"]
+    if (
+        terminal["status"] != "Completed"
+        or terminal["reason"] != "duration-complete"
+        or terminal["tick"] != 3000
+        or terminal["committed_intervals"] != 3000
+        or not recomputed_report["determinism"]["bit_deterministic"]
+    ):
+        raise RuntimeError("canonical terminal product evidence changed")
 
     print(
         "yyz-00a-canonical-reference: PASS "
-        f"status={recomputed_report['status']} "
-        f"max_abs={recomputed_report['maximum_absolute_error']['value']}@"
-        f"{recomputed_report['maximum_absolute_error']['field']}/tick0 "
-        f"max_rel={recomputed_report['maximum_relative_error']['value']}@"
-        f"{recomputed_report['maximum_relative_error']['field']}/tick0 "
+        f"verdict={recomputed_report['verdict']} "
+        f"max_abs={recomputed_report['maximum_absolute_error']['absolute_error']}@"
+        f"{recomputed_report['maximum_absolute_error']['field']} "
+        f"max_rel={recomputed_report['maximum_relative_error']['relative_error']}@"
+        f"{recomputed_report['maximum_relative_error']['field']} "
         f"unresolved={recomputed_report['unresolved_count']}"
     )
     return 0

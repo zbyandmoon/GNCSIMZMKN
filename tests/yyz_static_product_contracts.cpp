@@ -1539,6 +1539,62 @@ void verify_guidance_control_actuation_definition_builders() {
                              .measured_pitch_radians) <= 2.0e-12,
             "guidance rejected or misprojected a level east-heading attitude");
 
+    auto pitched_input = canonical_00a_author_input();
+    pitched_input.heading_degrees = 37.0;
+    pitched_input.flight_path_angle_degrees = 12.0;
+    pitched_input.bank_degrees = 0.0;
+    const auto pitched_mapping = Canonical00AInitialMappingQuery::evaluate(
+        canonical_00a_initial_mapping_definition(), pitched_input);
+    require(pitched_mapping.has_value(),
+            "general heading and flight-path mapping failed");
+    auto pitched_observation = original_navigation.value();
+    pitched_observation.state.attitude =
+        pitched_mapping.value().initial_rigid_state.attitude;
+    const auto pitched_guidance = AltitudePitchGuidanceKernel::evaluate(
+        guidance_definition, pitched_observation);
+    auto negative_pitched_observation = pitched_observation;
+    negative_pitched_observation.state.attitude.value.coeffs() *= -1.0;
+    const auto negative_pitched_guidance =
+        AltitudePitchGuidanceKernel::evaluate(
+            guidance_definition, negative_pitched_observation);
+    const double expected_pitch =
+        -pitched_input.flight_path_angle_degrees * std::acos(-1.0) / 180.0;
+    require(pitched_guidance.has_value() &&
+                negative_pitched_guidance.has_value() &&
+                pitched_guidance.value().measured_pitch_radians < 0.0 &&
+                std::abs(pitched_guidance.value().measured_pitch_radians -
+                         expected_pitch) <= 2.0e-12 &&
+                pitched_guidance.value().measured_pitch_radians ==
+                    negative_pitched_guidance.value()
+                        .measured_pitch_radians,
+            "guidance changed the positive-flight-path pitch sign or quaternion double-cover result");
+
+    auto banked_input = pitched_input;
+    banked_input.bank_degrees = 43.0;
+    const auto banked_mapping = Canonical00AInitialMappingQuery::evaluate(
+        canonical_00a_initial_mapping_definition(), banked_input);
+    require(banked_mapping.has_value(),
+            "same-forward-direction banked mapping failed");
+    auto banked_observation = original_navigation.value();
+    banked_observation.state.attitude =
+        banked_mapping.value().initial_rigid_state.attitude;
+    const auto banked_guidance = AltitudePitchGuidanceKernel::evaluate(
+        guidance_definition, banked_observation);
+    auto negative_banked_observation = banked_observation;
+    negative_banked_observation.state.attitude.value.coeffs() *= -1.0;
+    const auto negative_banked_guidance =
+        AltitudePitchGuidanceKernel::evaluate(
+            guidance_definition, negative_banked_observation);
+    require(banked_guidance.has_value() &&
+                negative_banked_guidance.has_value() &&
+                std::abs(banked_guidance.value().measured_pitch_radians -
+                         pitched_guidance.value().measured_pitch_radians) <=
+                    2.0e-12 &&
+                banked_guidance.value().measured_pitch_radians ==
+                    negative_banked_guidance.value()
+                        .measured_pitch_radians,
+            "bank or quaternion sign changed forward-axis pitch guidance");
+
     PitchMomentControllerDefinition controller_definition;
     controller_definition.model_id =
         std::string(kPitchMomentControllerModelIdentity);

@@ -1,7 +1,7 @@
 # REF-YYZ-001 科学、行为与 target conformance bundle 设计
 
-- 文档状态：R0 qualification implemented；R3 target-rate runtime conformance 与 canonical 00A opening/domain difference 切片均已执行，tick 1～3000 trajectory 和 science verdict 受精确气动域阻断
-- 实现成熟度：`REF-YYZ-001` fixture-local R0 qualification bundle 已达到 `executable`；R3 target-rate 工程运行保留 `target_conformance/science_verdict_pending`，canonical profile 已达到 `executable-domain-locked`，当前证据不构成完整 00A 轨迹验收或 R3 gate 结论
+- 文档状态：R0 qualification implemented；R3 target-rate runtime conformance 与 canonical 00A 30 秒 abstract-engineering target-conformance 切片均已执行
+- 实现成熟度：`REF-YYZ-001` fixture-local R0 qualification bundle 已达到 `executable`；R3 target-rate 工程运行保留 `target_conformance/science_verdict_pending`，canonical profile 已达到 `executable-target-conformance`。当前证据限定于合成气动与 launch-local 环境，不构成真实飞行器科学验收或 R3 gate 结论
 - 任务：`R0-SCI-003`（backlog 为 `done`）；R3 executable update：`R3-YYZ-001`（`review`）
 - 日期：2026-08-23
 - Authority owner role：Scientific Authority
@@ -65,8 +65,8 @@ R3 canonical addendum 将 owner-authorized 00A facts 与已接受 R0 bytes 固�
 Manifest 当前三条 seed fact 的状态是：
 
 - `FACT-YYZ-PLAN-RATE`：ADR-0023 已固定 canonical 00A 的 100 Hz base、20 Hz guidance 与完整 `1/5/2/1/4` cadence；Compiler、proof、Image 和 Session 均已执行；
-- `FACT-YYZ-STEP-COMMIT`：pre-commit failure 保持 epoch/tick/state，成功 observation 绑定 ModelCommit；target-rate 3000-tick 工程运行与 canonical tick-0 domain failure 均沿真实 R3 Session 路径形成证据；
-- `FACT-YYZ-TRAJECTORY`：canonical source、exact assets、opening expected、per-field tolerance、独立实现与 difference report 已形成；accepted aero domain 在 opening 阶段拒绝 Mach `0.6176470588235294`，因此 tick 1～3000 trajectory 保持 unavailable，report 记录一个 unresolved item。
+- `FACT-YYZ-STEP-COMMIT`：pre-commit failure 保持 epoch/tick/state，成功 observation 绑定 ModelCommit；target-rate 与 canonical 的双 3000-tick 工程运行均沿真实 R3 Session 路径形成证据；
+- `FACT-YYZ-TRAJECTORY`：canonical source、冻结旧气动资产、显式 synthetic successor、opening expected、per-field tolerance、独立实现与 difference report 已形成。旧资产在 opening Mach `0.6176470588235294` 精确拒绝；successor 通过同一严格三线性查询完成两次 3000-interval Session，report 的 `unresolved_count=0`，结论为 `abstract_engineering_target_conformance`。
 
 ### 3.2 Frozen Legacy source
 
@@ -202,11 +202,11 @@ REF-YYZ-001
 
 | 00A 内容 | 当前分类 | 激活后的验收方式 |
 | --- | --- | --- |
-| mission id、definition/version、初始 author input | `approved/executable-domain-locked` | ADR-0024/0025 与 frozen source hash；package query 重算 mapping、duration/rates 并执行 domain checks |
+| mission id、definition/version、初始 author input | `approved/executable-target-conformance` | ADR-0024/0025 与 frozen source hash；package query 重算 mapping、duration/rates 并执行严格有限域 checks，双 Session 完成 terminal tick 3000 |
 | 100/50/25/20 Hz → interval 1/2/4/5 | `structural-exact/executable` | ADR-0023 已采用；整数算术 exact，proof 指回 source refs，短跑验证完整调用与 age 序列 |
 | base tick 10,000,000 ns、30 s → 3000 intervals | `structural-exact/executable` | target source 已采用，integer duration/grid exact；两次运行均提交 terminal tick 3000 |
 | 60 Hz at 100 Hz → 5/3，拒绝编译 | `negative-structural` | stable category/stage/subject/source refs；message text 不作 identity |
-| `asset://...@sha256:91b7` | `illustrative/rejected-as-integrity` | canonical profile 已替换为七个真实 asset id、revision、source pointer 与三个全长 SHA-256 locks；短写继续拒绝 |
+| `asset://...@sha256:91b7` | `illustrative/rejected-as-integrity` | canonical profile 已替换为六份冻结 R0 payload、冻结旧气动负基线和显式 synthetic successor，并记录真实 asset id、revision、source pointer 与全长 SHA-256 locks；短写继续拒绝 |
 | graph/plan/proof/run ids 中的短后缀 | `illustrative` | 由批准 canonical inputs 实际派生，validator 重算 |
 | tick 2500 高度 1001.73/候选 1001.69/5 patches | `needs_provenance` | 分离 transaction structure 与科学数值；后者只来自 approved trajectory |
 | pitch 1.84°、elevator -0.62° | `needs_provenance` | 对应 formula/trajectory fact、FieldId、unit/frame/time/commit ref |
@@ -229,7 +229,7 @@ Case id 仅是本设计候选。若现有 schema 已经固定别的 identity，�
 
 R3 target-rate 可执行记录为 `r3.kernel-yyz-target-rate.probe`：生产 `TruthPassthroughNavigation` 保持同 tick truth provenance；guidance→controller age 序列受最大值 4 约束，controller→actuator age 序列受最大值 1 约束；tick-31 短跑覆盖完整 cadence、bit determinism、controlled/zero-control 可区分性和共享 provider 的双 Session 隔离。两次 3000-tick 工程运行均在 tick 3000 完成，正式 runwide result 为 `Complete / duration-complete`，覆盖 tick 0～3000、3001 个 committed samples 和 30.0 s；该记录继续标记 `target_conformance/science_verdict_pending`。
 
-R3 canonical 记录由 `r3.kernel-yyz-00a-canonical.probe` 与 `r3.yyz-00a-canonical.oracle` 形成。canonical Image fingerprint 为 `e981118b136b3e6872da40a00c296153b9ad26e144c7882341b64b30b219574c`。真实 Session 已初始化 `[0,0,1000] m`、`[220,0,0] m/s`、`680 kg` 与 level-east passive attitude，并对 requested 3000-tick horizon 执行第一步。uniform wind 令 relative airspeed 为 `210 m/s`，Mach `0.6176470588235294` 超出 exact aero table 上限 `0.6`；产品与独立 reference 均报告 tick-0 `OutOfRange / table-query`，trajectory committed intervals 为零。difference report 接受全部可得 opening fields，最大绝对差 `1.347066989204615e-14` 位于 tick-0 near-zero North velocity，abs/rel tolerance 为 `2e-12`，`unresolved_count=1`，terminal science verdict 未形成。
+R3 canonical 记录由 `r3.kernel-yyz-00a-canonical.probe` 与 `r3.yyz-00a-canonical.oracle` 形成。source 选择 `aero-table.fixture.yyz.00a-synthetic-multiaffine@2`，canonical Image fingerprint 为 `4faccb3be9c6b760591b286c8996322069c7e0c1ba1668dcdf8946fb36c263ff`。冻结的 `aero-table.fixture.yyz.multiaffine@1` 在 opening Mach `0.6176470588235294` 继续返回 `OutOfRange`；successor 保留旧八角点、旧域查询结果与通用严格三线性 kernel。初始 successor 在真实 tick 9 暴露 alpha `0.113627` 的有限域失败，唯一一次授权调整把域固定为 Mach `[0.2,0.8]`、alpha `[-pi,pi]`、beta `[-pi/2,pi/2]`。两次真实 Session 均从 `[0,0,1000] m`、`[220,0,0] m/s`、`680 kg` 与 level-east passive attitude 运行到 `Completed / duration-complete`，提交 tick 3000 和 3000 个 intervals，结果按位确定。独立 80 位 Decimal 路径验证 successor 生成、27 个旧域查询及 opening lookup，不复制 3000-step Session/RK4。difference report 的最大绝对差为 terminal mass 上的 `1.364e-11`，位于组合容差内；`unresolved_count=0`，verdict 为 `abstract_engineering_target_conformance`。
 
 ### 6.3 成功 step 与失败 step
 
@@ -472,7 +472,7 @@ Legacy CSV 初值/trajectory input、published output、candidate state 和 summ
 | Retire | 24 节点、201 列、priority 数字、registration/provider/lookup 名、CSV 列序/路径、free-text reason、old Mission shape | accidental structure，不进入 target expected |
 | Retire | dynamic pressure 伪造 actual force、mutable query `last_input_` | 15 已要求删除/纯化；应有 guard |
 | NeedsDecision | 最近行 aero、三通道平均 `F_CA`、roll-rate=0、`dt<=0` 初始化、mass/inertia silent clamps | 尚无 owner 决策，不能计 pass |
-| NeedsDecision | canonical opening Mach 与 accepted aero domain 的兼容选择 | 速率、scenario、frame、mass 与 exact assets 已由 ADR-0023～0025 固定；owner 需选择新的 qualified aero/environment asset 组合或修订 author speed，overshoot 6.4% 已退出当前 claim |
+| Preserve | canonical opening Mach 与显式 synthetic aero successor 的兼容选择 | owner 保持 author speed 和冻结旧资产，选择由同一八角点多仿射关系生成的 successor；最终有限域覆盖实际查询包线，旧资产继续提供 opening `OutOfRange` 负证据，claim 限定为 abstract engineering target conformance |
 | Fix | 当前无自动批准项 | 只有 defect id、独立复现、影响、owner decision 和替代 evidence 齐全后才能使用 |
 
 ## 12. Difference report
@@ -489,7 +489,7 @@ Legacy CSV 初值/trajectory input、published output、candidate state 和 summ
 
 Summary 必须分别给出 `match`、`approved_difference`、`retired`、`target_pending`、`unresolved` 和 `invalid`。G1 需要 `unresolved = 0`；`target_pending` 只能用于明确属于后续 R1–R3 runtime 的项，不能隐藏 R0 本应完成的 source/formula/reference 缺口。
 
-当前 `reports/r3-yyz-001-00a-difference.json` 采用 exact identity/status 与逐字段 abs/rel `2e-12`。所有可得 opening comparisons 均 accepted；near-zero North velocity 在 tick 0 形成最大绝对差 `1.347066989204615e-14` 和最大相对差 `1`，该字段由绝对阈值控制。`unexplained_difference_count=0`；唯一 unresolved coverage row 是 opening domain failure 后缺失的 tick 1～3000 trajectory，因此 `unresolved_difference_count=1`。`candidate_terminal_science_verdict=false`。
+当前 `reports/r3-yyz-001-00a-difference.json` 采用 exact identity/status 与逐字段 abs/rel `2e-12`。独立 opening comparisons、真实 product terminal 状态、cadence/held age、实际气动查询包线及双运行确定性均 accepted；最大绝对差为 terminal mass 上的 `1.364e-11`，低于组合阈值 `1.33200000000002728e-9`。`unexplained_difference_count=0`、`unresolved_count=0`，`candidate_terminal_science_verdict=true`，verdict 为 `abstract_engineering_target_conformance`。
 
 ## 13. 完整性、派生与重放
 
@@ -591,7 +591,7 @@ Mutation fixture 不得绕过 production parser 或直接断言一个独立测�
 
 - 证据 lane 审查：target 结构、Legacy 观察和 independent truth 三者分离，未用一个 lane 填补另一个 lane 的空缺；
 - 来源审查：target seed、archive、关键 mission/assets/source 与既有 run hash 均可回溯；
-- 科学审查：20 Hz、680 kg、launch-local ENU、passive quaternion、exact R0 assets 与 tolerance 已由 owner-authorized facts 和 ADR-0023～0025 固定；aero domain incompatibility 保持显式，overshoot 未进入 claim；
+- 科学审查：20 Hz、680 kg、launch-local ENU、passive quaternion、六份 exact R0 payload、冻结旧气动资产、显式 synthetic successor 与 tolerance 已由 owner-authorized facts 和 ADR-0023～0025 固定；旧资产 opening 域拒绝和 successor 的实际有限查询包线均保持显式，claim 限定为 abstract engineering target conformance；
 - 失败审查：short hash、convention、domain、time/commit、observation、metric、difference 和 determinism 都有生产 mutation；
 - 架构审查：R3 canonical profile 已沿 package query、Compiler、Image 与 Session 执行；independent reference 与产品/Legacy 零 kernel/link/runtime 依赖；
 - 状态审查：R3-YYZ-001 保持 `review` 与 `assignee:null`，R3-FIX-001/R3-DIA-001/R4+ 未启动；该状态不构成 owner gate approval 或任务完成声明。

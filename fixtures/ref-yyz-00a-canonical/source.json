@@ -4,8 +4,8 @@
   "profile_id": "profile.yyz.00a.abstract-engineering-baseline@1",
   "mission_id": "mission.yyz.00a.abstract-engineering-baseline@1",
   "plan_id": "plan.yyz.00a.abstract-engineering-baseline",
-  "status": "executable-domain-locked",
-  "claim_scope": "Abstract engineering qualification for source mapping, deterministic product execution, domain preservation, and independent agreement. No real-aircraft accuracy, stability, overshoot, or completed 30-second trajectory claim is made.",
+  "status": "executable-target-conformance",
+  "claim_scope": "Abstract engineering qualification for source mapping, deterministic product execution, explicit synthetic aerodynamic applicability, and a completed 30-second product trajectory. No real-aircraft aerodynamic accuracy, stability, or certification claim is made.",
   "author_input": {
     "duration_s": "30",
     "base_rate_hz": 100,
@@ -66,14 +66,14 @@
       "guidance_to_controller": "HeldLatest",
       "controller_to_actuator": "HeldLatest"
     },
-    "image_fingerprint": "e981118b136b3e6872da40a00c296153b9ad26e144c7882341b64b30b219574c",
+    "image_fingerprint": "4faccb3be9c6b760591b286c8996322069c7e0c1ba1668dcdf8946fb36c263ff",
     "interval_one_image_fingerprint": "7d1fbe1fa09ca555420ed3cc14a05d1f2994c6501b17cd3991355520fc8e6f14"
   },
   "asset_index_lock": {
     "path": "fixtures/ref-yyz-001/asset-index.json",
     "sha256": "570750a2d54d0a2ba67689b3da553ff100dfdf07bae4bddf7897de1f55ae122e",
     "identity": "asset-index.fixture.yyz.r0-qualification@1",
-    "promotion_policy": "Each selected payload is consumed byte-for-byte through its indexed identity and source case. Canonical changes are limited to the explicit author initial state, duration, cadence, frame mapping, and duration termination threshold."
+    "promotion_policy": "The indexed R0 assets remain frozen. Canonical 00A selects one explicitly identified synthetic aerodynamic successor derived from the frozen eight-corner multiaffine relation; every other selected payload remains byte-for-byte indexed."
   },
   "promoted_assets": [
     {
@@ -99,14 +99,16 @@
     },
     {
       "role": "aerodynamics",
-      "asset_id": "aero-table.fixture.yyz.multiaffine@1",
+      "asset_id": "aero-table.fixture.yyz.00a-synthetic-multiaffine@2",
       "asset_schema_id": "gnc.asset.yyz.aerodynamic-table.multiaffine@1",
-      "revision": 1,
-      "index_role": "aerodynamics",
-      "source_path": "fixtures/ref-yyz-frozen-interval/cases.json",
-      "source_sha256": "17609b48b02c43bfe9e103218cba04210bcb93938fbfbc332935225461cf0bc6",
-      "source_pointer": "/cases/CASE-YYZ-FROZEN-INTERVAL-COMPOSED-TRAJECTORY/aero_lookup",
-      "applicability": "Inclusive Mach [0.2,0.6], alpha [-0.1,0.1] rad, beta [-0.05,0.05] rad, zero body rates, zero surface state, and configuration.fixture.yyz.clean@1. Queries outside the closed box fail without clamping."
+      "revision": 2,
+      "base_index_role": "aerodynamics",
+      "successor_of_asset_id": "aero-table.fixture.yyz.multiaffine@1",
+      "source_path": "fixtures/ref-yyz-00a-canonical/aerodynamic-synthetic.json",
+      "source_sha256": "59673c1505fc6d73648c546e3ac78d80317532e9d9799771a0ca780fcc3f855f",
+      "source_pointer": "/asset",
+      "generation_rule": "Original corner bytes are retained. Added nodes evaluate the same analytic multiaffine relation fixed by the original eight corners.",
+      "applicability": "Inclusive Mach [0.2,0.8], alpha [-pi,pi] rad, beta [-pi/2,pi/2] rad, zero body rates, zero surface state, and configuration.fixture.yyz.clean@1. The angular range is the complete finite atan2 coordinate range selected after the observed tick-9 alpha query of 0.113627 rad exceeded the initial [-0.1,0.1] successor. Queries outside the closed box fail without clamping, runtime extrapolation, or automatic domain growth."
     },
     {
       "role": "propulsion",
@@ -158,16 +160,49 @@
     "tolerance_source": "accepted REF-YYZ mission-composition numerical policy",
     "terminal_verdict_rule": "A candidate terminal science verdict is permitted only when unresolved_count is zero."
   },
-  "expected_domain_outcome": {
+  "owner_resolution": {
+    "decision": "Use a synthetic multiaffine aerodynamic fixture successor for canonical 00A while preserving all author inputs and the generic trilinear query.",
+    "initial_successor_domain": {
+      "mach": ["0.2", "0.8"],
+      "alpha_rad": ["-0.1", "0.1"],
+      "beta_rad": ["-0.05", "0.05"]
+    },
+    "observed_followup_domain_failure": {
+      "committed_tick": 9,
+      "mach": "0.617102",
+      "alpha_rad": "0.113627",
+      "beta_rad": "0"
+    },
+    "single_finite_adjustment": "Retain Mach [0.2,0.8] and extend alpha/beta to their complete finite atan2 coordinate ranges using the same multiaffine relation."
+  },
+  "expected_product_outcome": {
     "requested_horizon_ticks": 3000,
-    "failure_tick": 0,
     "model_id": "gnc.package.yyz.aerodynamic-table.multiaffine.experimental@1",
-    "asset_id": "aero-table.fixture.yyz.multiaffine@1",
-    "input_mach": "0.61764705882352941176470588235294117647058823529411764705882352941176470588235294",
-    "closed_mach_domain": ["0.2", "0.6"],
-    "status": "OutOfRange",
-    "detail": "table-query",
-    "committed_intervals": 0,
-    "trajectory_status": "unavailable-after-opening-domain-failure"
+    "old_asset_id": "aero-table.fixture.yyz.multiaffine@1",
+    "new_asset_id": "aero-table.fixture.yyz.00a-synthetic-multiaffine@2",
+    "opening_query": {
+      "airspeed_mps": "210",
+      "mach": "0.61764705882352941176470588235294117647058823529411764705882352941176470588235294",
+      "alpha_rad": "0",
+      "beta_rad": "0",
+      "old_asset_status": "OutOfRange",
+      "new_asset_status": "Success"
+    },
+    "closed_domain": {
+      "mach": ["0.2", "0.8"],
+      "alpha_rad": ["-3.14159265358979323846", "3.14159265358979323846"],
+      "beta_rad": ["-1.57079632679489661923", "1.57079632679489661923"]
+    },
+    "terminal_status": "Completed",
+    "terminal_reason": "duration-complete",
+    "terminal_tick": 3000,
+    "committed_intervals": 3000,
+    "actual_query_envelope": {
+      "mach": ["0.30237994030302495", "0.61764705882352944"],
+      "alpha_rad": ["-3.1412239572488261", "3.1397707600310452"],
+      "beta_rad": ["-1.4925695311254403", "1.4441212960610592"]
+    },
+    "deterministic_repetitions": 2,
+    "verdict": "abstract_engineering_target_conformance"
   }
 }

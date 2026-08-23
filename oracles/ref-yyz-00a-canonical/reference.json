@@ -1,23 +1,51 @@
 {
   "aerodynamic_domain": {
     "alpha_axis_rad": [
+      "-3.141592653589793",
+      "-0.1",
+      "0.1",
+      "3.141592653589793"
+    ],
+    "asset_id": "aero-table.fixture.yyz.00a-synthetic-multiaffine@2",
+    "baseline_alpha_axis_rad": [
       "-0.1",
       "0.1"
     ],
-    "asset_id": "aero-table.fixture.yyz.multiaffine@1",
-    "beta_axis_rad": [
+    "baseline_asset_id": "aero-table.fixture.yyz.multiaffine@1",
+    "baseline_beta_axis_rad": [
       "-0.05",
       "0.05"
     ],
-    "detail": "table-query",
-    "failure_tick": 0,
-    "inside": false,
-    "mach_axis": [
+    "baseline_mach_axis": [
       "0.2",
       "0.6"
     ],
+    "baseline_opening_status": "OutOfRange",
+    "beta_axis_rad": [
+      "-1.5707963267948966",
+      "-0.05",
+      "0.05",
+      "1.5707963267948966"
+    ],
+    "detail": "table-query",
+    "generation_verified": true,
+    "inside": true,
+    "mach_axis": [
+      "0.2",
+      "0.6",
+      "0.8"
+    ],
     "model_id": "gnc.package.yyz.aerodynamic-table.multiaffine.experimental@1",
-    "status": "OutOfRange"
+    "old_domain_equivalence_verified": true,
+    "opening_coefficients": [
+      "0.044705882352941177352941176470588235294117647058823529411764705882352941176470586",
+      "0",
+      "0",
+      "0",
+      "-0.037647058823529411764705882352941176470588235294117647058823529411764705882352938",
+      "0"
+    ],
+    "status": "Success"
   },
   "cadence_and_hold": {
     "base_dt_s": "0.01",
@@ -98,17 +126,12 @@
     "terminal_tick": 3000
   },
   "downstream_model_reexpression": {
-    "frozen_interval_rk4": "classical RK4/FrozenInterval retained; no derivative stage is evaluated after the opening failure",
-    "metrics_and_terminal": "committed-boundary formulas retained; no terminal committed boundary exists",
-    "propulsion_mass_guidance_control_actuator": "guidance, controller, ideal actuator, propulsion and opening mass outputs are independently evaluated; mass candidate awaits a successful force closure"
+    "frozen_interval_rk4": "classical RK4/FrozenInterval is exercised only by the real product Session; this Decimal reference does not integrate a parallel trajectory",
+    "metrics_and_terminal": "terminal status, aggregate consistency, actual query envelope, and determinism are consumed from the C++ product probe and compared with owner-approved source expectations",
+    "propulsion_mass_guidance_control_actuator": "guidance, controller, ideal actuator, propulsion, opening mass, air data, and aerodynamic coefficients are independently evaluated"
   },
   "dt_ladder": {
-    "committed_intervals": [
-      0,
-      0,
-      0
-    ],
-    "status": "not-evaluated-domain-failure-before-first-derivative",
+    "status": "not-recomputed-for-canonical-product-trajectory",
     "steps_s": [
       "0.01",
       "0.005",
@@ -120,7 +143,7 @@
     "decimal_precision_digits": 80,
     "identity": "tools.yyz-00a-canonical-decimal-reference@1",
     "independence": "fixture-only Decimal formulas; no product kernel, adapter, C++ trace, or prior expected trajectory is imported",
-    "source_sha256": "b4e045237a87d85592b19d62863df95065ecf956146c4a131d7c0d890c41ab98"
+    "source_sha256": "f89fea7fd5ec31a6eaa537b908a9f569aa2fe3d5d21fce6ebac7d230a18897a7"
   },
   "mapping": {
     "body_down_enu": [
@@ -200,13 +223,20 @@
       "0",
       "0"
     ],
-    "aerodynamic_coefficients": "unavailable-OutOfRange",
+    "aerodynamic_coefficients": [
+      "0.044705882352941177352941176470588235294117647058823529411764705882352941176470586",
+      "0",
+      "0",
+      "0",
+      "-0.037647058823529411764705882352941176470588235294117647058823529411764705882352938",
+      "0"
+    ],
     "center_of_mass_body_m": [
       "0.2",
       "0",
       "0"
     ],
-    "closure_wrench": "unavailable-OutOfRange",
+    "closure_wrench": "product-Session evidence; no independent Python trajectory integration is performed",
     "controller_damping_moment_nm": "0",
     "controller_moment_nm": "0",
     "controller_pitch_error_rad": "0",
@@ -251,20 +281,63 @@
       "0"
     ]
   },
+  "owner_resolution": {
+    "decision": "Use a synthetic multiaffine aerodynamic fixture successor for canonical 00A while preserving all author inputs and the generic trilinear query.",
+    "initial_successor_domain": {
+      "alpha_rad": [
+        "-0.1",
+        "0.1"
+      ],
+      "beta_rad": [
+        "-0.05",
+        "0.05"
+      ],
+      "mach": [
+        "0.2",
+        "0.8"
+      ]
+    },
+    "observed_followup_domain_failure": {
+      "alpha_rad": "0.113627",
+      "beta_rad": "0",
+      "committed_tick": 9,
+      "mach": "0.617102"
+    },
+    "single_finite_adjustment": "Retain Mach [0.2,0.8] and extend alpha/beta to their complete finite atan2 coordinate ranges using the same multiaffine relation."
+  },
   "reference_id": "REFERENCE-YYZ-00A-CANONICAL-001",
   "schema_version": "gnczmkn.yyz-00a-independent-reference/1",
   "trajectory": {
-    "committed_intervals": 0,
-    "intermediate": "unavailable-domain-failure-before-first-interval",
+    "actual_query_envelope_expectation": {
+      "alpha_rad": [
+        "-3.1412239572488261",
+        "3.1397707600310452"
+      ],
+      "beta_rad": [
+        "-1.4925695311254403",
+        "1.4441212960610592"
+      ],
+      "mach": [
+        "0.30237994030302495",
+        "0.61764705882352944"
+      ]
+    },
+    "deterministic_repetitions": 2,
     "opening": "mapped-and-compared",
+    "product_terminal_expectation": {
+      "committed_intervals": 3000,
+      "reason": "duration-complete",
+      "status": "Completed",
+      "tick": 3000
+    },
+    "python_integration": "not-performed",
     "requested_duration_s": "3E+1",
     "requested_terminal_tick": 3000,
-    "status": "domain-locked-at-opening",
-    "terminal": "unavailable-domain-failure-before-first-interval"
+    "status": "product-evidence-required"
   },
   "verdict": {
-    "candidate_terminal_science_verdict": false,
-    "claim_bounds": "mapping, source identity, deterministic fail-closed execution, and independent opening-domain agreement only",
-    "status": "domain-blocked"
+    "candidate_terminal_science_verdict": true,
+    "claim_bounds": "abstract-engineering source, mapping, synthetic asset, cadence, deterministic product execution, and terminal evidence; no real-aircraft accuracy claim",
+    "status": "abstract_engineering_target_conformance"
   }
 }
