@@ -794,6 +794,7 @@ enum class CommandSubmissionReason : std::uint8_t {
     CapacityExceeded,
     MissingPayload,
     PayloadTypeMismatch,
+    PayloadRejected,
     CommandIdConflict,
     TransactionOpen,
     AllocationFailure,
@@ -1151,6 +1152,13 @@ class SessionCommandReducerEntry {
     virtual ~SessionCommandReducerEntry() = default;
     [[nodiscard]] virtual SessionCommandReducerIdentity identity()
         const noexcept = 0;
+    // Package-owned semantic validation runs before a command enters the
+    // per-Session ledger queue. Existing reducers accept every correctly
+    // typed payload unless they override this hook.
+    [[nodiscard]] virtual bool accepts_payload(
+        InProcessValueView) const noexcept {
+        return true;
+    }
     [[nodiscard]] virtual SessionResult reduce(
         const SessionCommandReductionContext& context,
         SessionCommandReductionResult& result) const noexcept = 0;

@@ -425,6 +425,18 @@ inline void validate_runtime_component(
         gnc::model_sdk::RuntimeCellProfile::Evaluator;
     const bool mode_owner = runtime.profile ==
         gnc::model_sdk::RuntimeCellProfile::ModeOwner;
+    const bool instant_patch_discrete =
+        discrete &&
+        obligations ==
+            std::set<gnc::model_sdk::RuntimeExecutionObligation>{
+                gnc::model_sdk::RuntimeExecutionObligation::
+                    PublishProjection,
+                gnc::model_sdk::RuntimeExecutionObligation::
+                    BoundaryEvaluation,
+                gnc::model_sdk::RuntimeExecutionObligation::
+                    CommandReduction,
+                gnc::model_sdk::RuntimeExecutionObligation::
+                    EventConsumption};
     const bool profile_contract =
         (sampled &&
          (model.placement ==
@@ -451,12 +463,13 @@ inline void validate_runtime_component(
         (discrete &&
          model.placement ==
              gnc::model_sdk::ModelPlacement::VehicleOutput &&
-         obligations ==
-             std::set<gnc::model_sdk::RuntimeExecutionObligation>{
-                 gnc::model_sdk::RuntimeExecutionObligation::
-                     PublishProjection,
-                 gnc::model_sdk::RuntimeExecutionObligation::
-                     IntervalEvolution} &&
+         (obligations ==
+              std::set<gnc::model_sdk::RuntimeExecutionObligation>{
+                  gnc::model_sdk::RuntimeExecutionObligation::
+                      PublishProjection,
+                  gnc::model_sdk::RuntimeExecutionObligation::
+                      IntervalEvolution} ||
+          instant_patch_discrete) &&
          runtime.state_owner.has_value()) ||
         (evaluator &&
          model.placement ==
@@ -489,7 +502,8 @@ inline void validate_runtime_component(
     if (runtime.state_owner.has_value()) {
         const auto& owner = *runtime.state_owner;
         const auto& schema = owner.schema;
-        const auto expected_evolution = mode_owner
+        const auto expected_evolution =
+            mode_owner || instant_patch_discrete
             ? gnc::model_sdk::StaticStateEvolution::InstantPatch
             : (continuous
                    ? gnc::model_sdk::StaticStateEvolution::
@@ -766,18 +780,47 @@ inline void validate_runtime_component(
                                 ? gnc::model_sdk::StaticStateReadKind::Candidate
                                 : gnc::model_sdk::StaticStateReadKind::Committed;
         } else if (discrete) {
-            expected_phase = entry.obligation ==
-                                     gnc::model_sdk::
-                                         RuntimeExecutionObligation::
-                                             PublishProjection
-                                 ? gnc::model_sdk::CoarsePhase::Publish
-                                 : gnc::model_sdk::CoarsePhase::Form;
-            expected_read = gnc::model_sdk::StaticStateReadKind::Committed;
-            if (entry.obligation ==
-                gnc::model_sdk::RuntimeExecutionObligation::
-                    IntervalEvolution) {
-                expected_write =
-                    gnc::model_sdk::StaticStateWriteKind::IntervalCandidate;
+            if (instant_patch_discrete) {
+                if (entry.obligation ==
+                    gnc::model_sdk::RuntimeExecutionObligation::
+                        PublishProjection) {
+                    expected_phase = gnc::model_sdk::CoarsePhase::Publish;
+                    expected_read =
+                        gnc::model_sdk::StaticStateReadKind::Committed;
+                } else if (entry.obligation ==
+                           gnc::model_sdk::RuntimeExecutionObligation::
+                               CommandReduction) {
+                    expected_phase = gnc::model_sdk::CoarsePhase::Process;
+                    expected_read =
+                        gnc::model_sdk::StaticStateReadKind::Committed;
+                    expected_write = gnc::model_sdk::StaticStateWriteKind::
+                        InstantPatch;
+                } else if (entry.obligation ==
+                           gnc::model_sdk::RuntimeExecutionObligation::
+                               EventConsumption) {
+                    expected_phase = gnc::model_sdk::CoarsePhase::Output;
+                } else if (entry.obligation ==
+                           gnc::model_sdk::RuntimeExecutionObligation::
+                               BoundaryEvaluation) {
+                    expected_phase = gnc::model_sdk::CoarsePhase::Output;
+                    expected_read =
+                        gnc::model_sdk::StaticStateReadKind::Candidate;
+                }
+            } else {
+                expected_phase = entry.obligation ==
+                                         gnc::model_sdk::
+                                             RuntimeExecutionObligation::
+                                                 PublishProjection
+                                     ? gnc::model_sdk::CoarsePhase::Publish
+                                     : gnc::model_sdk::CoarsePhase::Form;
+                expected_read =
+                    gnc::model_sdk::StaticStateReadKind::Committed;
+                if (entry.obligation ==
+                    gnc::model_sdk::RuntimeExecutionObligation::
+                        IntervalEvolution) {
+                    expected_write = gnc::model_sdk::StaticStateWriteKind::
+                        IntervalCandidate;
+                }
             }
         } else if (sampled) {
             expected_phase = model.placement ==

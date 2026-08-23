@@ -1,7 +1,7 @@
 {
   "schema_version": "gnczmkn.task-backlog/1",
   "current_gate": "R3",
-  "updated_at": "2026-08-22",
+  "updated_at": "2026-08-23",
   "status_values": ["planned", "ready", "in_progress", "blocked", "review", "done"],
   "tasks": [
     {
@@ -635,14 +635,14 @@
       "depends_on": ["R1-CTR-001", "R3-TXN-001", "R3-LIF-001"],
       "deliverables": ["Diagnostic pipeline", "Step/Run outcomes", "policy fixtures"],
       "acceptance": ["All public failures carry stable code, source/subject, cause and validity effect"],
-      "evidence": ["r3.kernel-session-materialization.probe and r3.kernel-step-transaction.probe cover the narrow in-process runtime path: stable initialization/reset/schedule/authorization/history/seal/candidate/invocation/allocation/internal mappings, stage/subject/RunId/tick/base-epoch/cause/validity facts, fixed FailOperation policy, StepOutcome, ResetOutcome, general Initialize/Reset run-start facts, immutable Completed/Cancelled/Failed RunOutcome, direct Completed/Cancelled/Failed drive status and stable sequence queries. Cancellation is a normal outcome with Valid committed evidence and no RuntimeDiagnostic. The complete DiagnosticRecord enrichment, configurable policy, renderer/store and durable artifact path remain open"],
+      "evidence": ["r3.kernel-session-materialization.probe and r3.kernel-step-transaction.probe cover the narrow in-process runtime path: stable initialization/reset/schedule/authorization/history/seal/candidate/invocation/allocation/internal mappings, stage/subject/RunId/tick/base-epoch/cause/validity facts, fixed FailOperation policy, StepOutcome, ResetOutcome, general Initialize/Reset run-start facts, immutable Completed/Cancelled/Failed RunOutcome, direct Completed/Cancelled/Failed drive status and stable sequence queries. Cancellation is a normal outcome with Valid committed evidence and no RuntimeDiagnostic. The complete DiagnosticRecord enrichment, configurable policy, renderer/store and durable artifact path remain open", "r3.kernel-stuck-actuator.probe separates three paths: a valid scheduled stuck transition commits one typed model event with no RuntimeDiagnostic; non-finite and out-of-range payloads receive stable PayloadRejected submission outcomes with no state/output/receipt/event mutation; reducer, downstream evaluation, observation seal and precommit failures produce RuntimeDiagnostic evidence with Unknown validity while atomically retaining the due command for retry"],
       "architecture_refs": ["07"]
     },
     {
       "id": "R3-YYZ-001",
       "stage": "R3",
       "title": "Run the YYZ package through the generic Compiler and Session",
-      "status": "review",
+      "status": "done",
       "priority": "P0",
       "size": "XL",
       "owner_role": "runtime_numerics_lead",
@@ -665,7 +665,7 @@
         "r3.kernel-yyz-00a-canonical.probe confirms the frozen old asset returns OutOfRange for the exact opening Mach 0.6176470588235294, while the synthetic successor succeeds through the same strict trilinear query and exactly preserves old-domain results. A real tick-9 Mach/alpha failure at 0.617102/0.113627 triggered the authorized single finite adjustment; the final closed domain is Mach [0.2,0.8], alpha [-pi,pi] and beta [-pi/2,pi/2], with no clamp, extrapolation or automatic domain growth. Malformed asset, malformed Image and unknown asset selection all fail closed",
         "Two real canonical Sessions each initialize the mapped 680 kg / 220 m/s state, commit every interval with four RK4 evaluations, preserve navigation/guidance/controller/actuator cadence 1/5/2/1 and HeldLatest ages 4/1, and finish Completed / duration-complete at tick 3000 with 3000 committed intervals. Terminal state, mass, aggregate, history and RunOutcome are self-consistent; all compared results are bit-deterministic across both runs. The observed Mach/alpha/beta envelope is [0.30237994030302495,0.61764705882352944] / [-3.1412239572488261,3.1397707600310452] / [-1.4925695311254403,1.4441212960610592]",
         "r3.yyz-00a-canonical.oracle independently verifies source and successor hashes, deterministic successor generation, 27 representative old-domain queries, mapping, cadence, air data and the opening trilinear coefficients with 80-digit Decimal arithmetic. It does not implement a second 3000-tick Session/RK4. The compact difference report compares the independent opening reference with the real product terminal evidence, has unresolved_count 0 and records verdict abstract_engineering_target_conformance",
-        "R3-YYZ-001 remains review with assignee null. Canonical mapping, source, frozen-old/new-successor asset provenance, opening reference agreement, two deterministic 3000-tick product runs, terminal outcome and difference report are delivered. The claim remains limited to abstract engineering target conformance; real-aircraft aerodynamics, geodetic mapping, atmosphere fidelity, stability and independent convergence remain scientific gaps. R3-FIX-001, R3-DIA-001 and R4+ are unchanged"
+        "Repository owner accepted commit aae74f3 on 2026-08-23 and closed R3-YYZ-001 at abstract_engineering_target_conformance. Canonical mapping, source, frozen-old/new-successor asset provenance, opening reference agreement, two deterministic 3000-tick product runs, terminal outcome and difference report are delivered. Real-aircraft aerodynamics, geodetic mapping, atmosphere fidelity, stability and independent convergence remain explicit scientific gaps outside this framework gate"
       ],
       "architecture_refs": ["00A", "15 §2–§9", "ADR-0023", "ADR-0024", "ADR-0025"]
     },
@@ -673,7 +673,7 @@
       "id": "R3-FIX-001",
       "stage": "R3",
       "title": "Add multi-entity, stuck-actuator and inactive-child activation fixtures",
-      "status": "planned",
+      "status": "review",
       "priority": "P1",
       "size": "XL",
       "owner_role": "validation_lead",
@@ -681,7 +681,7 @@
       "depends_on": ["R3-YYZ-001"],
       "deliverables": ["Two-entity causal fixture", "Stuck-actuator configuration/fault fixture", "StateFragment fault latch and owner reducer", "StepTransaction rollback and attribution checks", "Atomic activation fixture"],
       "acceptance": ["Fault state rolls back with its owner, attribution follows the committed StepTransaction, and no global truth, cross-owner write or runtime topology creation shortcut appears"],
-      "evidence": ["Vertical fixture reports"],
+      "evidence": ["r3.kernel-stuck-actuator.probe compiles a package-owned scheduled demand, stateful actuator with embedded FaultStateFragment, pressure surface load, vertical/pitch rigid owner and terminal contact evaluator through the generic Compiler/Image/Session path", "At tick 5 the typed command replaces the complete actuator owner block and affects the same-tick formal output; a later demand remains locked. Healthy and stuck runs finish with altitude 12.799 m / -15.601 m and clearance-maintained / ground-impact results, with exactly one committed application receipt and transition event", "Non-finite and out-of-range payloads fail admission without state/output/receipt/event mutation. Reducer, downstream evaluation, observation seal and precommit injections preserve committed actuator/rigid state and the due command; one retry commits exactly once. Shared-provider Sessions remain isolated, repeated runs are deterministic, and command-bearing checkpoint remains fail-closed", "This review covers only the scheduled stuck-actuator vertical slice. The two-entity causal fixture and inactive-child atomic activation fixture remain outstanding, so R3-FIX-001 is not complete"],
       "architecture_refs": ["13", "14", "15 §17–§18"]
     },
     {

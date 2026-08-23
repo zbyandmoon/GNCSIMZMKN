@@ -6081,8 +6081,11 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
                          "command-route/" + route.route_id &&
                      occurrence != plan.occurrences.end() &&
                      component != plan.runtime_components.end() &&
-                     component->profile ==
-                         gnc::model_sdk::RuntimeCellProfile::ModeOwner &&
+                         (component->profile ==
+                              gnc::model_sdk::RuntimeCellProfile::ModeOwner ||
+                          component->profile ==
+                              gnc::model_sdk::RuntimeCellProfile::
+                                  DiscreteStateProcessor) &&
                      state != plan.state_blocks.end() &&
                      state->evolution ==
                          gnc::model_sdk::StaticStateEvolution::InstantPatch &&
@@ -6159,7 +6162,7 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
             diagnostic(
                 diagnostics, CompleteDiagnosticCode::InvalidCommandRoute,
                 route.source, route.route_id,
-                "command route does not resolve exactly to one bounded ModeOwner InstantPatch reducer and transaction candidate");
+                "command route does not resolve exactly to one bounded state-owner InstantPatch reducer and transaction candidate");
         }
     }
 

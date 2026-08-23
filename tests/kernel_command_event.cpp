@@ -1839,14 +1839,16 @@ void verify_failure_rollback_and_retry(
         const auto before_histories = live.session->committed_histories();
         live.provider->control.omitted_projections_remaining = 1U;
         const auto failed = live.session->execute_step();
-        const auto* frozen = live.session->run_outcome();
         require(failed.status == kernel::StepStatus::Failed &&
                     failed.result.error ==
                         kernel::SessionError::FrameSlotAbsent &&
                     failed.primary_diagnostic.has_value() &&
                     failed.primary_diagnostic->stage ==
                         kernel::RuntimeDiagnosticStage::BoundaryInvocation &&
-                    live.session->state() == kernel::SessionState::Failed &&
+                    failed.primary_diagnostic->validity_effect ==
+                        contracts::EvidenceValidity::Unknown &&
+                    live.session->state() ==
+                        kernel::SessionState::Initialized &&
                     live.session->committed_epoch() == before_epoch &&
                     live.session->committed_tick() == before_tick &&
                     committed_mode(live).revision == 0U &&
@@ -1860,19 +1862,21 @@ void verify_failure_rollback_and_retry(
                         1U &&
                     live.session->command_application_receipts().empty() &&
                     live.session->committed_events().empty() &&
-                    frozen != nullptr &&
-                    frozen->final_status ==
-                        kernel::RunFinalStatus::Failed &&
-                    frozen->validity ==
-                        contracts::EvidenceValidity::Invalid,
-                "projection failure with a due command did not freeze the run at its committed boundary");
+                    live.session->run_outcome() == nullptr,
+                "projection failure leaked a staged command effect or froze a retriable run");
         const auto retry = live.session->execute_step();
-        require(retry.status == kernel::StepStatus::Failed &&
-                    retry.result.error ==
-                        kernel::SessionError::InvalidLifecycleTransition &&
-                    live.session->run_outcome() == frozen &&
-                    live.session->pending_command_count() == 1U,
-                "fatal projection failure allowed a same-Session command retry");
+        require(retry.status == kernel::StepStatus::Committed &&
+                    live.session->state() ==
+                        kernel::SessionState::Initialized &&
+                    live.session->committed_epoch() == before_epoch + 1U &&
+                    live.session->committed_tick() == before_tick + 1 &&
+                    committed_mode(live).mode == Mode::Active &&
+                    committed_mode(live).revision == 1U &&
+                    live.session->pending_command_count() == 0U &&
+                    live.session->command_application_receipts().size() ==
+                        1U &&
+                    live.session->committed_events().size() == 1U,
+                "retriable projection failure did not apply the due command exactly once on retry");
     }
 }
 

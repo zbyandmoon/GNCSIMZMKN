@@ -65,7 +65,8 @@ add_library(
     STATIC
         packages/yyz-rigid-step/src/rigid_step.cpp
         packages/yyz-rigid-step/src/mass_commit.cpp
-        packages/yyz-rigid-step/src/qualification_00a.cpp)
+        packages/yyz-rigid-step/src/qualification_00a.cpp
+        packages/yyz-rigid-step/src/scheduled_stuck_actuator.cpp)
 target_include_directories(
     yyz_rigid_step
     PUBLIC
@@ -328,6 +329,19 @@ if(GNC_BUILD_TESTS)
     endif()
     gnc_enable_warnings(gnc_kernel_command_event_probe)
 
+    # R3 scheduled stuck-actuator vertical slice with same-tick propagation.
+    add_executable(
+        gnc_kernel_stuck_actuator_probe
+        tests/kernel_stuck_actuator.cpp)
+    target_link_libraries(
+        gnc_kernel_stuck_actuator_probe
+        PRIVATE compiler kernel_session yyz_rigid_step)
+    if(MSVC)
+        target_compile_options(
+            gnc_kernel_stuck_actuator_probe PRIVATE /bigobj)
+    endif()
+    gnc_enable_warnings(gnc_kernel_stuck_actuator_probe)
+
     # R0 validation spike: intentionally isolated from product modules and Legacy.
     add_executable(
         gnc_scientific_conventions
@@ -581,6 +595,9 @@ if(GNC_BUILD_TESTS)
     add_test(
         NAME r3.kernel-command-event.probe
         COMMAND gnc_kernel_command_event_probe --self-check)
+    add_test(
+        NAME r3.kernel-stuck-actuator.probe
+        COMMAND gnc_kernel_stuck_actuator_probe --self-check)
     add_test(
         NAME r0.scientific-conventions.properties
         COMMAND gnc_scientific_conventions --self-check)
