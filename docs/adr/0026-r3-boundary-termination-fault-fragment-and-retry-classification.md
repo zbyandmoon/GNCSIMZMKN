@@ -27,7 +27,7 @@ The correction must remain Image-driven and package-typed. Kernel cannot interpr
 - Fault rollback is identical to owner rollback because the fault fragment is the complete actuator state authority.
 - Retry evidence now distinguishes a deliberately replayable command-side failure from a corrupted or incomplete scientific transaction.
 - The Image still contains no package-specific termination interpretation and no runtime topology mutation.
-- R3-FIX-001 remains `review`: the two-entity and inactive-child fixtures are separate required slices.
+- The corrected stuck-actuator slice now composes with the delivered two-entity and inactive-child fixtures. `R3-FIX-001` remains `review` only for repository-owner acceptance; technical evidence is complete.
 
 ## Alternatives considered
 

@@ -143,7 +143,7 @@
     "decimal_precision_digits": 80,
     "identity": "tools.yyz-00a-canonical-decimal-reference@1",
     "independence": "fixture-only Decimal formulas; no product kernel, adapter, C++ trace, or prior expected trajectory is imported",
-    "source_sha256": "f89fea7fd5ec31a6eaa537b908a9f569aa2fe3d5d21fce6ebac7d230a18897a7"
+    "source_sha256": "d3de4d75b6904dcc4dfea50636b2a2861fb981486a6ab4c64fa5b6819f77684d"
   },
   "mapping": {
     "body_down_enu": [

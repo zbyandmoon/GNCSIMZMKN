@@ -35,3 +35,4 @@ ADR 记录已经收窄到实现层的关键选择，并连接需求、架构分�
 - [0025 R3 00A passive attitude and exact qualification profile](0025-r3-00a-passive-attitude-and-qualification-profile.md)
 - [0026 R3 boundary-derived termination, fault fragments and retry classification](0026-r3-boundary-termination-fault-fragment-and-retry-classification.md)
 - [0027 R3 static cross-entity selector and atomic scope union](0027-r3-static-cross-entity-selector-and-atomic-scope-union.md)
+- [0028 R3 predeclared inactive-child atomic activation](0028-r3-predeclared-inactive-child-atomic-activation.md)

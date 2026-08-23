@@ -66,7 +66,7 @@
       "guidance_to_controller": "HeldLatest",
       "controller_to_actuator": "HeldLatest"
     },
-    "image_fingerprint": "4faccb3be9c6b760591b286c8996322069c7e0c1ba1668dcdf8946fb36c263ff",
+    "image_fingerprint": "65e00515234efcabfae14399e9fe6838d65248af2d9a598f50b09a3470131078",
     "interval_one_image_fingerprint": "7d1fbe1fa09ca555420ed3cc14a05d1f2994c6501b17cd3991355520fc8e6f14"
   },
   "asset_index_lock": {

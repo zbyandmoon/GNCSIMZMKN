@@ -6,6 +6,7 @@
 - Related task: R3-FIX-001
 - Architecture references: 04 typed ports and scope authority; 06 §7 and §19; 13; 14 §5–§10; 15 §17–§18
 - Extends: ADR-0014 canonical graph semantics; ADR-0017 in-process run lifecycle outcomes
+- Extended by: ADR-0028 predeclared inactive-child atomic activation
 
 ## Context
 
@@ -28,7 +29,7 @@ The executable slice needs two narrowly scoped static facts: an explicit read-on
 - A failure after A has produced a candidate can roll back A, a one-tick link owner, and B under one transaction.
 - The one-tick relation is represented by a B-owned committed link state: tick `k` stores A's current formal output and publishes it at tick `k+1` with its original source tick.
 - Image revision 4 remains an opt-in static extension. It does not add dynamic entity creation, an ECS, a graph database, a package dispatch branch, or a second state authority.
-- R3-FIX-001 remains `review` until the inactive-child activation slice and repository-owner acceptance are complete.
+- The inactive-child successor slice is delivered by ADR-0028. `R3-FIX-001` remains `review` for repository-owner acceptance; its technical fixture matrix is complete.
 
 ## Alternatives considered
 
@@ -49,4 +50,4 @@ The executable slice needs two narrowly scoped static facts: an explicit read-on
 
 ## Supersession rule
 
-Inactive or dynamically activated entities, asynchronous clocks, non-current temporal relations, multiple concurrent transactions, runtime topology edits, or cross-process selector representation require a successor decision with an executable consumer.
+Deactivation, multiple inactive children, asynchronous clocks, additional non-current temporal relations, multiple concurrent transactions, runtime topology edits, or cross-process selector representation require another successor decision with an executable consumer.

@@ -25,6 +25,18 @@
 
 `Conditional` 不能解锁会消费缺失契约的后续阶段。
 
+## R3 unsigned technical preflight（2026-08-24）
+
+本节只记录当前可执行技术输入，不构成 owner decision、签名或 M1 记录。
+
+| Gate | 技术状态 | 现有证据 | 明确 blocker |
+| --- | --- | --- | --- |
+| G4 | **Not ready** | normal/failure/cancel/terminal、command retry/fatal、multi-owner rollback 与 activation transaction matrices 可执行 | 架构 11 §8.2 的 `CriticalEvidence` sink 与 commit 后 `ExternalEffect` 路径尚未实现 |
+| G5 | **Technical evidence ready; owner decision pending** | `R3-YYZ-001` 已完成；stuck-actuator、two-entity causal 与 inactive-child activation fixtures 覆盖 owner、因果、原子提交/回滚、归因、隔离和确定性 | 仓库所有者尚未接受 `R3-FIX-001` 与 `R3-DIA-001`，也未作 G5 决定 |
+| G6 | **Not ready** | source/CMake guards 继续证明 Legacy 不进入当前产品 targets | `apps/cli/main.cpp` 仍是 composition/toolchain skeleton，尚无只走 Application→Compiler→Session 的新 runner；完整 R3/G6 deletion guard 仍为 `deferred-by-gate` |
+
+`R3-GATE-001` 保持 `planned`，signed M1 evidence bundle 尚未交付。R4～R8 继续锁定；本 preflight 不创建 gate 结论、release、tag 或解锁记录。
+
 R0 直接检查：
 
 ```powershell
