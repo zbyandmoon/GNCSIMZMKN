@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -30,6 +31,7 @@ using Image = contracts::ExecutionPlanImage;
 using CommittedHistorySampleProbe =
     ref_yyz::CommittedHistorySampleProbe;
 using CommittedRigidMassProbe = ref_yyz::CommittedRigidMassProbe;
+using MissionAccumulatorProbe = ref_yyz::MissionAccumulatorProbe;
 using MissionResultProbe = ref_yyz::MissionResultProbe;
 
 constexpr std::string_view kBaselineFingerprint =
@@ -131,6 +133,37 @@ template <std::size_t Size>
            lhs.minimum_remaining_mass_tick ==
                rhs.minimum_remaining_mass_tick &&
            lhs.terminal_tick == rhs.terminal_tick;
+}
+
+[[nodiscard]] bool exactly_same(
+    const MissionAccumulatorProbe& lhs,
+    const MissionAccumulatorProbe& rhs) noexcept {
+    return lhs.present == rhs.present &&
+           lhs.initialized == rhs.initialized &&
+           lhs.opening_tick == rhs.opening_tick &&
+           lhs.latest_tick == rhs.latest_tick &&
+           lhs.evaluated_sample_count == rhs.evaluated_sample_count &&
+           exact_double(lhs.duration_seconds, rhs.duration_seconds) &&
+           exact_double(lhs.downrange_meters, rhs.downrange_meters) &&
+           exact_double(lhs.vertical_displacement_meters,
+                        rhs.vertical_displacement_meters) &&
+           exact_double(lhs.remaining_mass_kilograms,
+                        rhs.remaining_mass_kilograms) &&
+           exact_double(lhs.consumed_mass_kilograms,
+                        rhs.consumed_mass_kilograms) &&
+           exact_double(lhs.terminal_speed_meters_per_second,
+                        rhs.terminal_speed_meters_per_second) &&
+           exact_double(lhs.peak_speed_meters_per_second,
+                        rhs.peak_speed_meters_per_second) &&
+           lhs.peak_speed_tick == rhs.peak_speed_tick &&
+           exact_double(lhs.maximum_downrange_meters,
+                        rhs.maximum_downrange_meters) &&
+           lhs.maximum_downrange_tick == rhs.maximum_downrange_tick &&
+           exact_double(lhs.minimum_remaining_mass_kilograms,
+                        rhs.minimum_remaining_mass_kilograms) &&
+           lhs.minimum_remaining_mass_tick ==
+               rhs.minimum_remaining_mass_tick &&
+           lhs.terminal_result_present == rhs.terminal_result_present;
 }
 
 [[nodiscard]] bool exactly_same(const kernel::RuntimeDiagnostic& lhs,
@@ -320,7 +353,8 @@ void verify_static_target_contract(
              yyz::kTruthPassthroughNavigationModelIdentity,
              yyz::kAltitudePitchGuidanceModelIdentity,
              yyz::kPitchMomentControllerModelIdentity,
-             yyz::kIdealBodyMomentActuatorModelIdentity}) {
+             yyz::kIdealBodyMomentActuatorModelIdentity,
+             yyz::kCommittedMissionAccumulatorModelIdentity}) {
         const auto& model = package_model(package, model_id);
         require(model.runtime_component.has_value() &&
                     model.runtime_component->schedule.step_interval == 1U &&
@@ -335,6 +369,25 @@ void verify_static_target_contract(
         *short_image, yyz::kPitchMomentControllerModelIdentity);
     const auto& actuator = image_component(
         *short_image, yyz::kIdealBodyMomentActuatorModelIdentity);
+    const auto& accumulator = image_component(
+        *short_image, yyz::kCommittedMissionAccumulatorModelIdentity);
+    const auto& runwide = image_component(
+        *short_image,
+        yyz::kRunwideCommittedMissionResultModelIdentity);
+    const auto window_history = std::find_if(
+        short_image->evaluator_histories().begin(),
+        short_image->evaluator_histories().end(), [](const auto& history) {
+            return history.history_depth ==
+                       yyz::kCommittedMissionHistoryDepth &&
+                   history.ordered_members.size() == 2U;
+        });
+    const auto runwide_history = std::find_if(
+        short_image->evaluator_histories().begin(),
+        short_image->evaluator_histories().end(), [](const auto& history) {
+            return history.history_depth ==
+                       yyz::kRunwideCommittedMissionHistoryDepth &&
+                   history.ordered_members.size() == 3U;
+        });
     require(short_image->clock().base_step_seconds == 0.01 &&
                 navigation.step_interval == 1U && navigation.offset == 0U &&
                 guidance.step_interval == 5U && guidance.offset == 0U &&
@@ -342,6 +395,17 @@ void verify_static_target_contract(
                 controller.max_input_age_steps == 4U &&
                 actuator.step_interval == 1U && actuator.offset == 0U &&
                 actuator.max_input_age_steps == 1U &&
+                accumulator.step_interval == 1U &&
+                accumulator.offset == 0U &&
+                runwide.step_interval == 0U &&
+                short_image->state_blocks().size() == 3U &&
+                short_image->transactions().size() == 1U &&
+                short_image->transactions().front().candidates.size() == 3U &&
+                short_image->evaluator_histories().size() == 2U &&
+                window_history !=
+                    short_image->evaluator_histories().end() &&
+                runwide_history !=
+                    short_image->evaluator_histories().end() &&
                 short_image->held_outputs().size() == 2U &&
                 short_image->observation_schedules().size() == 1U &&
                 short_image->observation_schedules().front().observation_id ==
@@ -417,6 +481,53 @@ struct SessionBundle {
             kernel::exact_run_binding(image)};
 }
 
+[[nodiscard]] kernel::ResetRequest reset_request(
+    const Image& image, std::string run_id) {
+    return {kernel::RunId(std::move(run_id)),
+            kernel::exact_run_binding(image)};
+}
+
+[[nodiscard]] kernel::RestoreRequest restore_request(
+    const Image& image, std::string run_id,
+    std::shared_ptr<const kernel::SessionCheckpoint> checkpoint) {
+    return {kernel::RunId(std::move(run_id)),
+            kernel::exact_run_binding(image), std::move(checkpoint)};
+}
+
+[[nodiscard]] kernel::CancellationRequest cancellation_request(
+    std::string request_id, std::string run_id) {
+    return {kernel::CancellationRequestId(std::move(request_id)),
+            kernel::RunId(std::move(run_id))};
+}
+
+[[nodiscard]] std::uint32_t accumulator_commit_coordination_subject(
+    const Image& image) {
+    const auto occurrence = std::find_if(
+        image.occurrences().begin(), image.occurrences().end(),
+        [](const auto& value) {
+            return value.definition_id ==
+                   yyz::kCommittedMissionAccumulatorModelIdentity;
+        });
+    require(occurrence != image.occurrences().end(),
+            "mission accumulator occurrence is missing");
+    const auto block = std::find_if(
+        image.state_blocks().begin(), image.state_blocks().end(),
+        [&occurrence](const auto& value) {
+            return value.owner_occurrence_handle == occurrence->handle;
+        });
+    require(block != image.state_blocks().end(),
+            "mission accumulator state block is missing");
+    const auto initial = std::find_if(
+        image.initial_bindings().begin(), image.initial_bindings().end(),
+        [&block](const auto& value) {
+            return value.committed_state_slot_handle ==
+                   block->committed_slot_handle;
+        });
+    require(initial != image.initial_bindings().end(),
+            "mission accumulator initial binding is missing");
+    return initial->handle;
+}
+
 [[nodiscard]] SessionBundle initialize_session(
     const std::shared_ptr<const Image>& image, std::string run_id,
     ref_yyz::AdapterOptions options = {}) {
@@ -473,7 +584,7 @@ void verify_observation_image_validation(
     return result;
 }
 
-[[nodiscard]] MissionResultProbe mission_result(
+[[nodiscard]] MissionResultProbe terminal_window_result(
     const SessionBundle& bundle) {
     MissionResultProbe result;
     const auto read =
@@ -481,6 +592,34 @@ void verify_observation_image_validation(
             *bundle.session, bundle.adapter, result);
     require(static_cast<bool>(read),
             std::string("mission result read failed: ") +
+                std::string(kernel::to_string(read.error)) + " handle=" +
+                std::to_string(read.image_handle) + " / " +
+                std::string(read.detail));
+    return result;
+}
+
+[[nodiscard]] MissionResultProbe runwide_result(
+    const SessionBundle& bundle) {
+    MissionResultProbe result;
+    const auto read =
+        ref_yyz::read_runwide_mission_result_for_qualification(
+            *bundle.session, bundle.adapter, result);
+    require(static_cast<bool>(read),
+            std::string("runwide mission result read failed: ") +
+                std::string(kernel::to_string(read.error)) + " handle=" +
+                std::to_string(read.image_handle) + " / " +
+                std::string(read.detail));
+    return result;
+}
+
+[[nodiscard]] MissionAccumulatorProbe mission_accumulator(
+    const SessionBundle& bundle) {
+    MissionAccumulatorProbe result;
+    const auto read =
+        ref_yyz::read_mission_accumulator_for_qualification(
+            *bundle.session, bundle.adapter, result);
+    require(static_cast<bool>(read),
+            std::string("mission accumulator read failed: ") +
                 std::string(kernel::to_string(read.error)) + " handle=" +
                 std::to_string(read.image_handle) + " / " +
                 std::string(read.detail));
@@ -589,16 +728,46 @@ void verify_short_target_run(
     const auto second_state = committed_state(second);
     const auto first_history = committed_history(first);
     const auto second_history = committed_history(second);
-    const auto first_result = mission_result(first);
-    const auto second_result = mission_result(second);
+    const auto first_result = terminal_window_result(first);
+    const auto second_result = terminal_window_result(second);
+    const auto first_runwide = runwide_result(first);
+    const auto second_runwide = runwide_result(second);
+    const auto first_accumulator = mission_accumulator(first);
+    const auto second_accumulator = mission_accumulator(second);
     require(exactly_same(first_state, second_state) &&
                 exactly_same(first_history, second_history) &&
                 exactly_same(first_result, second_result) &&
+                exactly_same(first_runwide, second_runwide) &&
+                exactly_same(first_accumulator, second_accumulator) &&
                 first.session->run_outcome() != nullptr &&
                 second.session->run_outcome() != nullptr &&
                 exactly_same(*first.session->run_outcome(),
                              *second.session->run_outcome()),
             "two short target runs were not bit-deterministic");
+    require(probe.terminal_evaluator_calls == 2U &&
+                first_result.present && first_result.completed &&
+                first_result.initial_tick == 29 &&
+                first_result.final_tick == kShortTerminalTick &&
+                first_result.reason_code == "duration-complete" &&
+                first_result.priority == 100 &&
+                first_result.evaluated_sample_count == 3U &&
+                std::abs(first_result.duration_seconds - 0.02) <= 1.0e-12 &&
+                first_runwide.present && first_runwide.completed &&
+                first_runwide.initial_tick == 0 &&
+                first_runwide.final_tick == kShortTerminalTick &&
+                first_runwide.reason_code == "duration-complete" &&
+                first_runwide.priority == 100 &&
+                first_runwide.evaluated_sample_count == 32U &&
+                std::abs(first_runwide.duration_seconds - 0.31) <= 1.0e-12 &&
+                first_accumulator.present &&
+                first_accumulator.initialized &&
+                first_accumulator.opening_tick == 0 &&
+                first_accumulator.latest_tick == 30 &&
+                first_accumulator.evaluated_sample_count == 31U &&
+                std::abs(first_accumulator.duration_seconds - 0.30) <=
+                    1.0e-12 &&
+                !first_accumulator.terminal_result_present,
+            "short target run did not separate window and runwide coverage");
 
     const auto zero_image = zero_control_image(kShortTerminalTick);
     auto zero = initialize_session(zero_image, "run:00a-short-zero-control");
@@ -634,9 +803,13 @@ void verify_two_session_isolation(
             "isolation Session initialization failed");
     CommittedRigidMassProbe idle_before;
     CommittedRigidMassProbe idle_after;
+    MissionAccumulatorProbe idle_accumulator_before;
+    MissionAccumulatorProbe idle_accumulator_after;
     require(static_cast<bool>(
                 ref_yyz::read_committed_rigid_mass_for_qualification(
-                    *second, adapter, idle_before)),
+                    *second, adapter, idle_before)) &&
+                ref_yyz::read_mission_accumulator_for_qualification(
+                    *second, adapter, idle_accumulator_before),
             "idle sibling opening state read failed");
     const auto idle_epoch = second->committed_epoch();
     const auto idle_tick = second->committed_tick();
@@ -644,20 +817,185 @@ void verify_two_session_isolation(
             "first isolation step failed");
     require(ref_yyz::read_committed_rigid_mass_for_qualification(
                 *second, adapter, idle_after) &&
+                ref_yyz::read_mission_accumulator_for_qualification(
+                    *second, adapter, idle_accumulator_after) &&
                 second->committed_epoch() == idle_epoch &&
                 second->committed_tick() == idle_tick &&
-                exactly_same(idle_before, idle_after),
+                exactly_same(idle_before, idle_after) &&
+                exactly_same(idle_accumulator_before,
+                             idle_accumulator_after) &&
+                idle_accumulator_after.present &&
+                !idle_accumulator_after.initialized,
             "one Session mutated its idle sibling");
     require(first->run_to_terminal() && second->run_to_terminal(),
             "isolation Sessions did not complete");
     CommittedRigidMassProbe first_final;
     CommittedRigidMassProbe second_final;
+    MissionAccumulatorProbe first_accumulator;
+    MissionAccumulatorProbe second_accumulator;
+    MissionResultProbe first_runwide;
+    MissionResultProbe second_runwide;
     require(ref_yyz::read_committed_rigid_mass_for_qualification(
                 *first, adapter, first_final) &&
                 ref_yyz::read_committed_rigid_mass_for_qualification(
                     *second, adapter, second_final) &&
-                exactly_same(first_final, second_final),
+                ref_yyz::read_mission_accumulator_for_qualification(
+                    *first, adapter, first_accumulator) &&
+                ref_yyz::read_mission_accumulator_for_qualification(
+                    *second, adapter, second_accumulator) &&
+                ref_yyz::read_runwide_mission_result_for_qualification(
+                    *first, adapter, first_runwide) &&
+                ref_yyz::read_runwide_mission_result_for_qualification(
+                    *second, adapter, second_runwide) &&
+                exactly_same(first_final, second_final) &&
+                exactly_same(first_accumulator, second_accumulator) &&
+                exactly_same(first_runwide, second_runwide),
             "isolated Sessions produced different final states");
+}
+
+void verify_accumulator_rollback_and_cancellation(
+    const std::shared_ptr<const Image>& image) {
+    {
+        ref_yyz::AdapterOptions options;
+        options.fail_cycle_output_seal_clone = true;
+        auto bundle = initialize_session(
+            image, "run:00a-accumulator-rollback", options);
+        const auto before = mission_accumulator(bundle);
+        const auto failed = bundle.session->execute_step();
+        const auto after = mission_accumulator(bundle);
+        require(!failed &&
+                    failed.result.error ==
+                        kernel::SessionError::ObservationSealFailed &&
+                    bundle.session->state() == kernel::SessionState::Failed &&
+                    bundle.session->committed_epoch() == 0U &&
+                    bundle.session->committed_tick() == 0 &&
+                    bundle.adapter.opening_boundary
+                            ->mission_accumulator_evolution_calls == 1U &&
+                    exactly_same(before, after) && after.present &&
+                    !after.initialized,
+                "precommit rollback published a staged mission aggregate");
+    }
+
+    {
+        constexpr std::string_view kRunId =
+            "run:00a-accumulator-cancel-precommit";
+        auto bundle = initialize_session(image, std::string(kRunId));
+        const auto before = mission_accumulator(bundle);
+        bundle.adapter.coordination->arm(
+            ref_yyz::AdapterCoordinationPoint::FinalPrecommit,
+            accumulator_commit_coordination_subject(*image));
+        kernel::StepOutcome step;
+        std::thread execution(
+            [&] { step = bundle.session->execute_step(); });
+        const auto reached =
+            bundle.adapter.coordination->wait_until_reached();
+        if (!reached) {
+            bundle.adapter.coordination->release();
+            execution.join();
+            require(false,
+                    "mission accumulator cancellation rendezvous failed");
+        }
+        const auto accepted = bundle.session->request_cancel(
+            cancellation_request(
+                "cancel:00a-accumulator-precommit", std::string(kRunId)));
+        bundle.adapter.coordination->release();
+        execution.join();
+        const auto after = mission_accumulator(bundle);
+        require(accepted &&
+                    step.status == kernel::StepStatus::Cancelled &&
+                    bundle.session->state() ==
+                        kernel::SessionState::Cancelled &&
+                    bundle.session->committed_epoch() == 0U &&
+                    bundle.session->committed_tick() == 0 &&
+                    bundle.adapter.opening_boundary
+                            ->mission_accumulator_evolution_calls == 1U &&
+                    exactly_same(before, after) && after.present &&
+                    !after.initialized,
+                "precommit cancellation published a staged mission aggregate");
+    }
+}
+
+void verify_accumulator_reset(
+    const std::shared_ptr<const Image>& image) {
+    auto bundle = initialize_session(
+        image, "run:00a-accumulator-reset-first");
+    require(static_cast<bool>(bundle.session->run_to_terminal()),
+            "mission accumulator reset fixture did not complete");
+    const auto first_runwide = runwide_result(bundle);
+    const auto reset = bundle.session->reset(
+        reset_request(*image, "run:00a-accumulator-reset-second"));
+    const auto reset_accumulator = mission_accumulator(bundle);
+    require(reset && reset.reset_commit &&
+                bundle.session->state() ==
+                    kernel::SessionState::Initialized &&
+                bundle.session->committed_tick() == 0 &&
+                reset_accumulator.present &&
+                !reset_accumulator.initialized &&
+                reset_accumulator.evaluated_sample_count == 0U &&
+                bundle.session->committed_outputs().empty(),
+            "ResetCommit retained the completed mission aggregate");
+    require(static_cast<bool>(bundle.session->run_to_terminal()),
+            "reset mission accumulator rerun did not complete");
+    const auto second_runwide = runwide_result(bundle);
+    require(exactly_same(first_runwide, second_runwide),
+            "fresh aggregate after ResetCommit changed the runwide result");
+    require(static_cast<bool>(bundle.session->dispose()) &&
+                bundle.adapter.trace->live_object_count() == 0U,
+            "mission accumulator dispose leaked a materialized object");
+}
+
+void verify_accumulator_checkpoint_restore(
+    const std::shared_ptr<const Image>& image) {
+    auto parent = initialize_session(
+        image, "run:00a-accumulator-checkpoint-parent");
+    require(static_cast<bool>(parent.session->execute_step()),
+            "checkpoint parent did not commit its first interval");
+    const auto checkpoint_accumulator = mission_accumulator(parent);
+    const auto captured = parent.session->checkpoint();
+    require(captured && captured.checkpoint != nullptr &&
+                captured.checkpoint_commit &&
+                checkpoint_accumulator.initialized &&
+                checkpoint_accumulator.opening_tick == 0 &&
+                checkpoint_accumulator.latest_tick == 0 &&
+                checkpoint_accumulator.evaluated_sample_count == 1U,
+            "checkpoint did not capture the first committed aggregate sample");
+    require(static_cast<bool>(parent.session->execute_step()),
+            "checkpoint parent did not commit its second interval");
+    const auto parent_second = mission_accumulator(parent);
+
+    auto child_adapter = ref_yyz::make_session_adapter(*image);
+    require(static_cast<bool>(child_adapter), child_adapter.error);
+    auto child_creation = kernel::create_session(
+        image, child_adapter.provider);
+    require(static_cast<bool>(child_creation),
+            "checkpoint child Session creation failed");
+    SessionBundle child{std::move(child_adapter),
+                        std::move(child_creation.session)};
+    const auto restored = child.session->restore(
+        restore_request(*image,
+                        "run:00a-accumulator-checkpoint-child",
+                        captured.checkpoint));
+    const auto child_restored = mission_accumulator(child);
+    require(restored && restored.restore_commit &&
+                child.session->committed_tick() == 1 &&
+                exactly_same(child_restored, checkpoint_accumulator) &&
+                parent_second.evaluated_sample_count == 2U &&
+                child_restored.evaluated_sample_count == 1U,
+            "checkpoint restore changed or shared the aggregate prefix");
+    require(static_cast<bool>(child.session->execute_step()),
+            "restored child did not commit its second interval");
+    const auto child_second = mission_accumulator(child);
+    require(exactly_same(parent_second, child_second),
+            "restored child did not reproduce the aggregate suffix");
+    require(parent.session->run_to_terminal() &&
+                child.session->run_to_terminal(),
+            "checkpoint branches did not complete");
+    require(exactly_same(runwide_result(parent), runwide_result(child)) &&
+                exactly_same(terminal_window_result(parent),
+                             terminal_window_result(child)) &&
+                exactly_same(mission_accumulator(parent),
+                             mission_accumulator(child)),
+            "checkpoint branches produced different committed evaluations");
 }
 
 struct LongRunCapture {
@@ -665,7 +1003,9 @@ struct LongRunCapture {
     kernel::RunDriveOutcome drive;
     CommittedRigidMassProbe state;
     std::vector<CommittedHistorySampleProbe> history;
+    MissionAccumulatorProbe accumulator;
     MissionResultProbe terminal_window;
+    MissionResultProbe runwide;
     kernel::RunOutcome outcome;
 };
 
@@ -677,15 +1017,20 @@ struct LongRunCapture {
     const auto drive = bundle.session->run_to_terminal();
     const auto state = committed_state(bundle);
     const auto history = committed_history(bundle);
+    const auto accumulator = mission_accumulator(bundle);
     const auto terminal_window =
         drive.status == kernel::RunDriveStatus::Completed
-            ? mission_result(bundle)
+            ? terminal_window_result(bundle)
+            : MissionResultProbe{};
+    const auto runwide =
+        drive.status == kernel::RunDriveStatus::Completed
+            ? runwide_result(bundle)
             : MissionResultProbe{};
     require(bundle.session->run_outcome() != nullptr,
             "long run outcome is missing");
     const auto outcome = *bundle.session->run_outcome();
-    return {std::move(bundle), drive, state, history, terminal_window,
-            outcome};
+    return {std::move(bundle), drive, state, history, accumulator,
+            terminal_window, runwide, outcome};
 }
 
 void require_completed_long_run(const LongRunCapture& capture,
@@ -762,11 +1107,11 @@ void verify_terminal_window_result(const LongRunCapture& capture) {
     const double expected_consumed_mass =
         opening.state.mass_kilograms - closing.state.mass_kilograms;
     const auto& result = capture.terminal_window;
-    require(result.present && !result.completed &&
+    require(result.present && result.completed &&
                 result.initial_tick == 2998 && result.final_tick == 3000 &&
                 std::abs(result.final_time_seconds - 30.0) <= 1.0e-12 &&
-                result.reason_code == "remaining-mass-floor" &&
-                result.priority == 300 &&
+                result.reason_code == "duration-complete" &&
+                result.priority == 100 &&
                 result.evaluated_sample_count == 3U &&
                 std::abs(result.duration_seconds - 0.02) <= 1.0e-12 &&
                 std::abs(result.downrange_meters - expected_downrange) <=
@@ -792,6 +1137,82 @@ void verify_terminal_window_result(const LongRunCapture& capture) {
                 result.minimum_remaining_mass_tick == minimum_mass_tick &&
                 result.terminal_tick == 3000,
             "terminal rolling-window result claims inconsistent coverage");
+}
+
+void verify_runwide_result(const LongRunCapture& capture) {
+    const auto& aggregate = capture.accumulator;
+    const auto& result = capture.runwide;
+    const auto& final_state = capture.state;
+    const double final_speed = std::sqrt(
+        final_state.velocity[0U] * final_state.velocity[0U] +
+        final_state.velocity[1U] * final_state.velocity[1U] +
+        final_state.velocity[2U] * final_state.velocity[2U]);
+    const double final_downrange = final_state.position[0U];
+    const double final_vertical_displacement =
+        final_state.position[2U] - 1000.0;
+    const double expected_peak_speed =
+        final_speed > aggregate.peak_speed_meters_per_second
+            ? final_speed
+            : aggregate.peak_speed_meters_per_second;
+    const auto expected_peak_speed_tick =
+        final_speed > aggregate.peak_speed_meters_per_second
+            ? std::int64_t{3000}
+            : aggregate.peak_speed_tick;
+    const double expected_maximum_downrange =
+        final_downrange > aggregate.maximum_downrange_meters
+            ? final_downrange
+            : aggregate.maximum_downrange_meters;
+    const auto expected_maximum_downrange_tick =
+        final_downrange > aggregate.maximum_downrange_meters
+            ? std::int64_t{3000}
+            : aggregate.maximum_downrange_tick;
+    const double expected_minimum_mass =
+        final_state.mass_kilograms <
+                aggregate.minimum_remaining_mass_kilograms
+            ? final_state.mass_kilograms
+            : aggregate.minimum_remaining_mass_kilograms;
+    const auto expected_minimum_mass_tick =
+        final_state.mass_kilograms <
+                aggregate.minimum_remaining_mass_kilograms
+            ? std::int64_t{3000}
+            : aggregate.minimum_remaining_mass_tick;
+
+    require(aggregate.present && aggregate.initialized &&
+                aggregate.opening_tick == 0 &&
+                aggregate.latest_tick == 2999 &&
+                aggregate.evaluated_sample_count == 3000U &&
+                std::abs(aggregate.duration_seconds - 29.99) <= 1.0e-12 &&
+                !aggregate.terminal_result_present &&
+                result.present && result.completed &&
+                result.initial_tick == 0 && result.final_tick == 3000 &&
+                result.terminal_tick == 3000 &&
+                std::abs(result.final_time_seconds - 30.0) <= 1.0e-12 &&
+                result.reason_code == "duration-complete" &&
+                result.priority == 100 &&
+                result.evaluated_sample_count == 3001U &&
+                std::abs(result.duration_seconds - 30.0) <= 1.0e-12 &&
+                std::abs(result.downrange_meters - final_downrange) <=
+                    1.0e-12 &&
+                std::abs(result.vertical_displacement_meters -
+                         final_vertical_displacement) <= 1.0e-12 &&
+                std::abs(result.remaining_mass_kilograms - 85.0) <=
+                    1.0e-9 &&
+                std::abs(result.consumed_mass_kilograms - 15.0) <=
+                    1.0e-9 &&
+                std::abs(result.terminal_speed_meters_per_second -
+                         final_speed) <= 1.0e-12 &&
+                std::abs(result.peak_speed_meters_per_second -
+                         expected_peak_speed) <= 1.0e-12 &&
+                result.peak_speed_tick == expected_peak_speed_tick &&
+                std::abs(result.maximum_downrange_meters -
+                         expected_maximum_downrange) <= 1.0e-12 &&
+                result.maximum_downrange_tick ==
+                    expected_maximum_downrange_tick &&
+                std::abs(result.minimum_remaining_mass_kilograms -
+                         expected_minimum_mass) <= 1.0e-12 &&
+                result.minimum_remaining_mass_tick ==
+                    expected_minimum_mass_tick,
+            "runwide result does not cover committed ticks 0 through 3000");
 }
 
 [[nodiscard]] LongRunCapture intentional_early_failure(
@@ -838,17 +1259,22 @@ void verify_long_target_run() {
                     second.bundle.session->committed_epoch() &&
                 exactly_same(first.state, second.state) &&
                 exactly_same(first.history, second.history) &&
+                exactly_same(first.accumulator, second.accumulator) &&
                 exactly_same(first.terminal_window,
                              second.terminal_window) &&
+                exactly_same(first.runwide, second.runwide) &&
                 exactly_same(first.outcome, second.outcome),
             "two completed 3000-tick target runs were not deterministic");
     verify_terminal_window_result(first);
     verify_terminal_window_result(second);
+    verify_runwide_result(first);
+    verify_runwide_result(second);
     verify_early_failure_is_rejected(image);
 
     std::cout <<
         "target_conformance science_verdict_pending long_run=completed"
-        " terminal_tick=3000 terminal_window_ticks=2998..3000"
+        " terminal_window=diagnostic"
+        " window_initial_tick=2998 window_terminal_tick=3000"
         " window_duration_s=" << first.terminal_window.duration_seconds <<
         " window_downrange_m=" <<
         first.terminal_window.downrange_meters <<
@@ -866,16 +1292,46 @@ void verify_long_target_run() {
         first.terminal_window.maximum_downrange_tick <<
         " window_min_mass_kg=" <<
         first.terminal_window.minimum_remaining_mass_kilograms << '@' <<
-        first.terminal_window.minimum_remaining_mass_tick << '\n';
+        first.terminal_window.minimum_remaining_mass_tick <<
+        " runwide_result=completed initial_tick=" <<
+        first.runwide.initial_tick <<
+        " terminal_tick=" << first.runwide.final_tick <<
+        " duration_s=" << first.runwide.duration_seconds <<
+        " reason=" << first.runwide.reason_code <<
+        " evaluated_sample_count=" <<
+        first.runwide.evaluated_sample_count <<
+        " runwide_downrange_m=" << first.runwide.downrange_meters <<
+        " runwide_vertical_displacement_m=" <<
+        first.runwide.vertical_displacement_meters <<
+        " runwide_consumed_mass_kg=" <<
+        first.runwide.consumed_mass_kilograms <<
+        " runwide_final_mass_kg=" <<
+        first.runwide.remaining_mass_kilograms <<
+        " runwide_peak_speed_mps=" <<
+        first.runwide.peak_speed_meters_per_second << '@' <<
+        first.runwide.peak_speed_tick <<
+        " runwide_max_downrange_m=" <<
+        first.runwide.maximum_downrange_meters << '@' <<
+        first.runwide.maximum_downrange_tick <<
+        " runwide_min_mass_kg=" <<
+        first.runwide.minimum_remaining_mass_kilograms << '@' <<
+        first.runwide.minimum_remaining_mass_tick << '\n';
 }
 
-void run() {
+void run_short() {
     verify_navigation_oracle();
     const auto short_image = target_image(kShortTerminalTick);
     verify_static_target_contract(short_image);
     verify_observation_image_validation(short_image);
     verify_short_target_run(short_image);
     verify_two_session_isolation(short_image);
+    verify_accumulator_rollback_and_cancellation(short_image);
+    verify_accumulator_reset(short_image);
+    verify_accumulator_checkpoint_restore(short_image);
+}
+
+void run() {
+    run_short();
     verify_long_target_run();
 }
 
@@ -896,10 +1352,12 @@ int main(int argc, char** argv) {
     const bool early_failure_exit =
         argc == 2 &&
         std::string_view(argv[1]) == "--intentional-early-failure";
-    if (!self_check && !early_failure_exit) {
+    const bool short_check =
+        argc == 2 && std::string_view(argv[1]) == "--short-check";
+    if (!self_check && !early_failure_exit && !short_check) {
         std::cerr <<
             "usage: gnc_kernel_yyz_target_rate_probe "
-            "--self-check|--intentional-early-failure\n";
+            "--self-check|--short-check|--intentional-early-failure\n";
         return 2;
     }
     try {
@@ -909,6 +1367,12 @@ int main(int argc, char** argv) {
                 "R3 YYZ 00A target-rate conformance: FAIL: "
                 "intentional early failure was accepted\n";
             return 1;
+        }
+        if (short_check) {
+            run_short();
+            std::cout <<
+                "R3 YYZ 00A target-rate short lifecycle: PASS\n";
+            return 0;
         }
         run();
         std::cout <<

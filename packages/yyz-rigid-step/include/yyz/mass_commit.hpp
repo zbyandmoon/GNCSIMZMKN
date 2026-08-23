@@ -5,6 +5,7 @@
 #include <gnc/model_sdk/static_implementation.hpp>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -144,11 +145,44 @@ inline constexpr std::uint32_t
     kCommittedMissionResultConfigSchemaVersion = 1U;
 inline constexpr std::string_view kCommittedMissionResultRecipeIdentity =
     "gnc.package.yyz.committed-mission-result.recipe@1";
+inline constexpr std::string_view kCommittedMissionAccumulatorModelIdentity =
+    "gnc.package.yyz.committed-mission-accumulator.experimental@1";
+inline constexpr std::string_view kCommittedMissionAccumulatorModelVersion =
+    "0.1.0";
+inline constexpr std::string_view
+    kCommittedMissionAccumulatorRecipeIdentity =
+        "gnc.package.yyz.committed-mission-accumulator.recipe@1";
+inline constexpr std::string_view
+    kRunwideCommittedMissionResultModelIdentity =
+        "gnc.package.yyz.runwide-committed-mission-result.experimental@1";
+inline constexpr std::string_view
+    kRunwideCommittedMissionResultModelVersion = "0.1.0";
+inline constexpr std::string_view
+    kRunwideCommittedMissionResultRecipeIdentity =
+        "gnc.package.yyz.runwide-committed-mission-result.recipe@1";
 inline constexpr std::string_view
     kCommittedRigidMassSequenceContractIdentity =
         "gnc.contract.yyz.committed-rigid-mass-sequence@1";
 inline constexpr std::string_view kCommittedMissionResultContractIdentity =
     "gnc.contract.yyz.committed-mission-result@1";
+inline constexpr std::string_view
+    kCommittedMissionAccumulatorContractIdentity =
+        "gnc.contract.yyz.committed-mission-accumulator@1";
+inline constexpr std::string_view
+    kCommittedMissionAccumulatorPublishInputContractIdentity =
+        "gnc.contract.yyz.committed-mission-accumulator-publish-input@1";
+inline constexpr std::string_view
+    kCommittedMissionAccumulatorIntervalInputContractIdentity =
+        "gnc.contract.yyz.committed-mission-accumulator-interval-input@1";
+inline constexpr std::string_view
+    kCommittedMissionAccumulatorEvolutionOutputContractIdentity =
+        "gnc.contract.yyz.committed-mission-accumulator-evolution-output@1";
+inline constexpr std::string_view
+    kRunwideCommittedMissionStateContractIdentity =
+        "gnc.contract.yyz.runwide-committed-mission-state@1";
+inline constexpr std::string_view
+    kRunwideCommittedMissionResultContractIdentity =
+        "gnc.contract.yyz.runwide-committed-mission-result@1";
 inline constexpr std::string_view
     kControlledRigidBoundaryPreparationContractIdentity =
         "gnc.contract.yyz.controlled-rigid-boundary-preparation@1";
@@ -167,6 +201,20 @@ inline constexpr std::string_view kMassFlowLayoutIdentity =
 inline constexpr std::string_view kMissionResultLayoutIdentity =
     "gnc.layout.yyz.committed-mission-result@1";
 inline constexpr std::string_view
+    kCommittedMissionAccumulatorStateSchemaIdentity =
+        "gnc.state-schema.yyz.committed-mission-accumulator@1";
+inline constexpr std::string_view
+    kCommittedMissionAccumulatorStateLayoutIdentity =
+        "gnc.layout.yyz.committed-mission-accumulator-state@1";
+inline constexpr std::string_view
+    kCommittedMissionAccumulatorInitialStateInputSchemaIdentity =
+        "gnc.initial-state-input.yyz.committed-mission-accumulator@1";
+inline constexpr std::uint32_t
+    kCommittedMissionAccumulatorInitialStateInputSchemaVersion = 1U;
+inline constexpr std::string_view
+    kRunwideCommittedMissionResultLayoutIdentity =
+        "gnc.layout.yyz.runwide-committed-mission-result@1";
+inline constexpr std::string_view
     kControlledRigidBoundaryPreparationLayoutIdentity =
         "gnc.layout.yyz.controlled-rigid-boundary-preparation@1";
 inline constexpr std::uint32_t kCommittedMissionHistoryDepth = 3U;
@@ -174,6 +222,14 @@ inline constexpr std::string_view kCommittedMissionRigidHistoryMemberId =
     "rigid_states";
 inline constexpr std::string_view kCommittedMissionMassHistoryMemberId =
     "mass_states";
+inline constexpr std::uint32_t kRunwideCommittedMissionHistoryDepth = 1U;
+inline constexpr std::string_view
+    kRunwideCommittedMissionAccumulatorHistoryMemberId =
+        "mission_accumulator";
+inline constexpr std::string_view
+    kRunwideCommittedMissionRigidHistoryMemberId = "rigid_state";
+inline constexpr std::string_view
+    kRunwideCommittedMissionMassHistoryMemberId = "mass_state";
 
 inline constexpr gnc::foundation::AlgorithmIdentity
     kScalarBurnMassKernelIdentity{
@@ -228,6 +284,20 @@ inline constexpr gnc::foundation::AlgorithmIdentity
         "gnc.package.yyz.committed-mission-result.history-adapter@1",
         "0.1.0"};
 inline constexpr gnc::foundation::AlgorithmIdentity
+    kCommittedMissionAccumulatorInitialStateBuilderIdentity{
+        "gnc.package.yyz.committed-mission-accumulator.initial-state@1",
+        "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
+    kCommittedMissionAccumulatorPublishProjectionIdentity{
+        "gnc.package.yyz.committed-mission-accumulator.publish@1", "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
+    kCommittedMissionAccumulatorIntervalEvolutionIdentity{
+        "gnc.package.yyz.committed-mission-accumulator.evolve@1", "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
+    kRunwideCommittedMissionHistoryEvaluationIdentity{
+        "gnc.package.yyz.runwide-committed-mission-result.history-adapter@1",
+        "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
     kControlledBodyWrenchAdapterIdentity{
         "gnc.package.yyz.controlled-body-wrench.adapter@1", "0.1.0"};
 inline constexpr gnc::foundation::AlgorithmIdentity
@@ -264,6 +334,14 @@ inline constexpr gnc::foundation::AlgorithmIdentity
         "gnc.package.yyz.committed-mission-result.definition-builder@1",
         "0.1.0"};
 inline constexpr gnc::foundation::AlgorithmIdentity
+    kCommittedMissionAccumulatorDefinitionBuilderIdentity{
+        "gnc.package.yyz.committed-mission-accumulator.definition-builder@1",
+        "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
+    kRunwideCommittedMissionResultDefinitionBuilderIdentity{
+        "gnc.package.yyz.runwide-committed-mission-result.definition-builder@1",
+        "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
     kControlledRigidRuntimeCellFactoryIdentity{
         "gnc.package.yyz.rigid-body-6dof.runtime-cell-factory@1", "0.1.0"};
 inline constexpr gnc::foundation::AlgorithmIdentity
@@ -293,8 +371,20 @@ inline constexpr gnc::foundation::AlgorithmIdentity
     kCommittedMissionResultRuntimeCellFactoryIdentity{
         "gnc.package.yyz.committed-mission-result.runtime-cell-factory@1",
         "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
+    kCommittedMissionAccumulatorRuntimeCellFactoryIdentity{
+        "gnc.package.yyz.committed-mission-accumulator.runtime-cell-factory@1",
+        "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
+    kRunwideCommittedMissionResultRuntimeCellFactoryIdentity{
+        "gnc.package.yyz.runwide-committed-mission-result.runtime-cell-factory@1",
+        "0.1.0"};
 inline constexpr gnc::foundation::AlgorithmIdentity kMassStateCodecIdentity{
     "gnc.package.yyz.mass.scalar-burn.state-codec@1", "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
+    kCommittedMissionAccumulatorStateCodecIdentity{
+        "gnc.package.yyz.committed-mission-accumulator.state-codec@1",
+        "0.1.0"};
 inline constexpr gnc::foundation::AlgorithmIdentity
     kMassPropertiesSlotCodecIdentity{
         "gnc.package.yyz.mass-properties.slot-codec@1", "0.1.0"};
@@ -323,6 +413,14 @@ inline constexpr gnc::foundation::AlgorithmIdentity
 inline constexpr gnc::foundation::AlgorithmIdentity
     kMissionResultSlotCodecIdentity{
         "gnc.package.yyz.committed-mission-result.slot-codec@1", "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
+    kCommittedMissionAccumulatorSlotCodecIdentity{
+        "gnc.package.yyz.committed-mission-accumulator.slot-codec@1",
+        "0.1.0"};
+inline constexpr gnc::foundation::AlgorithmIdentity
+    kRunwideCommittedMissionResultSlotCodecIdentity{
+        "gnc.package.yyz.runwide-committed-mission-result.slot-codec@1",
+        "0.1.0"};
 inline constexpr gnc::foundation::AlgorithmIdentity
     kControlledRigidBoundaryPreparationSlotCodecIdentity{
         "gnc.package.yyz.controlled-rigid-boundary-preparation.slot-codec@1",
@@ -355,6 +453,18 @@ inline constexpr std::string_view
 inline constexpr std::string_view
     kCommittedMissionHistoryEvaluationCallShapeIdentity =
         "gnc.cpp-call-shape.yyz.evaluator.committed-mission-history@1";
+inline constexpr std::string_view
+    kCommittedMissionAccumulatorInitialStateCallShapeIdentity =
+        "gnc.cpp-call-shape.yyz.committed-mission-accumulator.initial-state@1";
+inline constexpr std::string_view
+    kCommittedMissionAccumulatorPublishProjectionCallShapeIdentity =
+        "gnc.cpp-call-shape.yyz.committed-mission-accumulator.publish@1";
+inline constexpr std::string_view
+    kCommittedMissionAccumulatorIntervalEvolutionCallShapeIdentity =
+        "gnc.cpp-call-shape.yyz.committed-mission-accumulator.evolve@1";
+inline constexpr std::string_view
+    kRunwideCommittedMissionHistoryEvaluationCallShapeIdentity =
+        "gnc.cpp-call-shape.yyz.evaluator.runwide-committed-mission-history@1";
 inline constexpr std::string_view
     kControlledRigidDefinitionBuilderCallShapeIdentity =
         "gnc.cpp-call-shape.yyz.rigid.definition-builder@1";
@@ -403,8 +513,17 @@ inline constexpr std::string_view
 inline constexpr std::string_view
     kCommittedMissionResultRuntimeCellFactoryCallShapeIdentity =
         "gnc.cpp-call-shape.yyz.evaluator.committed-mission.runtime-cell-factory@1";
+inline constexpr std::string_view
+    kCommittedMissionAccumulatorRuntimeCellFactoryCallShapeIdentity =
+        "gnc.cpp-call-shape.yyz.committed-mission-accumulator.runtime-cell-factory@1";
+inline constexpr std::string_view
+    kRunwideCommittedMissionResultRuntimeCellFactoryCallShapeIdentity =
+        "gnc.cpp-call-shape.yyz.evaluator.runwide-committed-mission.runtime-cell-factory@1";
 inline constexpr std::string_view kMassStateCodecCallShapeIdentity =
     "gnc.cpp-call-shape.yyz.mass.state-codec.getter@1";
+inline constexpr std::string_view
+    kCommittedMissionAccumulatorStateCodecCallShapeIdentity =
+        "gnc.cpp-call-shape.yyz.committed-mission-accumulator.state-codec.getter@1";
 inline constexpr std::string_view kMassPropertiesSlotCodecCallShapeIdentity =
     "gnc.cpp-call-shape.yyz.mass-properties.slot-codec.getter@1";
 inline constexpr std::string_view
@@ -422,6 +541,12 @@ inline constexpr std::string_view kMassFlowSlotCodecCallShapeIdentity =
     "gnc.cpp-call-shape.yyz.mass-flow.slot-codec.getter@1";
 inline constexpr std::string_view kMissionResultSlotCodecCallShapeIdentity =
     "gnc.cpp-call-shape.yyz.mission-result.slot-codec.getter@1";
+inline constexpr std::string_view
+    kCommittedMissionAccumulatorSlotCodecCallShapeIdentity =
+        "gnc.cpp-call-shape.yyz.committed-mission-accumulator.slot-codec.getter@1";
+inline constexpr std::string_view
+    kRunwideCommittedMissionResultSlotCodecCallShapeIdentity =
+        "gnc.cpp-call-shape.yyz.runwide-mission-result.slot-codec.getter@1";
 inline constexpr std::string_view
     kControlledRigidBoundaryPreparationSlotCodecCallShapeIdentity =
         "gnc.cpp-call-shape.yyz.controlled-rigid-preparation.slot-codec.getter@1";
@@ -1050,6 +1175,16 @@ canonical_committed_mission_result_config(
 build_committed_mission_result_definition(
     const gnc::model_sdk::CanonicalConfigBlock& configuration);
 
+[[nodiscard]] gnc::foundation::NumericalOutcome<
+    CommittedMissionResultDefinition>
+build_committed_mission_accumulator_definition(
+    const gnc::model_sdk::CanonicalConfigBlock& configuration);
+
+[[nodiscard]] gnc::foundation::NumericalOutcome<
+    CommittedMissionResultDefinition>
+build_runwide_committed_mission_result_definition(
+    const gnc::model_sdk::CanonicalConfigBlock& configuration);
+
 struct MissionMetrics {
     double duration_seconds = 0.0;
     double downrange_meters = 0.0;
@@ -1113,6 +1248,72 @@ struct CommittedMissionResultOutput {
     CommittedRigidMassBoundary terminal_boundary;
 };
 
+// Constant-space, per-Session committed aggregate. The opening and latest
+// boundaries are retained so every displacement and sequence check remains
+// anchored to committed product state. A terminal result, once present, is
+// the earliest committed predicate decision and is never replaced.
+struct CommittedMissionAccumulatorState {
+    CommittedMissionAccumulatorState() noexcept;
+
+    bool initialized = false;
+    CommittedRigidMassBoundary opening_boundary;
+    CommittedRigidMassBoundary latest_boundary;
+    MissionMetricSummary metrics;
+    bool terminal_result_present = false;
+    CommittedMissionResultOutput terminal_result;
+};
+
+struct CommittedMissionAccumulatorInitialStateInput {
+    std::int64_t configuration_revision = 0;
+};
+
+struct CommittedMissionAccumulatorIntervalInput {
+    CommittedRigidObservation rigid_observation;
+    MassPropertiesInput mass_properties;
+};
+
+struct RunwideCommittedMissionStateHistoryInput {
+    std::array<CommittedMissionAccumulatorState,
+               kRunwideCommittedMissionHistoryDepth>
+        accumulators;
+    std::array<RigidState, kRunwideCommittedMissionHistoryDepth>
+        rigid_states;
+    std::array<MassState, kRunwideCommittedMissionHistoryDepth> mass_states;
+};
+
+class CommittedMissionAccumulatorKernel {
+  public:
+    [[nodiscard]] static gnc::foundation::NumericalOutcome<
+        CommittedMissionAccumulatorState>
+    accumulate(const CommittedMissionResultDefinition& definition,
+               const CommittedMissionAccumulatorState& committed,
+               const CommittedRigidMassBoundary& boundary);
+
+    [[nodiscard]] static gnc::foundation::NumericalOutcome<
+        CommittedMissionResultOutput>
+    finalize(const CommittedMissionResultDefinition& definition,
+             const CommittedMissionAccumulatorState& committed,
+             const CommittedRigidMassBoundary& terminal_boundary);
+};
+
+[[nodiscard]] gnc::foundation::NumericalOutcome<
+    CommittedMissionAccumulatorState>
+build_committed_mission_accumulator_initial_state(
+    const CommittedMissionResultDefinition& definition,
+    const CommittedMissionAccumulatorInitialStateInput& input);
+
+[[nodiscard]] CommittedMissionAccumulatorState
+project_committed_mission_accumulator(
+    const gnc::contracts::IntervalSampleContext& context,
+    const CommittedMissionAccumulatorState& state);
+
+[[nodiscard]] gnc::foundation::NumericalOutcome<
+    CommittedMissionAccumulatorState>
+evolve_committed_mission_accumulator(
+    const CommittedMissionResultDefinition& definition,
+    const CommittedMissionAccumulatorState& committed,
+    const CommittedMissionAccumulatorIntervalInput& input);
+
 class CommittedMissionResultKernel {
   public:
     [[nodiscard]] static gnc::foundation::NumericalOutcome<
@@ -1127,6 +1328,14 @@ class CommittedMissionHistoryEvaluationKernel {
         CommittedMissionResultOutput>
     evaluate(const CommittedMissionResultDefinition& definition,
              const CommittedMissionStateHistoryInput& input);
+};
+
+class RunwideCommittedMissionHistoryEvaluationKernel {
+  public:
+    [[nodiscard]] static gnc::foundation::NumericalOutcome<
+        CommittedMissionResultOutput>
+    evaluate(const CommittedMissionResultDefinition& definition,
+             const RunwideCommittedMissionStateHistoryInput& input);
 };
 
 struct TwoIntervalMassCommitInput {
@@ -1226,6 +1435,25 @@ using CommittedMissionHistoryEvaluationCall =
     gnc::foundation::NumericalOutcome<CommittedMissionResultOutput> (*)(
         const CommittedMissionResultDefinition&,
         const CommittedMissionStateHistoryInput&);
+using CommittedMissionAccumulatorInitialStateCall =
+    gnc::foundation::NumericalOutcome<
+        CommittedMissionAccumulatorState> (*)(
+        const CommittedMissionResultDefinition&,
+        const CommittedMissionAccumulatorInitialStateInput&);
+using CommittedMissionAccumulatorPublishProjectionCall =
+    CommittedMissionAccumulatorState (*)(
+        const gnc::contracts::IntervalSampleContext&,
+        const CommittedMissionAccumulatorState&);
+using CommittedMissionAccumulatorIntervalEvolutionCall =
+    gnc::foundation::NumericalOutcome<
+        CommittedMissionAccumulatorState> (*)(
+        const CommittedMissionResultDefinition&,
+        const CommittedMissionAccumulatorState&,
+        const CommittedMissionAccumulatorIntervalInput&);
+using RunwideCommittedMissionHistoryEvaluationCall =
+    gnc::foundation::NumericalOutcome<CommittedMissionResultOutput> (*)(
+        const CommittedMissionResultDefinition&,
+        const RunwideCommittedMissionStateHistoryInput&);
 
 // Package-owned Runtime Cell factory contracts. These values contain only an
 // immutable typed Definition, exact process-local entries, and plan-local
@@ -1467,6 +1695,70 @@ using CommittedMissionResultRuntimeCellFactoryCall =
         CommittedMissionResultDefinition,
         CommittedMissionResultRuntimeCellBindings>;
 
+struct CommittedMissionAccumulatorRuntimeCellBindings {
+    std::uint32_t state_block_handle = 0U;
+    std::uint32_t transaction_handle = 0U;
+    std::uint32_t publish_projection_callsite_handle = 0U;
+    std::uint32_t interval_evolution_callsite_handle = 0U;
+    gnc::model_sdk::CompiledOutputWriter<
+        CommittedMissionAccumulatorState>
+        accumulator_output;
+    gnc::model_sdk::OutputWriterTokenId candidate_state_writer;
+    std::uint32_t rigid_observation_input_slot_handle = 0U;
+    std::uint32_t mass_properties_input_slot_handle = 0U;
+    CommittedMissionAccumulatorPublishProjectionCall publish_projection =
+        nullptr;
+    CommittedMissionAccumulatorIntervalEvolutionCall interval_evolution =
+        nullptr;
+};
+
+struct CommittedMissionAccumulatorRuntimeCell {
+    const CommittedMissionResultDefinition definition;
+    const gnc::model_sdk::RuntimeCellFactoryContext context;
+    const CommittedMissionAccumulatorRuntimeCellBindings bindings;
+};
+
+[[nodiscard]] gnc::foundation::NumericalOutcome<
+    CommittedMissionAccumulatorRuntimeCell>
+create_committed_mission_accumulator_runtime_cell(
+    const CommittedMissionResultDefinition& definition,
+    const gnc::model_sdk::RuntimeCellFactoryContext& context,
+    const CommittedMissionAccumulatorRuntimeCellBindings& bindings);
+
+using CommittedMissionAccumulatorRuntimeCellFactoryCall =
+    gnc::model_sdk::RuntimeCellFactoryCall<
+        CommittedMissionAccumulatorRuntimeCell,
+        CommittedMissionResultDefinition,
+        CommittedMissionAccumulatorRuntimeCellBindings>;
+
+struct RunwideCommittedMissionResultRuntimeCellBindings {
+    std::uint32_t boundary_evaluation_callsite_handle = 0U;
+    std::uint32_t committed_history_handle = 0U;
+    gnc::model_sdk::CompiledOutputWriter<CommittedMissionResultOutput>
+        runwide_result_output;
+    RunwideCommittedMissionHistoryEvaluationCall boundary_evaluation =
+        nullptr;
+};
+
+struct RunwideCommittedMissionResultRuntimeCell {
+    const CommittedMissionResultDefinition definition;
+    const gnc::model_sdk::RuntimeCellFactoryContext context;
+    const RunwideCommittedMissionResultRuntimeCellBindings bindings;
+};
+
+[[nodiscard]] gnc::foundation::NumericalOutcome<
+    RunwideCommittedMissionResultRuntimeCell>
+create_runwide_committed_mission_result_runtime_cell(
+    const CommittedMissionResultDefinition& definition,
+    const gnc::model_sdk::RuntimeCellFactoryContext& context,
+    const RunwideCommittedMissionResultRuntimeCellBindings& bindings);
+
+using RunwideCommittedMissionResultRuntimeCellFactoryCall =
+    gnc::model_sdk::RuntimeCellFactoryCall<
+        RunwideCommittedMissionResultRuntimeCell,
+        CommittedMissionResultDefinition,
+        RunwideCommittedMissionResultRuntimeCellBindings>;
+
 using MassStateCloneCall = MassState (*)(const MassState&);
 using MassStateValidateCall = bool (*)(const MassState&) noexcept;
 using MassStateSwapCall = void (*)(MassState&, MassState&) noexcept;
@@ -1486,6 +1778,41 @@ using MassStateCodecGetter =
 void swap_mass_state(MassState& lhs, MassState& rhs) noexcept;
 [[nodiscard]] const MassStateCodec& mass_state_codec() noexcept;
 
+using CommittedMissionAccumulatorStateCloneCall =
+    CommittedMissionAccumulatorState (*)(
+        const CommittedMissionAccumulatorState&);
+using CommittedMissionAccumulatorStateValidateCall =
+    bool (*)(const CommittedMissionAccumulatorState&) noexcept;
+using CommittedMissionAccumulatorStateSwapCall =
+    void (*)(CommittedMissionAccumulatorState&,
+             CommittedMissionAccumulatorState&) noexcept;
+using CommittedMissionAccumulatorStateCodec =
+    gnc::model_sdk::InProcessStateCodec<
+        CommittedMissionAccumulatorStateCloneCall,
+        CommittedMissionAccumulatorStateValidateCall,
+        CommittedMissionAccumulatorStateValidateCall,
+        CommittedMissionAccumulatorStateValidateCall,
+        CommittedMissionAccumulatorStateSwapCall,
+        CommittedMissionAccumulatorPublishProjectionCall>;
+using CommittedMissionAccumulatorStateCodecGetter =
+    gnc::model_sdk::InProcessCodecGetter<
+        CommittedMissionAccumulatorStateCodec>;
+
+[[nodiscard]] CommittedMissionAccumulatorState
+clone_committed_mission_accumulator_state(
+    const CommittedMissionAccumulatorState& state);
+[[nodiscard]] bool validate_committed_mission_accumulator_state(
+    const CommittedMissionAccumulatorState& state) noexcept;
+[[nodiscard]] bool validate_committed_mission_accumulator_state_finite(
+    const CommittedMissionAccumulatorState& state) noexcept;
+[[nodiscard]] bool validate_committed_mission_accumulator_state_invariants(
+    const CommittedMissionAccumulatorState& state) noexcept;
+void swap_committed_mission_accumulator_state(
+    CommittedMissionAccumulatorState& lhs,
+    CommittedMissionAccumulatorState& rhs) noexcept;
+[[nodiscard]] const CommittedMissionAccumulatorStateCodec&
+committed_mission_accumulator_state_codec() noexcept;
+
 using MassPropertiesSlotCodec =
     gnc::model_sdk::TypedInProcessSlotCodec<MassPropertiesInput>;
 using NavigationEstimateSlotCodec =
@@ -1502,6 +1829,12 @@ using MassFlowSlotCodec =
     gnc::model_sdk::TypedInProcessSlotCodec<MassFlowIntervalInput>;
 using MissionResultSlotCodec =
     gnc::model_sdk::TypedInProcessSlotCodec<CommittedMissionResultOutput>;
+using CommittedMissionAccumulatorSlotCodec =
+    gnc::model_sdk::TypedInProcessSlotCodec<
+        CommittedMissionAccumulatorState>;
+using RunwideCommittedMissionResultSlotCodec =
+    gnc::model_sdk::TypedInProcessSlotCodec<
+        CommittedMissionResultOutput>;
 using ControlledRigidBoundaryPreparationSlotCodec =
     gnc::model_sdk::TypedInProcessSlotCodec<
         ControlledRigidBoundaryPreparationOutput>;

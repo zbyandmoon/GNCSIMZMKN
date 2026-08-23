@@ -351,7 +351,7 @@ void verify_catalog_and_descriptors() {
         }
     }
     require(catalog.succeeded(), "Catalog rejected YYZ static products");
-    require(package.models.size() == 11U,
+    require(package.models.size() == 13U,
             "Wave A package model inventory changed");
     for (const auto& model : package.models) {
         require(std::is_sorted(
@@ -536,6 +536,63 @@ void verify_catalog_and_descriptors() {
                         ->ordered_members[1U].state_layout_id ==
                     kMassStateLayoutIdentity,
             "terminal evaluator schedule changed");
+
+    const auto& accumulator =
+        find_model(package, kCommittedMissionAccumulatorModelIdentity);
+    const auto& accumulator_publish = find_entry(
+        accumulator, RuntimeExecutionObligation::PublishProjection);
+    const auto& accumulator_evolution = find_entry(
+        accumulator, RuntimeExecutionObligation::IntervalEvolution);
+    require(accumulator.placement ==
+                gnc::model_sdk::ModelPlacement::VehicleOutput &&
+                accumulator.runtime_component->profile ==
+                    gnc::model_sdk::RuntimeCellProfile::
+                        DiscreteStateProcessor &&
+                accumulator.runtime_component->state_owner.has_value() &&
+                accumulator.runtime_component->state_owner->schema.layout_id ==
+                    kCommittedMissionAccumulatorStateLayoutIdentity &&
+                accumulator_publish.phase == CoarsePhase::Publish &&
+                accumulator_publish.state_read ==
+                    StaticStateReadKind::Committed &&
+                accumulator_evolution.phase == CoarsePhase::Form &&
+                accumulator_evolution.state_read ==
+                    StaticStateReadKind::Committed &&
+                accumulator_evolution.state_write ==
+                    StaticStateWriteKind::IntervalCandidate &&
+                accumulator_evolution.input_port_ids.size() == 2U,
+            "runwide mission accumulator descriptor changed");
+
+    const auto& runwide = find_model(
+        package, kRunwideCommittedMissionResultModelIdentity);
+    const auto& runwide_entry = find_entry(
+        runwide, RuntimeExecutionObligation::BoundaryEvaluation);
+    require(runwide.placement ==
+                gnc::model_sdk::ModelPlacement::Evaluation &&
+                runwide.runtime_component->schedule.trigger ==
+                    gnc::model_sdk::StaticScheduleTrigger::
+                        TerminalSequenceReady &&
+                runwide_entry.phase == CoarsePhase::Evaluation &&
+                runwide_entry.entry_id ==
+                    kRunwideCommittedMissionHistoryEvaluationIdentity.id &&
+                runwide.runtime_component->evaluator_history_shape
+                    .has_value() &&
+                runwide.runtime_component->evaluator_history_shape->depth ==
+                    kRunwideCommittedMissionHistoryDepth &&
+                runwide.runtime_component->evaluator_history_shape
+                        ->ordered_members.size() == 3U &&
+                runwide.runtime_component->evaluator_history_shape
+                        ->ordered_members[0U].member_id ==
+                    kRunwideCommittedMissionAccumulatorHistoryMemberId &&
+                runwide.runtime_component->evaluator_history_shape
+                        ->ordered_members[0U].state_layout_id ==
+                    kCommittedMissionAccumulatorStateLayoutIdentity &&
+                runwide.runtime_component->evaluator_history_shape
+                        ->ordered_members[1U].member_id ==
+                    kRunwideCommittedMissionRigidHistoryMemberId &&
+                runwide.runtime_component->evaluator_history_shape
+                        ->ordered_members[2U].member_id ==
+                    kRunwideCommittedMissionMassHistoryMemberId,
+            "runwide terminal evaluator descriptor changed");
 }
 
 void verify_implementation_table() {
@@ -546,9 +603,9 @@ void verify_implementation_table() {
                 implementation.package_version == package.package_version &&
                 implementation.build_fingerprint ==
                     "yyz-static-contract-test" &&
-                implementation.entries.size() == 48U &&
-                implementation.state_layouts.size() == 2U &&
-                implementation.value_layouts.size() == 10U,
+                implementation.entries.size() == 59U &&
+                implementation.state_layouts.size() == 3U &&
+                implementation.value_layouts.size() == 12U,
             "static implementation inventory changed");
 
     std::set<std::string> exact_entries;
@@ -567,11 +624,14 @@ void verify_implementation_table() {
         if (entry.evaluator_history_witness.has_value()) {
             ++evaluator_history_witness_count;
             require(entry.entry_id ==
-                        kCommittedMissionHistoryEvaluationIdentity.id,
+                        kCommittedMissionHistoryEvaluationIdentity.id ||
+                        entry.entry_id ==
+                            kRunwideCommittedMissionHistoryEvaluationIdentity
+                                .id,
                     "history witness attached to a non-evaluator entry");
         }
     }
-    require(evaluator_history_witness_count == 1U,
+    require(evaluator_history_witness_count == 2U,
             "terminal evaluator history witness is missing or duplicated");
     const auto find_implementation = [&](std::string_view id,
                                          std::string_view version)
@@ -708,6 +768,14 @@ void verify_implementation_table() {
         &evaluator_implementation.typed_entry);
     const auto& evaluator_history =
         evaluator_implementation.evaluator_history_witness;
+    const auto& runwide_implementation = find_implementation(
+        kRunwideCommittedMissionHistoryEvaluationIdentity.id,
+        kRunwideCommittedMissionHistoryEvaluationIdentity.version);
+    const auto runwide_entry =
+        std::any_cast<RunwideCommittedMissionHistoryEvaluationCall>(
+            &runwide_implementation.typed_entry);
+    const auto& runwide_history =
+        runwide_implementation.evaluator_history_witness;
     require(boundary_entry != nullptr &&
                 *boundary_entry ==
                     &ControlledRigidBoundaryEvaluationKernel::
@@ -734,6 +802,27 @@ void verify_implementation_table() {
                 evaluator_history->ordered_members[1U].state_layout_id ==
                     kMassStateLayoutIdentity,
             "image-facing boundary or evaluator typed entry changed");
+    require(runwide_entry != nullptr &&
+                *runwide_entry ==
+                    &RunwideCommittedMissionHistoryEvaluationKernel::
+                        evaluate &&
+                runwide_history.has_value() &&
+                runwide_history->request_contract_id ==
+                    kRunwideCommittedMissionStateContractIdentity &&
+                runwide_history->depth ==
+                    kRunwideCommittedMissionHistoryDepth &&
+                runwide_history->ordered_members.size() == 3U &&
+                runwide_history->ordered_members[0U].member_id ==
+                    kRunwideCommittedMissionAccumulatorHistoryMemberId &&
+                runwide_history->ordered_members[0U].state_schema_id ==
+                    kCommittedMissionAccumulatorStateSchemaIdentity &&
+                runwide_history->ordered_members[0U].state_layout_id ==
+                    kCommittedMissionAccumulatorStateLayoutIdentity &&
+                runwide_history->ordered_members[1U].member_id ==
+                    kRunwideCommittedMissionRigidHistoryMemberId &&
+                runwide_history->ordered_members[2U].member_id ==
+                    kRunwideCommittedMissionMassHistoryMemberId,
+            "runwide evaluator typed history witness changed");
 
     require_exact_callable(
         kControlledRigidRuntimeCellFactoryIdentity,
@@ -775,6 +864,46 @@ void verify_implementation_table() {
         StaticEntryKind::RuntimeCellFactory,
         &create_committed_mission_result_runtime_cell,
         "evaluator runtime-cell factory changed");
+    require_exact_callable(
+        kCommittedMissionAccumulatorDefinitionBuilderIdentity,
+        StaticEntryKind::DefinitionBuilder,
+        &build_committed_mission_accumulator_definition,
+        "mission accumulator definition builder changed");
+    require_exact_callable(
+        kRunwideCommittedMissionResultDefinitionBuilderIdentity,
+        StaticEntryKind::DefinitionBuilder,
+        &build_runwide_committed_mission_result_definition,
+        "runwide evaluator definition builder changed");
+    require_exact_callable(
+        kCommittedMissionAccumulatorRuntimeCellFactoryIdentity,
+        StaticEntryKind::RuntimeCellFactory,
+        &create_committed_mission_accumulator_runtime_cell,
+        "mission accumulator runtime-cell factory changed");
+    require_exact_callable(
+        kRunwideCommittedMissionResultRuntimeCellFactoryIdentity,
+        StaticEntryKind::RuntimeCellFactory,
+        &create_runwide_committed_mission_result_runtime_cell,
+        "runwide evaluator runtime-cell factory changed");
+    require_exact_callable(
+        kCommittedMissionAccumulatorInitialStateBuilderIdentity,
+        StaticEntryKind::InitialState,
+        &build_committed_mission_accumulator_initial_state,
+        "mission accumulator initial-state builder changed");
+    require_exact_callable(
+        kCommittedMissionAccumulatorPublishProjectionIdentity,
+        StaticEntryKind::PublishProjection,
+        &project_committed_mission_accumulator,
+        "mission accumulator publish projection changed");
+    require_exact_callable(
+        kCommittedMissionAccumulatorIntervalEvolutionIdentity,
+        StaticEntryKind::IntervalEvolution,
+        &evolve_committed_mission_accumulator,
+        "mission accumulator interval evolution changed");
+    require_exact_callable(
+        kRunwideCommittedMissionHistoryEvaluationIdentity,
+        StaticEntryKind::BoundaryEvaluation,
+        &RunwideCommittedMissionHistoryEvaluationKernel::evaluate,
+        "runwide terminal evaluation changed");
 
     const auto rigid_layout = std::find_if(
         implementation.state_layouts.begin(),
@@ -786,12 +915,24 @@ void verify_implementation_table() {
         implementation.state_layouts.end(), [](const auto& layout) {
             return layout.layout_id == kMassStateLayoutIdentity;
         });
+    const auto accumulator_layout = std::find_if(
+        implementation.state_layouts.begin(),
+        implementation.state_layouts.end(), [](const auto& layout) {
+            return layout.layout_id ==
+                   kCommittedMissionAccumulatorStateLayoutIdentity;
+        });
     require(rigid_layout != implementation.state_layouts.end() &&
                 rigid_layout->size_bytes == sizeof(RigidState) &&
                 rigid_layout->alignment_bytes == alignof(RigidState) &&
                 mass_layout != implementation.state_layouts.end() &&
                 mass_layout->size_bytes == sizeof(MassState) &&
-                mass_layout->alignment_bytes == alignof(MassState),
+                mass_layout->alignment_bytes == alignof(MassState) &&
+                accumulator_layout !=
+                    implementation.state_layouts.end() &&
+                accumulator_layout->size_bytes ==
+                    sizeof(CommittedMissionAccumulatorState) &&
+                accumulator_layout->alignment_bytes ==
+                    alignof(CommittedMissionAccumulatorState),
             "process-local state layout facts changed");
 
     std::set<std::string> exact_value_layouts;
@@ -840,6 +981,12 @@ void verify_implementation_table() {
                          sizeof(PitchMomentControllerOutput),
                          alignof(PitchMomentControllerOutput));
     require_value_layout(kCommittedMissionResultContractIdentity,
+                         sizeof(CommittedMissionResultOutput),
+                         alignof(CommittedMissionResultOutput));
+    require_value_layout(kCommittedMissionAccumulatorContractIdentity,
+                         sizeof(CommittedMissionAccumulatorState),
+                         alignof(CommittedMissionAccumulatorState));
+    require_value_layout(kRunwideCommittedMissionResultContractIdentity,
                          sizeof(CommittedMissionResultOutput),
                          alignof(CommittedMissionResultOutput));
     require_value_layout(kControlledRigidBoundaryPreparationContractIdentity,
@@ -1628,6 +1775,111 @@ void verify_committed_history_evaluator() {
                 exactly(adapted.value().terminal_boundary.mass_state.context,
                         direct.value().terminal_boundary.mass_state.context),
             "committed-history adapter changed evaluator input or result");
+
+    const auto accumulator_definition =
+        build_committed_mission_accumulator_definition(
+            evaluator_configuration);
+    const auto runwide_definition =
+        build_runwide_committed_mission_result_definition(
+            evaluator_configuration);
+    require(accumulator_definition.has_value() &&
+                runwide_definition.has_value(),
+            "runwide definition builders rejected evaluator config");
+
+    CommittedMissionAccumulatorState online;
+    for (const auto& sample : assembled.committed_samples) {
+        const auto advanced = CommittedMissionAccumulatorKernel::accumulate(
+            accumulator_definition.value(), online, sample);
+        require(advanced.has_value(),
+                "online committed mission accumulation failed");
+        online = advanced.value();
+    }
+    require(online.terminal_result_present,
+            "online committed mission accumulation missed terminal result");
+
+    CommittedMissionAccumulatorState prefix;
+    for (std::size_t index = 0U;
+         index + 1U < assembled.committed_samples.size(); ++index) {
+        const auto advanced = CommittedMissionAccumulatorKernel::accumulate(
+            accumulator_definition.value(), prefix,
+            assembled.committed_samples[index]);
+        require(advanced.has_value(),
+                "runwide prefix accumulation failed");
+        prefix = advanced.value();
+    }
+    RunwideCommittedMissionStateHistoryInput runwide_input;
+    runwide_input.accumulators[0U] = prefix;
+    runwide_input.rigid_states[0U] = history.rigid_states.back();
+    runwide_input.mass_states[0U] = history.mass_states.back();
+    const auto runwide =
+        RunwideCommittedMissionHistoryEvaluationKernel::evaluate(
+            runwide_definition.value(), runwide_input);
+    require(runwide.has_value(),
+            "runwide terminal fold rejected the final committed sample");
+
+    const auto same_result = [](const CommittedMissionResultOutput& lhs,
+                                const CommittedMissionResultOutput& rhs) {
+        if (lhs.status != rhs.status ||
+            lhs.initial_tick != rhs.initial_tick ||
+            lhs.final_tick != rhs.final_tick ||
+            lhs.final_time_seconds != rhs.final_time_seconds ||
+            lhs.termination.action != rhs.termination.action ||
+            lhs.termination.reason_code != rhs.termination.reason_code ||
+            lhs.termination.trigger_time_seconds !=
+                rhs.termination.trigger_time_seconds ||
+            lhs.termination.priority != rhs.termination.priority ||
+            lhs.metrics.evaluated_sample_count !=
+                rhs.metrics.evaluated_sample_count ||
+            lhs.metrics.terminal.duration_seconds !=
+                rhs.metrics.terminal.duration_seconds ||
+            lhs.metrics.terminal.downrange_meters !=
+                rhs.metrics.terminal.downrange_meters ||
+            lhs.metrics.terminal.vertical_displacement_meters !=
+                rhs.metrics.terminal.vertical_displacement_meters ||
+            lhs.metrics.terminal.remaining_mass_kilograms !=
+                rhs.metrics.terminal.remaining_mass_kilograms ||
+            lhs.metrics.terminal.consumed_mass_kilograms !=
+                rhs.metrics.terminal.consumed_mass_kilograms ||
+            lhs.metrics.terminal.speed_meters_per_second !=
+                rhs.metrics.terminal.speed_meters_per_second ||
+            lhs.metrics.peak_speed_meters_per_second !=
+                rhs.metrics.peak_speed_meters_per_second ||
+            lhs.metrics.peak_speed_tick != rhs.metrics.peak_speed_tick ||
+            lhs.metrics.maximum_downrange_meters !=
+                rhs.metrics.maximum_downrange_meters ||
+            lhs.metrics.maximum_downrange_tick !=
+                rhs.metrics.maximum_downrange_tick ||
+            lhs.metrics.minimum_remaining_mass_kilograms !=
+                rhs.metrics.minimum_remaining_mass_kilograms ||
+            lhs.metrics.minimum_remaining_mass_tick !=
+                rhs.metrics.minimum_remaining_mass_tick ||
+            !exactly(lhs.terminal_boundary.rigid_context,
+                     rhs.terminal_boundary.rigid_context) ||
+            !exactly(lhs.terminal_boundary.rigid_state,
+                     rhs.terminal_boundary.rigid_state) ||
+            lhs.terminal_boundary.mass_state.mass_kilograms !=
+                rhs.terminal_boundary.mass_state.mass_kilograms ||
+            !exactly(lhs.terminal_boundary.mass_state.context,
+                     rhs.terminal_boundary.mass_state.context)) {
+            return false;
+        }
+        for (std::size_t index = 0U;
+             index < lhs.terminal_predicates.size(); ++index) {
+            const auto& left = lhs.terminal_predicates[index];
+            const auto& right = rhs.terminal_predicates[index];
+            if (left.predicate_id != right.predicate_id ||
+                left.observed != right.observed || left.met != right.met ||
+                left.action != right.action ||
+                left.reason_code != right.reason_code ||
+                left.priority != right.priority) {
+                return false;
+            }
+        }
+        return true;
+    };
+    require(same_result(direct.value(), online.terminal_result) &&
+                same_result(direct.value(), runwide.value()),
+            "direct, online, and runwide mission results diverged");
 }
 
 } // namespace

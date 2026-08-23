@@ -377,6 +377,21 @@ const gnc::model_sdk::StaticEvaluatorHistoryWitness
           std::string(kMassStateSchemaIdentity),
           std::string(kMassStateLayoutIdentity)}}};
 
+const gnc::model_sdk::StaticEvaluatorHistoryWitness
+    kRunwideCommittedMissionHistoryImplementationWitness{
+        std::string(kRunwideCommittedMissionStateContractIdentity),
+        kRunwideCommittedMissionHistoryDepth,
+        {{std::string(
+              kRunwideCommittedMissionAccumulatorHistoryMemberId),
+          std::string(kCommittedMissionAccumulatorStateSchemaIdentity),
+          std::string(kCommittedMissionAccumulatorStateLayoutIdentity)},
+         {std::string(kRunwideCommittedMissionRigidHistoryMemberId),
+          std::string(kRigidStateSchemaIdentity),
+          std::string(kRigidStateLayoutIdentity)},
+         {std::string(kRunwideCommittedMissionMassHistoryMemberId),
+          std::string(kMassStateSchemaIdentity),
+          std::string(kMassStateLayoutIdentity)}}};
+
 template <typename ExpectedCallable, auto Callable>
 void append_static_entry(
     gnc::model_sdk::StaticPackageImplementation& implementation,
@@ -1477,6 +1492,229 @@ describe_yyz_rigid_step_package() {
               std::string(kMassStateLayoutIdentity)}}};
     evaluator.runtime_component = std::move(evaluator_runtime);
 
+    gnc::model_sdk::StaticModelDescriptor accumulator;
+    accumulator.definition = {
+        std::string(kCommittedMissionAccumulatorModelIdentity),
+        std::string(kCommittedMissionAccumulatorModelVersion),
+        gnc::model_sdk::ModelExecutionForm::RuntimeComponent};
+    accumulator.placement = gnc::model_sdk::ModelPlacement::VehicleOutput;
+    accumulator.configuration = evaluator.configuration;
+    accumulator.ports = {
+        {"committed-rigid-observation",
+         std::string(kCommittedRigidObservationContractIdentity),
+         gnc::model_sdk::StaticPortDirection::Input,
+         gnc::model_sdk::BindingKind::SampledSignal,
+         gnc::model_sdk::PortCardinality::ExactlyOne,
+         gnc::model_sdk::TemporalRelation::CurrentCycle},
+        {"mass-properties",
+         std::string(kMassPropertiesContractIdentity),
+         gnc::model_sdk::StaticPortDirection::Input,
+         gnc::model_sdk::BindingKind::IntervalModel,
+         gnc::model_sdk::PortCardinality::ExactlyOne,
+         gnc::model_sdk::TemporalRelation::IntervalModel},
+        {"committed-mission-accumulator",
+         std::string(kCommittedMissionAccumulatorContractIdentity),
+         gnc::model_sdk::StaticPortDirection::Output,
+         gnc::model_sdk::BindingKind::SampledSignal,
+         gnc::model_sdk::PortCardinality::OneOrMore,
+         gnc::model_sdk::TemporalRelation::CurrentCycle,
+         make_yyz_slot_codec_descriptor(
+             kCommittedMissionAccumulatorSlotCodecIdentity,
+             kCommittedMissionAccumulatorSlotCodecCallShapeIdentity,
+             kCommittedMissionAccumulatorStateLayoutIdentity,
+             "gnc.operation.yyz.committed-mission-accumulator")},
+    };
+    gnc::model_sdk::StaticRuntimeComponentDescriptor accumulator_runtime;
+    accumulator_runtime.recipe_id =
+        std::string(kCommittedMissionAccumulatorRecipeIdentity);
+    accumulator_runtime.profile =
+        gnc::model_sdk::RuntimeCellProfile::DiscreteStateProcessor;
+    accumulator_runtime.obligations = {
+        gnc::model_sdk::RuntimeExecutionObligation::PublishProjection,
+        gnc::model_sdk::RuntimeExecutionObligation::IntervalEvolution};
+    accumulator_runtime.obligation_entries = {
+        {gnc::model_sdk::RuntimeExecutionObligation::PublishProjection,
+         gnc::model_sdk::CoarsePhase::Publish,
+         std::string(
+             kCommittedMissionAccumulatorPublishProjectionIdentity.id),
+         std::string(
+             kCommittedMissionAccumulatorPublishProjectionIdentity.version),
+         std::string(
+             kCommittedMissionAccumulatorPublishInputContractIdentity),
+         std::string(kCommittedMissionAccumulatorContractIdentity),
+         gnc::model_sdk::StaticWorkspaceRequirement::None,
+         {}, {"committed-mission-accumulator"},
+         gnc::model_sdk::StaticStateReadKind::Committed,
+         gnc::model_sdk::StaticStateWriteKind::None, {},
+         std::string(
+             kCommittedMissionAccumulatorPublishProjectionCallShapeIdentity)},
+        {gnc::model_sdk::RuntimeExecutionObligation::IntervalEvolution,
+         gnc::model_sdk::CoarsePhase::Form,
+         std::string(
+             kCommittedMissionAccumulatorIntervalEvolutionIdentity.id),
+         std::string(
+             kCommittedMissionAccumulatorIntervalEvolutionIdentity.version),
+         std::string(kCommittedMissionAccumulatorIntervalInputContractIdentity),
+         std::string(
+             kCommittedMissionAccumulatorEvolutionOutputContractIdentity),
+         gnc::model_sdk::StaticWorkspaceRequirement::None,
+         {"committed-rigid-observation", "mass-properties"}, {},
+         gnc::model_sdk::StaticStateReadKind::Committed,
+         gnc::model_sdk::StaticStateWriteKind::IntervalCandidate, {},
+         std::string(
+             kCommittedMissionAccumulatorIntervalEvolutionCallShapeIdentity)}};
+    accumulator_runtime.schedule = periodic_schedule();
+    accumulator_runtime.lifecycle_capabilities = lifecycle;
+    gnc::model_sdk::StaticStateOwnerDescriptor accumulator_owner;
+    accumulator_owner.schema = {
+        std::string(kCommittedMissionAccumulatorStateSchemaIdentity), 1U,
+        std::string(kCommittedMissionAccumulatorStateLayoutIdentity),
+        {{"initialized", "bool", "none", "none"},
+         {"opening-boundary", "gnc.type.yyz.committed-rigid-mass-boundary",
+          "mixed", "inertial+body"},
+         {"latest-boundary", "gnc.type.yyz.committed-rigid-mass-boundary",
+          "mixed", "inertial+body"},
+         {"metric-summary", "gnc.type.yyz.mission-metric-summary", "mixed",
+          "inertial+body"},
+         {"terminal-result-present", "bool", "none", "none"},
+         {"terminal-result", "gnc.type.yyz.committed-mission-result",
+          "mixed", "inertial+body"}}};
+    accumulator_owner.initial_state_builder_id = std::string(
+        kCommittedMissionAccumulatorInitialStateBuilderIdentity.id);
+    accumulator_owner.initial_state_builder_version = std::string(
+        kCommittedMissionAccumulatorInitialStateBuilderIdentity.version);
+    accumulator_owner.initial_state_input_schema = {
+        std::string(
+            kCommittedMissionAccumulatorInitialStateInputSchemaIdentity),
+        kCommittedMissionAccumulatorInitialStateInputSchemaVersion,
+        {{"configuration_revision",
+          gnc::model_sdk::CanonicalConfigValueKind::Integer}}};
+    accumulator_owner.evolution =
+        gnc::model_sdk::StaticStateEvolution::IntervalCandidate;
+    accumulator_owner.initial_state_builder_call_shape_id = std::string(
+        kCommittedMissionAccumulatorInitialStateCallShapeIdentity);
+    accumulator_owner.codec = {
+        std::string(kCommittedMissionAccumulatorStateCodecIdentity.id),
+        std::string(kCommittedMissionAccumulatorStateCodecIdentity.version),
+        std::string(
+            kCommittedMissionAccumulatorStateCodecCallShapeIdentity),
+        "gnc.operation.yyz.committed-mission-accumulator.clone@1",
+        "gnc.operation.yyz.committed-mission-accumulator.validate@1",
+        "gnc.operation.yyz.committed-mission-accumulator.validate-finite@1",
+        "gnc.operation.yyz.committed-mission-accumulator.validate-invariants@1",
+        "gnc.operation.yyz.committed-mission-accumulator.noexcept-swap@1",
+        std::string(
+            kCommittedMissionAccumulatorPublishProjectionIdentity.id)};
+    accumulator_runtime.state_owner = std::move(accumulator_owner);
+    accumulator_runtime.definition_builder_id = std::string(
+        kCommittedMissionAccumulatorDefinitionBuilderIdentity.id);
+    accumulator_runtime.definition_builder_version = std::string(
+        kCommittedMissionAccumulatorDefinitionBuilderIdentity.version);
+    accumulator_runtime.definition_builder_call_shape_id = std::string(
+        kCommittedMissionResultDefinitionBuilderCallShapeIdentity);
+    accumulator_runtime.runtime_cell_factory_id = std::string(
+        kCommittedMissionAccumulatorRuntimeCellFactoryIdentity.id);
+    accumulator_runtime.runtime_cell_factory_version = std::string(
+        kCommittedMissionAccumulatorRuntimeCellFactoryIdentity.version);
+    accumulator_runtime.runtime_cell_factory_call_shape_id = std::string(
+        kCommittedMissionAccumulatorRuntimeCellFactoryCallShapeIdentity);
+    accumulator_runtime.resource_plan_id =
+        std::string(kYyzNoWorkspaceResourcePlanIdentity);
+    accumulator_runtime.resource_workspace_requirement =
+        gnc::model_sdk::StaticWorkspaceRequirement::None;
+    accumulator.runtime_component = std::move(accumulator_runtime);
+
+    gnc::model_sdk::StaticModelDescriptor runwide_evaluator;
+    runwide_evaluator.definition = {
+        std::string(kRunwideCommittedMissionResultModelIdentity),
+        std::string(kRunwideCommittedMissionResultModelVersion),
+        gnc::model_sdk::ModelExecutionForm::RuntimeComponent};
+    runwide_evaluator.placement =
+        gnc::model_sdk::ModelPlacement::Evaluation;
+    runwide_evaluator.configuration = evaluator.configuration;
+    runwide_evaluator.ports = {
+        {"runwide-committed-mission-state",
+         std::string(kRunwideCommittedMissionStateContractIdentity),
+         gnc::model_sdk::StaticPortDirection::Input,
+         gnc::model_sdk::BindingKind::SampledSignal,
+         gnc::model_sdk::PortCardinality::ExactlyOne,
+         gnc::model_sdk::TemporalRelation::CurrentCycle},
+        {"runwide-result",
+         std::string(kRunwideCommittedMissionResultContractIdentity),
+         gnc::model_sdk::StaticPortDirection::Output,
+         gnc::model_sdk::BindingKind::SampledSignal,
+         gnc::model_sdk::PortCardinality::OneOrMore,
+         gnc::model_sdk::TemporalRelation::CurrentCycle,
+         make_yyz_slot_codec_descriptor(
+             kRunwideCommittedMissionResultSlotCodecIdentity,
+             kRunwideCommittedMissionResultSlotCodecCallShapeIdentity,
+             kRunwideCommittedMissionResultLayoutIdentity,
+             "gnc.operation.yyz.runwide-committed-mission-result")},
+    };
+    gnc::model_sdk::StaticRuntimeComponentDescriptor runwide_runtime;
+    runwide_runtime.recipe_id =
+        std::string(kRunwideCommittedMissionResultRecipeIdentity);
+    runwide_runtime.profile =
+        gnc::model_sdk::RuntimeCellProfile::Evaluator;
+    runwide_runtime.obligations = {
+        gnc::model_sdk::RuntimeExecutionObligation::BoundaryEvaluation};
+    runwide_runtime.obligation_entries = {
+        {gnc::model_sdk::RuntimeExecutionObligation::BoundaryEvaluation,
+         gnc::model_sdk::CoarsePhase::Evaluation,
+         std::string(
+             kRunwideCommittedMissionHistoryEvaluationIdentity.id),
+         std::string(
+             kRunwideCommittedMissionHistoryEvaluationIdentity.version),
+         std::string(kRunwideCommittedMissionStateContractIdentity),
+         std::string(kRunwideCommittedMissionResultContractIdentity),
+         gnc::model_sdk::StaticWorkspaceRequirement::None,
+         {"runwide-committed-mission-state"}, {"runwide-result"},
+         gnc::model_sdk::StaticStateReadKind::None,
+         gnc::model_sdk::StaticStateWriteKind::None, {},
+         std::string(
+             kRunwideCommittedMissionHistoryEvaluationCallShapeIdentity)}};
+    runwide_runtime.schedule.trigger =
+        gnc::model_sdk::StaticScheduleTrigger::TerminalSequenceReady;
+    runwide_runtime.schedule.step_interval = 0U;
+    runwide_runtime.schedule.offset = 0U;
+    runwide_runtime.schedule.output_hold =
+        gnc::model_sdk::HoldPolicy::ZeroOrderHold;
+    runwide_runtime.schedule.max_input_age_steps = 0U;
+    runwide_runtime.lifecycle_capabilities = lifecycle;
+    runwide_runtime.definition_builder_id = std::string(
+        kRunwideCommittedMissionResultDefinitionBuilderIdentity.id);
+    runwide_runtime.definition_builder_version = std::string(
+        kRunwideCommittedMissionResultDefinitionBuilderIdentity.version);
+    runwide_runtime.definition_builder_call_shape_id = std::string(
+        kCommittedMissionResultDefinitionBuilderCallShapeIdentity);
+    runwide_runtime.runtime_cell_factory_id = std::string(
+        kRunwideCommittedMissionResultRuntimeCellFactoryIdentity.id);
+    runwide_runtime.runtime_cell_factory_version = std::string(
+        kRunwideCommittedMissionResultRuntimeCellFactoryIdentity.version);
+    runwide_runtime.runtime_cell_factory_call_shape_id = std::string(
+        kRunwideCommittedMissionResultRuntimeCellFactoryCallShapeIdentity);
+    runwide_runtime.resource_plan_id =
+        std::string(kYyzNoWorkspaceResourcePlanIdentity);
+    runwide_runtime.resource_workspace_requirement =
+        gnc::model_sdk::StaticWorkspaceRequirement::None;
+    runwide_runtime.evaluator_history_shape =
+        gnc::model_sdk::StaticEvaluatorHistoryShapeDescriptor{
+            std::string(kRunwideCommittedMissionStateContractIdentity),
+            kRunwideCommittedMissionHistoryDepth,
+            {{std::string(
+                  kRunwideCommittedMissionAccumulatorHistoryMemberId),
+              std::string(
+                  kCommittedMissionAccumulatorStateSchemaIdentity),
+              std::string(
+                  kCommittedMissionAccumulatorStateLayoutIdentity)},
+             {std::string(kRunwideCommittedMissionRigidHistoryMemberId),
+              std::string(kRigidStateSchemaIdentity),
+              std::string(kRigidStateLayoutIdentity)},
+             {std::string(kRunwideCommittedMissionMassHistoryMemberId),
+              std::string(kMassStateSchemaIdentity),
+              std::string(kMassStateLayoutIdentity)}}};
+    runwide_evaluator.runtime_component = std::move(runwide_runtime);
+
     package.models.push_back(std::move(mass));
     package.models.push_back(std::move(guidance));
     package.models.push_back(std::move(controller));
@@ -1484,6 +1722,8 @@ describe_yyz_rigid_step_package() {
     package.models.push_back(std::move(propulsion));
     package.models.push_back(std::move(evaluator));
     package.models.push_back(std::move(navigation));
+    package.models.push_back(std::move(accumulator));
+    package.models.push_back(std::move(runwide_evaluator));
     return package;
 }
 
@@ -1832,12 +2072,97 @@ describe_yyz_rigid_step_implementation(
                 implementation, *evaluator, *output);
         }
     }
+    if (const auto* accumulator = find_static_model(
+            package, kCommittedMissionAccumulatorModelIdentity);
+        accumulator != nullptr &&
+        accumulator->runtime_component.has_value()) {
+        append_definition_builder_entry<
+            CommittedMissionResultDefinitionBuilderCall,
+            &build_committed_mission_accumulator_definition>(
+                implementation, *accumulator);
+        append_runtime_cell_factory_entry<
+            CommittedMissionAccumulatorRuntimeCellFactoryCall,
+            &create_committed_mission_accumulator_runtime_cell>(
+                implementation, *accumulator);
+        append_state_codec_entry<
+            CommittedMissionAccumulatorStateCodecGetter,
+            &committed_mission_accumulator_state_codec>(
+                implementation, *accumulator);
+        append_static_entry<
+            CommittedMissionAccumulatorInitialStateCall,
+            &build_committed_mission_accumulator_initial_state>(
+                implementation,
+                kCommittedMissionAccumulatorInitialStateBuilderIdentity,
+                gnc::model_sdk::StaticEntryKind::InitialState,
+                gnc::model_sdk::canonical_initial_state_signature(
+                    *accumulator),
+                accumulator->runtime_component->state_owner
+                    ->initial_state_builder_call_shape_id,
+                std::string(kCommittedMissionAccumulatorStateLayoutIdentity));
+        append_runtime_entry<
+            CommittedMissionAccumulatorPublishProjectionCall,
+            &project_committed_mission_accumulator>(
+                implementation, *accumulator,
+                gnc::model_sdk::RuntimeExecutionObligation::
+                    PublishProjection,
+                gnc::model_sdk::StaticEntryKind::PublishProjection,
+                std::string(kCommittedMissionAccumulatorStateLayoutIdentity));
+        append_runtime_entry<
+            CommittedMissionAccumulatorIntervalEvolutionCall,
+            &evolve_committed_mission_accumulator>(
+                implementation, *accumulator,
+                gnc::model_sdk::RuntimeExecutionObligation::
+                    IntervalEvolution,
+                gnc::model_sdk::StaticEntryKind::IntervalEvolution,
+                std::string(kCommittedMissionAccumulatorStateLayoutIdentity));
+        if (const auto* output = find_static_port(
+                *accumulator, "committed-mission-accumulator");
+            output != nullptr && output->slot_codec.has_value()) {
+            append_slot_codec_entry<
+                gnc::model_sdk::InProcessCodecGetter<
+                    CommittedMissionAccumulatorSlotCodec>,
+                &gnc::model_sdk::typed_in_process_slot_codec<
+                    CommittedMissionAccumulatorState>>(
+                implementation, *accumulator, *output);
+        }
+    }
+    if (const auto* runwide = find_static_model(
+            package, kRunwideCommittedMissionResultModelIdentity);
+        runwide != nullptr) {
+        append_definition_builder_entry<
+            CommittedMissionResultDefinitionBuilderCall,
+            &build_runwide_committed_mission_result_definition>(
+                implementation, *runwide);
+        append_runtime_cell_factory_entry<
+            RunwideCommittedMissionResultRuntimeCellFactoryCall,
+            &create_runwide_committed_mission_result_runtime_cell>(
+                implementation, *runwide);
+        append_runtime_entry<RunwideCommittedMissionHistoryEvaluationCall,
+            &RunwideCommittedMissionHistoryEvaluationKernel::evaluate>(
+                implementation, *runwide,
+                gnc::model_sdk::RuntimeExecutionObligation::
+                    BoundaryEvaluation,
+                gnc::model_sdk::StaticEntryKind::BoundaryEvaluation, {},
+                &kRunwideCommittedMissionHistoryImplementationWitness);
+        if (const auto* output = find_static_port(*runwide, "runwide-result");
+            output != nullptr && output->slot_codec.has_value()) {
+            append_slot_codec_entry<
+                gnc::model_sdk::InProcessCodecGetter<
+                    RunwideCommittedMissionResultSlotCodec>,
+                &gnc::model_sdk::typed_in_process_slot_codec<
+                    CommittedMissionResultOutput>>(
+                implementation, *runwide, *output);
+        }
+    }
 
     implementation.state_layouts = {
         {std::string(kRigidStateLayoutIdentity), sizeof(RigidState),
          alignof(RigidState)},
         {std::string(kMassStateLayoutIdentity), sizeof(MassState),
          alignof(MassState)},
+        {std::string(kCommittedMissionAccumulatorStateLayoutIdentity),
+         sizeof(CommittedMissionAccumulatorState),
+         alignof(CommittedMissionAccumulatorState)},
     };
     implementation.value_layouts = {
         {std::string(kRigidFormInputContractIdentity),
@@ -1873,6 +2198,14 @@ describe_yyz_rigid_step_implementation(
          sizeof(CommittedMissionResultOutput),
          alignof(CommittedMissionResultOutput),
          std::string(kMissionResultLayoutIdentity)},
+        {std::string(kCommittedMissionAccumulatorContractIdentity),
+         sizeof(CommittedMissionAccumulatorState),
+         alignof(CommittedMissionAccumulatorState),
+         std::string(kCommittedMissionAccumulatorStateLayoutIdentity)},
+        {std::string(kRunwideCommittedMissionResultContractIdentity),
+         sizeof(CommittedMissionResultOutput),
+         alignof(CommittedMissionResultOutput),
+         std::string(kRunwideCommittedMissionResultLayoutIdentity)},
         {std::string(kControlledRigidBoundaryPreparationContractIdentity),
          sizeof(ControlledRigidBoundaryPreparationOutput),
          alignof(ControlledRigidBoundaryPreparationOutput),
@@ -2113,6 +2446,64 @@ create_committed_mission_result_runtime_cell(
         mass_commit_evidence(
             kCommittedMissionResultRuntimeCellFactoryIdentity,
             "runtime-cell"));
+}
+
+NumericalOutcome<CommittedMissionAccumulatorRuntimeCell>
+create_committed_mission_accumulator_runtime_cell(
+    const CommittedMissionResultDefinition& definition,
+    const gnc::model_sdk::RuntimeCellFactoryContext& context,
+    const CommittedMissionAccumulatorRuntimeCellBindings& bindings) {
+    if (!valid_runtime_cell_factory_context(context) ||
+        bindings.state_block_handle == 0U ||
+        bindings.transaction_handle == 0U ||
+        bindings.publish_projection_callsite_handle == 0U ||
+        bindings.interval_evolution_callsite_handle == 0U ||
+        bindings.accumulator_output.slot_handle == 0U ||
+        bindings.accumulator_output.writer_token.value == 0U ||
+        bindings.candidate_state_writer.value == 0U ||
+        bindings.rigid_observation_input_slot_handle == 0U ||
+        bindings.mass_properties_input_slot_handle == 0U ||
+        bindings.publish_projection == nullptr ||
+        bindings.interval_evolution == nullptr) {
+        return mass_commit_failure<
+            CommittedMissionAccumulatorRuntimeCell>(
+                kCommittedMissionAccumulatorRuntimeCellFactoryIdentity,
+                NumericalStatus::DomainError, "compiled-bindings");
+    }
+    return NumericalOutcome<
+        CommittedMissionAccumulatorRuntimeCell>::with_value(
+            NumericalStatus::Success,
+            CommittedMissionAccumulatorRuntimeCell{
+                definition, context, bindings},
+            mass_commit_evidence(
+                kCommittedMissionAccumulatorRuntimeCellFactoryIdentity,
+                "runtime-cell"));
+}
+
+NumericalOutcome<RunwideCommittedMissionResultRuntimeCell>
+create_runwide_committed_mission_result_runtime_cell(
+    const CommittedMissionResultDefinition& definition,
+    const gnc::model_sdk::RuntimeCellFactoryContext& context,
+    const RunwideCommittedMissionResultRuntimeCellBindings& bindings) {
+    if (!valid_runtime_cell_factory_context(context) ||
+        bindings.boundary_evaluation_callsite_handle == 0U ||
+        bindings.committed_history_handle == 0U ||
+        bindings.runwide_result_output.slot_handle == 0U ||
+        bindings.runwide_result_output.writer_token.value == 0U ||
+        bindings.boundary_evaluation == nullptr) {
+        return mass_commit_failure<
+            RunwideCommittedMissionResultRuntimeCell>(
+                kRunwideCommittedMissionResultRuntimeCellFactoryIdentity,
+                NumericalStatus::DomainError, "compiled-bindings");
+    }
+    return NumericalOutcome<
+        RunwideCommittedMissionResultRuntimeCell>::with_value(
+            NumericalStatus::Success,
+            RunwideCommittedMissionResultRuntimeCell{
+                definition, context, bindings},
+            mass_commit_evidence(
+                kRunwideCommittedMissionResultRuntimeCellFactoryIdentity,
+                "runtime-cell"));
 }
 
 gnc::model_sdk::CanonicalConfigBlock
@@ -3108,6 +3499,50 @@ build_committed_mission_result_definition(
         mass_commit_evidence(
             kCommittedMissionResultDefinitionBuilderIdentity,
             "canonical-config"));
+}
+
+NumericalOutcome<CommittedMissionResultDefinition>
+build_committed_mission_accumulator_definition(
+    const gnc::model_sdk::CanonicalConfigBlock& configuration) {
+    const auto rebuilt =
+        build_committed_mission_result_definition(configuration);
+    if (!rebuilt.has_value()) {
+        return mass_commit_failure<CommittedMissionResultDefinition>(
+            kCommittedMissionAccumulatorDefinitionBuilderIdentity,
+            rebuilt.status(), "canonical-config", rebuilt.evidence().flags);
+    }
+    auto definition = rebuilt.value();
+    definition.model_id =
+        std::string(kCommittedMissionAccumulatorModelIdentity);
+    definition.model_version =
+        std::string(kCommittedMissionAccumulatorModelVersion);
+    return NumericalOutcome<CommittedMissionResultDefinition>::with_value(
+        rebuilt.status(), std::move(definition),
+        mass_commit_evidence(
+            kCommittedMissionAccumulatorDefinitionBuilderIdentity,
+            "canonical-config", rebuilt.evidence().flags));
+}
+
+NumericalOutcome<CommittedMissionResultDefinition>
+build_runwide_committed_mission_result_definition(
+    const gnc::model_sdk::CanonicalConfigBlock& configuration) {
+    const auto rebuilt =
+        build_committed_mission_result_definition(configuration);
+    if (!rebuilt.has_value()) {
+        return mass_commit_failure<CommittedMissionResultDefinition>(
+            kRunwideCommittedMissionResultDefinitionBuilderIdentity,
+            rebuilt.status(), "canonical-config", rebuilt.evidence().flags);
+    }
+    auto definition = rebuilt.value();
+    definition.model_id =
+        std::string(kRunwideCommittedMissionResultModelIdentity);
+    definition.model_version =
+        std::string(kRunwideCommittedMissionResultModelVersion);
+    return NumericalOutcome<CommittedMissionResultDefinition>::with_value(
+        rebuilt.status(), std::move(definition),
+        mass_commit_evidence(
+            kRunwideCommittedMissionResultDefinitionBuilderIdentity,
+            "canonical-config", rebuilt.evidence().flags));
 }
 
 NumericalOutcome<MassState> MassInitialStateBuilder::build(
@@ -4537,10 +4972,10 @@ TwoIntervalControlledPropelledCommitKernel::evaluate(
             std::move(output), evidence);
 }
 
-NumericalOutcome<CommittedMissionResultOutput>
-CommittedMissionResultKernel::evaluate(
-    const CommittedMissionResultDefinition& definition,
-    const CommittedMissionResultInput& input) {
+namespace {
+
+[[nodiscard]] bool valid_mission_definition(
+    const CommittedMissionResultDefinition& definition) {
     const auto valid_metric = [](MissionMetric metric) {
         switch (metric) {
         case MissionMetric::DurationSeconds:
@@ -4566,8 +5001,17 @@ CommittedMissionResultKernel::evaluate(
         }
         return false;
     };
-    if (definition.model_id != kCommittedMissionResultModelIdentity ||
-        definition.model_version.empty() || definition.subject.empty() ||
+    const bool valid_model_identity =
+        (definition.model_id == kCommittedMissionResultModelIdentity &&
+         definition.model_version == kCommittedMissionResultModelVersion) ||
+        (definition.model_id == kCommittedMissionAccumulatorModelIdentity &&
+         definition.model_version ==
+             kCommittedMissionAccumulatorModelVersion) ||
+        (definition.model_id ==
+             kRunwideCommittedMissionResultModelIdentity &&
+         definition.model_version ==
+             kRunwideCommittedMissionResultModelVersion);
+    if (!valid_model_identity || definition.subject.empty() ||
         definition.inertial_frame.id.empty() ||
         definition.body_frame.id.empty() ||
         definition.clock_domain.id.empty() ||
@@ -4575,9 +5019,7 @@ CommittedMissionResultKernel::evaluate(
         definition.configuration_revision < 0 ||
         !gnc::foundation::valid_numerical_policy(
             definition.numerical_policy)) {
-        return mass_commit_failure<CommittedMissionResultOutput>(
-            kCommittedMissionResultKernelIdentity,
-            NumericalStatus::DomainError, "definition-or-policy");
+        return false;
     }
     for (std::size_t index = 0U;
          index < definition.predicates.size(); ++index) {
@@ -4589,242 +5031,330 @@ CommittedMissionResultKernel::evaluate(
             !valid_action(predicate.action) ||
             !std::isfinite(predicate.threshold) ||
             predicate.priority < 0) {
-            return mass_commit_failure<CommittedMissionResultOutput>(
-                kCommittedMissionResultKernelIdentity,
-                NumericalStatus::DomainError,
-                "termination-predicate");
+            return false;
         }
         for (std::size_t previous = 0U; previous < index; ++previous) {
             if (predicate.predicate_id ==
                 definition.predicates[previous].predicate_id) {
-                return mass_commit_failure<
-                    CommittedMissionResultOutput>(
-                        kCommittedMissionResultKernelIdentity,
-                        NumericalStatus::DomainError,
-                        "duplicate-predicate-id");
+                return false;
             }
         }
+    }
+    return true;
+}
+
+[[nodiscard]] MissionMetrics mission_metrics(
+    const CommittedRigidMassBoundary& opening,
+    const CommittedRigidMassBoundary& sample) {
+    MissionMetrics metrics;
+    metrics.duration_seconds =
+        sample.rigid_context.sample_time.seconds -
+        opening.rigid_context.sample_time.seconds;
+    metrics.downrange_meters =
+        sample.rigid_state.position.value(0) -
+        opening.rigid_state.position.value(0);
+    metrics.vertical_displacement_meters =
+        sample.rigid_state.position.value(2) -
+        opening.rigid_state.position.value(2);
+    metrics.remaining_mass_kilograms = sample.mass_state.mass_kilograms;
+    metrics.consumed_mass_kilograms =
+        opening.mass_state.mass_kilograms -
+        sample.mass_state.mass_kilograms;
+    metrics.speed_meters_per_second =
+        sample.rigid_state.velocity.value.norm();
+    return metrics;
+}
+
+[[nodiscard]] bool finite_mission_metrics(
+    const MissionMetrics& metrics) noexcept {
+    return std::isfinite(metrics.duration_seconds) &&
+           std::isfinite(metrics.downrange_meters) &&
+           std::isfinite(metrics.vertical_displacement_meters) &&
+           std::isfinite(metrics.remaining_mass_kilograms) &&
+           std::isfinite(metrics.consumed_mass_kilograms) &&
+           std::isfinite(metrics.speed_meters_per_second);
+}
+
+[[nodiscard]] std::array<MissionPredicateEvaluation, 3U>
+evaluate_mission_predicates(
+    const CommittedMissionResultDefinition& definition,
+    const MissionMetrics& metrics,
+    const MissionTerminationPredicate*& selected) {
+    std::array<MissionPredicateEvaluation, 3U> evaluations;
+    selected = nullptr;
+    for (std::size_t index = 0U; index < definition.predicates.size();
+         ++index) {
+        const auto& predicate = definition.predicates[index];
+        double observed = 0.0;
+        switch (predicate.metric) {
+        case MissionMetric::DurationSeconds:
+            observed = metrics.duration_seconds;
+            break;
+        case MissionMetric::DownrangeMeters:
+            observed = metrics.downrange_meters;
+            break;
+        case MissionMetric::RemainingMassKilograms:
+            observed = metrics.remaining_mass_kilograms;
+            break;
+        }
+        const bool met =
+            predicate.relation == MissionRelation::LessThanOrEqual
+                ? observed <= predicate.threshold
+                : observed >= predicate.threshold;
+        evaluations[index] = {
+            predicate.predicate_id, observed, met, predicate.action,
+            predicate.reason_code, predicate.priority};
+        if (met &&
+            (selected == nullptr ||
+             predicate.priority > selected->priority ||
+             (predicate.priority == selected->priority &&
+              predicate.predicate_id < selected->predicate_id))) {
+            selected = &predicate;
+        }
+    }
+    return evaluations;
+}
+
+} // namespace
+
+CommittedMissionAccumulatorState::CommittedMissionAccumulatorState()
+    noexcept {
+    const auto initialize_boundary = [](CommittedRigidMassBoundary& value) {
+        value.rigid_state.position.value.setZero();
+        value.rigid_state.velocity.value.setZero();
+        value.rigid_state.attitude.value.setIdentity();
+        value.rigid_state.angular_rate.value.setZero();
+        value.mass_state.mass_kilograms = 0.0;
+        value.mass_state.body_origin_to_center_of_mass.value.setZero();
+        value.mass_state.inertia_about_center_of_mass.value.setZero();
+    };
+    initialize_boundary(opening_boundary);
+    initialize_boundary(latest_boundary);
+    initialize_boundary(terminal_result.terminal_boundary);
+}
+
+NumericalOutcome<CommittedMissionAccumulatorState>
+CommittedMissionAccumulatorKernel::accumulate(
+    const CommittedMissionResultDefinition& definition,
+    const CommittedMissionAccumulatorState& committed,
+    const CommittedRigidMassBoundary& boundary) {
+    if (!valid_mission_definition(definition)) {
+        return mass_commit_failure<CommittedMissionAccumulatorState>(
+            kCommittedMissionAccumulatorIntervalEvolutionIdentity,
+            NumericalStatus::DomainError, "definition-or-policy");
+    }
+    if (committed.terminal_result_present) {
+        return NumericalOutcome<CommittedMissionAccumulatorState>::with_value(
+            NumericalStatus::Success, committed,
+            mass_commit_evidence(
+                kCommittedMissionAccumulatorIntervalEvolutionIdentity,
+                "earliest-terminal-result-frozen"));
+    }
+    if (!validate_committed_mission_accumulator_state(committed)) {
+        return mass_commit_failure<CommittedMissionAccumulatorState>(
+            kCommittedMissionAccumulatorIntervalEvolutionIdentity,
+            NumericalStatus::DomainError, "committed-aggregate");
     }
 
     const NumericalPolicy& policy = definition.numerical_policy;
     NumericalFlags validation_flags = 0U;
     std::uint64_t validation_evaluations = 0U;
-    for (std::size_t index = 0U;
-         index < input.committed_samples.size(); ++index) {
-        const auto& sample = input.committed_samples[index];
-        const auto& rigid_context = sample.rigid_context;
-        const auto& mass = sample.mass_state;
-        if (!valid_sample_at(
-                rigid_context, definition.inertial_frame,
-                definition.clock_domain, rigid_context.sample_time,
-                definition.configuration_revision, policy) ||
-            !valid_sample_at(
-                mass.context, definition.body_frame,
-                definition.clock_domain, rigid_context.sample_time,
-                definition.configuration_revision, policy) ||
-            mass.mass_state_id != definition.mass_state_id ||
-            rigid_context.sample_time.tick < 0 ||
-            !std::isfinite(rigid_context.sample_time.seconds)) {
-            return mass_commit_failure<CommittedMissionResultOutput>(
-                kCommittedMissionResultKernelIdentity,
-                NumericalStatus::DomainError,
-                "committed-sample-context", validation_flags);
-        }
-        if (!finite(sample.rigid_state.position.value) ||
-            !finite(sample.rigid_state.velocity.value) ||
-            !finite(sample.rigid_state.attitude.value) ||
-            !finite(sample.rigid_state.angular_rate.value) ||
-            !std::isfinite(mass.mass_kilograms) ||
-            !finite(mass.body_origin_to_center_of_mass.value) ||
-            !finite(mass.inertia_about_center_of_mass.value)) {
-            return mass_commit_failure<CommittedMissionResultOutput>(
-                kCommittedMissionResultKernelIdentity,
-                NumericalStatus::NonFiniteInput,
-                "committed-sample-state", validation_flags);
-        }
-        const double attitude_norm =
-            sample.rigid_state.attitude.value.norm();
-        if (mass.mass_kilograms <= 0.0 ||
-            !std::isfinite(attitude_norm) ||
-            !near(attitude_norm, 1.0, policy)) {
-            return mass_commit_failure<CommittedMissionResultOutput>(
-                kCommittedMissionResultKernelIdentity,
-                NumericalStatus::DomainError,
-                "committed-sample-domain", validation_flags);
-        }
-        const auto inertia = gnc::foundation::solve_spd_3x3(
-            mass.inertia_about_center_of_mass.value,
-            Vec3::Zero(), policy);
-        validation_flags |= inertia.evidence().flags;
-        validation_evaluations += inertia.evidence().evaluations;
-        if (!inertia.has_value()) {
-            return mass_commit_failure<CommittedMissionResultOutput>(
-                kCommittedMissionResultKernelIdentity,
-                inertia.status(), "committed-sample-inertia",
+    const auto& rigid_context = boundary.rigid_context;
+    const auto& mass = boundary.mass_state;
+    if (!valid_sample_at(
+            rigid_context, definition.inertial_frame,
+            definition.clock_domain, rigid_context.sample_time,
+            definition.configuration_revision, policy) ||
+        !valid_sample_at(
+            mass.context, definition.body_frame,
+            definition.clock_domain, rigid_context.sample_time,
+            definition.configuration_revision, policy) ||
+        mass.mass_state_id != definition.mass_state_id ||
+        rigid_context.sample_time.tick < 0 ||
+        !std::isfinite(rigid_context.sample_time.seconds)) {
+        return mass_commit_failure<CommittedMissionAccumulatorState>(
+            kCommittedMissionAccumulatorIntervalEvolutionIdentity,
+            NumericalStatus::DomainError, "committed-sample-context");
+    }
+    if (!finite(boundary.rigid_state.position.value) ||
+        !finite(boundary.rigid_state.velocity.value) ||
+        !finite(boundary.rigid_state.attitude.value) ||
+        !finite(boundary.rigid_state.angular_rate.value) ||
+        !std::isfinite(mass.mass_kilograms) ||
+        !finite(mass.body_origin_to_center_of_mass.value) ||
+        !finite(mass.inertia_about_center_of_mass.value)) {
+        return mass_commit_failure<CommittedMissionAccumulatorState>(
+            kCommittedMissionAccumulatorIntervalEvolutionIdentity,
+            NumericalStatus::NonFiniteInput, "committed-sample-state");
+    }
+    const double attitude_norm = boundary.rigid_state.attitude.value.norm();
+    if (mass.mass_kilograms <= 0.0 || !std::isfinite(attitude_norm) ||
+        !near(attitude_norm, 1.0, policy)) {
+        return mass_commit_failure<CommittedMissionAccumulatorState>(
+            kCommittedMissionAccumulatorIntervalEvolutionIdentity,
+            NumericalStatus::DomainError, "committed-sample-domain");
+    }
+    const auto inertia = gnc::foundation::solve_spd_3x3(
+        mass.inertia_about_center_of_mass.value, Vec3::Zero(), policy);
+    validation_flags |= inertia.evidence().flags;
+    validation_evaluations += inertia.evidence().evaluations;
+    if (!inertia.has_value()) {
+        return mass_commit_failure<CommittedMissionAccumulatorState>(
+            kCommittedMissionAccumulatorIntervalEvolutionIdentity,
+            inertia.status(), "committed-sample-inertia", validation_flags);
+    }
+    if (committed.initialized) {
+        const auto& previous = committed.latest_boundary;
+        if (rigid_context.sample_time.tick !=
+                previous.rigid_context.sample_time.tick + 1 ||
+            rigid_context.sample_time.seconds <=
+                previous.rigid_context.sample_time.seconds ||
+            (mass.mass_kilograms > previous.mass_state.mass_kilograms &&
+             !near(mass.mass_kilograms,
+                   previous.mass_state.mass_kilograms, policy))) {
+            return mass_commit_failure<CommittedMissionAccumulatorState>(
+                kCommittedMissionAccumulatorIntervalEvolutionIdentity,
+                NumericalStatus::DomainError, "committed-sample-sequence",
                 validation_flags);
         }
-        if (index > 0U) {
-            const auto& previous = input.committed_samples[index - 1U];
-            if (rigid_context.sample_time.tick !=
-                    previous.rigid_context.sample_time.tick + 1 ||
-                rigid_context.sample_time.seconds <=
-                    previous.rigid_context.sample_time.seconds ||
-                (mass.mass_kilograms >
-                     previous.mass_state.mass_kilograms &&
-                 !near(mass.mass_kilograms,
-                       previous.mass_state.mass_kilograms, policy))) {
-                return mass_commit_failure<CommittedMissionResultOutput>(
-                    kCommittedMissionResultKernelIdentity,
-                    NumericalStatus::DomainError,
-                    "committed-sample-sequence", validation_flags);
-            }
-        }
     }
 
-    const auto& initial = input.committed_samples[0];
-    const double initial_time = initial.rigid_context.sample_time.seconds;
-    const double initial_downrange =
-        initial.rigid_state.position.value(0);
-    const double initial_altitude =
-        initial.rigid_state.position.value(2);
-    const double initial_mass = initial.mass_state.mass_kilograms;
-    MissionMetricSummary summary;
-    bool summary_initialized = false;
-    for (std::size_t sample_index = 0U;
-         sample_index < input.committed_samples.size(); ++sample_index) {
-        const auto& sample = input.committed_samples[sample_index];
-        MissionMetrics metrics;
-        metrics.duration_seconds =
-            sample.rigid_context.sample_time.seconds - initial_time;
-        metrics.downrange_meters =
-            sample.rigid_state.position.value(0) - initial_downrange;
-        metrics.vertical_displacement_meters =
-            sample.rigid_state.position.value(2) - initial_altitude;
-        metrics.remaining_mass_kilograms =
-            sample.mass_state.mass_kilograms;
-        metrics.consumed_mass_kilograms =
-            initial_mass - sample.mass_state.mass_kilograms;
-        metrics.speed_meters_per_second =
-            sample.rigid_state.velocity.value.norm();
-        if (!std::isfinite(metrics.duration_seconds) ||
-            !std::isfinite(metrics.downrange_meters) ||
-            !std::isfinite(metrics.vertical_displacement_meters) ||
-            !std::isfinite(metrics.remaining_mass_kilograms) ||
-            !std::isfinite(metrics.consumed_mass_kilograms) ||
-            !std::isfinite(metrics.speed_meters_per_second) ||
-            metrics.duration_seconds < 0.0 ||
-            (metrics.consumed_mass_kilograms < 0.0 &&
-             !near(metrics.consumed_mass_kilograms, 0.0, policy))) {
+    CommittedMissionAccumulatorState next = committed;
+    if (!next.initialized) {
+        next.initialized = true;
+        next.opening_boundary = boundary;
+    }
+    next.latest_boundary = boundary;
+    const MissionMetrics metrics =
+        mission_metrics(next.opening_boundary, boundary);
+    if (!finite_mission_metrics(metrics) || metrics.duration_seconds < 0.0 ||
+        (metrics.consumed_mass_kilograms < 0.0 &&
+         !near(metrics.consumed_mass_kilograms, 0.0, policy))) {
+        return mass_commit_failure<CommittedMissionAccumulatorState>(
+            kCommittedMissionAccumulatorIntervalEvolutionIdentity,
+            NumericalStatus::NonFiniteIntermediate, "mission-metrics",
+            validation_flags);
+    }
+
+    const bool first = next.metrics.evaluated_sample_count == 0U;
+    const auto tick = boundary.rigid_context.sample_time.tick;
+    ++next.metrics.evaluated_sample_count;
+    next.metrics.terminal = metrics;
+    if (first || metrics.speed_meters_per_second >
+                     next.metrics.peak_speed_meters_per_second) {
+        next.metrics.peak_speed_meters_per_second =
+            metrics.speed_meters_per_second;
+        next.metrics.peak_speed_tick = tick;
+    }
+    if (first || metrics.downrange_meters >
+                     next.metrics.maximum_downrange_meters) {
+        next.metrics.maximum_downrange_meters = metrics.downrange_meters;
+        next.metrics.maximum_downrange_tick = tick;
+    }
+    if (first || metrics.remaining_mass_kilograms <
+                     next.metrics.minimum_remaining_mass_kilograms) {
+        next.metrics.minimum_remaining_mass_kilograms =
+            metrics.remaining_mass_kilograms;
+        next.metrics.minimum_remaining_mass_tick = tick;
+    }
+
+    const MissionTerminationPredicate* selected = nullptr;
+    auto evaluations =
+        evaluate_mission_predicates(definition, metrics, selected);
+    if (selected != nullptr) {
+        next.terminal_result_present = true;
+        auto& output = next.terminal_result;
+        output.status = selected->action == MissionAction::Complete
+                            ? MissionResultStatus::Completed
+                            : MissionResultStatus::Aborted;
+        output.initial_tick =
+            next.opening_boundary.rigid_context.sample_time.tick;
+        output.final_tick = tick;
+        output.final_time_seconds = rigid_context.sample_time.seconds;
+        output.termination = {
+            selected->action, selected->reason_code,
+            output.final_time_seconds, selected->priority};
+        output.metrics = next.metrics;
+        output.terminal_predicates = std::move(evaluations);
+        output.terminal_boundary = boundary;
+    }
+
+    NumericalEvidence evidence = mass_commit_evidence(
+        kCommittedMissionAccumulatorIntervalEvolutionIdentity,
+        next.terminal_result_present ? "first-terminal-committed-sample"
+                                     : "committed-boundary-aggregate",
+        validation_flags);
+    evidence.evaluations = validation_evaluations +
+                           definition.predicates.size();
+    evidence.last_step = metrics.duration_seconds;
+    return NumericalOutcome<CommittedMissionAccumulatorState>::with_value(
+        validation_flags == 0U ? NumericalStatus::Success
+                               : NumericalStatus::Approximate,
+        std::move(next), evidence);
+}
+
+NumericalOutcome<CommittedMissionResultOutput>
+CommittedMissionAccumulatorKernel::finalize(
+    const CommittedMissionResultDefinition& definition,
+    const CommittedMissionAccumulatorState& committed,
+    const CommittedRigidMassBoundary& terminal_boundary) {
+    const auto advanced = accumulate(definition, committed,
+                                     terminal_boundary);
+    if (!advanced.has_value()) {
+        return mass_commit_failure<CommittedMissionResultOutput>(
+            kCommittedMissionResultKernelIdentity, advanced.status(),
+            "online-accumulation", advanced.evidence().flags);
+    }
+    if (!advanced.value().terminal_result_present) {
+        return mass_commit_failure<CommittedMissionResultOutput>(
+            kCommittedMissionResultKernelIdentity,
+            NumericalStatus::DomainError, "no-terminal-committed-sample",
+            advanced.evidence().flags);
+    }
+    auto output = advanced.value().terminal_result;
+    NumericalEvidence evidence = mass_commit_evidence(
+        kCommittedMissionResultKernelIdentity,
+        "first-terminal-committed-sample", advanced.evidence().flags);
+    evidence.evaluations =
+        output.metrics.evaluated_sample_count *
+        definition.predicates.size();
+    evidence.last_step = output.metrics.terminal.duration_seconds;
+    return NumericalOutcome<CommittedMissionResultOutput>::with_value(
+        advanced.status(), std::move(output), evidence);
+}
+
+NumericalOutcome<CommittedMissionResultOutput>
+CommittedMissionResultKernel::evaluate(
+    const CommittedMissionResultDefinition& definition,
+    const CommittedMissionResultInput& input) {
+    CommittedMissionAccumulatorState state;
+    for (const auto& boundary : input.committed_samples) {
+        const auto advanced =
+            CommittedMissionAccumulatorKernel::accumulate(
+                definition, state, boundary);
+        if (!advanced.has_value()) {
             return mass_commit_failure<CommittedMissionResultOutput>(
                 kCommittedMissionResultKernelIdentity,
-                NumericalStatus::NonFiniteIntermediate,
-                "mission-metrics", validation_flags);
+                advanced.status(), "online-accumulation",
+                advanced.evidence().flags);
         }
-
-        const std::int64_t tick =
-            sample.rigid_context.sample_time.tick;
-        summary.evaluated_sample_count = sample_index + 1U;
-        summary.terminal = metrics;
-        if (!summary_initialized ||
-            metrics.speed_meters_per_second >
-                summary.peak_speed_meters_per_second) {
-            summary.peak_speed_meters_per_second =
-                metrics.speed_meters_per_second;
-            summary.peak_speed_tick = tick;
-        }
-        if (!summary_initialized ||
-            metrics.downrange_meters >
-                summary.maximum_downrange_meters) {
-            summary.maximum_downrange_meters =
-                metrics.downrange_meters;
-            summary.maximum_downrange_tick = tick;
-        }
-        if (!summary_initialized ||
-            metrics.remaining_mass_kilograms <
-                summary.minimum_remaining_mass_kilograms) {
-            summary.minimum_remaining_mass_kilograms =
-                metrics.remaining_mass_kilograms;
-            summary.minimum_remaining_mass_tick = tick;
-        }
-        summary_initialized = true;
-
-        std::array<MissionPredicateEvaluation, 3U> evaluations;
-        const MissionTerminationPredicate* selected = nullptr;
-        for (std::size_t predicate_index = 0U;
-             predicate_index < definition.predicates.size();
-             ++predicate_index) {
-            const auto& predicate =
-                definition.predicates[predicate_index];
-            double observed = 0.0;
-            switch (predicate.metric) {
-            case MissionMetric::DurationSeconds:
-                observed = metrics.duration_seconds;
-                break;
-            case MissionMetric::DownrangeMeters:
-                observed = metrics.downrange_meters;
-                break;
-            case MissionMetric::RemainingMassKilograms:
-                observed = metrics.remaining_mass_kilograms;
-                break;
-            }
-            const bool met =
-                predicate.relation == MissionRelation::LessThanOrEqual
-                    ? observed <= predicate.threshold
-                    : observed >= predicate.threshold;
-            evaluations[predicate_index] = {
-                predicate.predicate_id,
-                observed,
-                met,
-                predicate.action,
-                predicate.reason_code,
-                predicate.priority,
-            };
-            if (met &&
-                (selected == nullptr ||
-                 predicate.priority > selected->priority ||
-                 (predicate.priority == selected->priority &&
-                  predicate.predicate_id < selected->predicate_id))) {
-                selected = &predicate;
-            }
-        }
-        if (selected != nullptr) {
-            CommittedMissionResultOutput output;
-            output.status = selected->action == MissionAction::Complete
-                                ? MissionResultStatus::Completed
-                                : MissionResultStatus::Aborted;
-            output.initial_tick =
-                initial.rigid_context.sample_time.tick;
-            output.final_tick = tick;
-            output.final_time_seconds =
-                sample.rigid_context.sample_time.seconds;
-            output.termination = {
-                selected->action,
-                selected->reason_code,
-                output.final_time_seconds,
-                selected->priority,
-            };
-            output.metrics = summary;
-            output.terminal_predicates = std::move(evaluations);
-            output.terminal_boundary = sample;
-            NumericalEvidence evidence = mass_commit_evidence(
-                kCommittedMissionResultKernelIdentity,
-                "first-terminal-committed-sample", validation_flags);
-            evidence.evaluations = validation_evaluations +
-                                   summary.evaluated_sample_count *
-                                       definition.predicates.size();
-            evidence.last_step = metrics.duration_seconds;
-            return NumericalOutcome<
-                CommittedMissionResultOutput>::with_value(
-                    validation_flags == 0U
-                        ? NumericalStatus::Success
-                        : NumericalStatus::Approximate,
-                    std::move(output), evidence);
-        }
+        state = advanced.value();
     }
-    return mass_commit_failure<CommittedMissionResultOutput>(
+    if (!state.terminal_result_present) {
+        return mass_commit_failure<CommittedMissionResultOutput>(
+            kCommittedMissionResultKernelIdentity,
+            NumericalStatus::DomainError, "no-terminal-committed-sample");
+    }
+    auto output = state.terminal_result;
+    NumericalEvidence evidence = mass_commit_evidence(
         kCommittedMissionResultKernelIdentity,
-        NumericalStatus::DomainError, "no-terminal-committed-sample",
-        validation_flags);
+        "first-terminal-committed-sample");
+    evidence.evaluations =
+        output.metrics.evaluated_sample_count *
+        definition.predicates.size();
+    evidence.last_step = output.metrics.terminal.duration_seconds;
+    return NumericalOutcome<CommittedMissionResultOutput>::with_value(
+        NumericalStatus::Success, std::move(output), evidence);
 }
 
 NumericalOutcome<CommittedMissionResultOutput>
@@ -4844,6 +5374,222 @@ CommittedMissionHistoryEvaluationKernel::evaluate(
             input.rigid_states[index], input.mass_states[index]};
     }
     return CommittedMissionResultKernel::evaluate(definition, assembled);
+}
+
+NumericalOutcome<CommittedMissionAccumulatorState>
+build_committed_mission_accumulator_initial_state(
+    const CommittedMissionResultDefinition& definition,
+    const CommittedMissionAccumulatorInitialStateInput& input) {
+    if (!valid_mission_definition(definition) ||
+        input.configuration_revision !=
+            definition.configuration_revision) {
+        return mass_commit_failure<CommittedMissionAccumulatorState>(
+            kCommittedMissionAccumulatorInitialStateBuilderIdentity,
+            NumericalStatus::DomainError, "definition-or-initial-state");
+    }
+    return NumericalOutcome<CommittedMissionAccumulatorState>::with_value(
+        NumericalStatus::Success, CommittedMissionAccumulatorState{},
+        mass_commit_evidence(
+            kCommittedMissionAccumulatorInitialStateBuilderIdentity,
+            "empty-committed-aggregate"));
+}
+
+CommittedMissionAccumulatorState
+project_committed_mission_accumulator(
+    const gnc::contracts::IntervalSampleContext& context,
+    const CommittedMissionAccumulatorState& state) {
+    static_cast<void>(context);
+    return state;
+}
+
+NumericalOutcome<CommittedMissionAccumulatorState>
+evolve_committed_mission_accumulator(
+    const CommittedMissionResultDefinition& definition,
+    const CommittedMissionAccumulatorState& committed,
+    const CommittedMissionAccumulatorIntervalInput& input) {
+    CommittedRigidMassBoundary boundary;
+    boundary.rigid_context = input.rigid_observation.context;
+    boundary.rigid_state = input.rigid_observation.state;
+    boundary.mass_state.context = input.mass_properties.context.sample;
+    boundary.mass_state.mass_state_id =
+        input.mass_properties.mass_state_id;
+    boundary.mass_state.mass_kilograms =
+        input.mass_properties.mass_kilograms;
+    boundary.mass_state.body_origin_to_center_of_mass =
+        input.mass_properties.body_origin_to_center_of_mass;
+    boundary.mass_state.inertia_about_center_of_mass =
+        input.mass_properties.inertia_about_center_of_mass;
+    return CommittedMissionAccumulatorKernel::accumulate(
+        definition, committed, boundary);
+}
+
+NumericalOutcome<CommittedMissionResultOutput>
+RunwideCommittedMissionHistoryEvaluationKernel::evaluate(
+    const CommittedMissionResultDefinition& definition,
+    const RunwideCommittedMissionStateHistoryInput& input) {
+    static_assert(kRunwideCommittedMissionHistoryDepth == 1U,
+                  "run-wide terminal fold requires one committed boundary");
+    CommittedRigidMassBoundary terminal;
+    terminal.rigid_context = {
+        definition.inertial_frame,
+        definition.clock_domain,
+        input.mass_states[0U].context.sample_time,
+        definition.configuration_revision,
+        input.mass_states[0U].context.quality};
+    terminal.rigid_state = input.rigid_states[0U];
+    terminal.mass_state = input.mass_states[0U];
+    return CommittedMissionAccumulatorKernel::finalize(
+        definition, input.accumulators[0U], terminal);
+}
+
+namespace {
+
+[[nodiscard]] bool finite_mission_boundary(
+    const CommittedRigidMassBoundary& boundary) noexcept {
+    return std::isfinite(boundary.rigid_context.sample_time.seconds) &&
+           finite(boundary.rigid_state.position.value) &&
+           finite(boundary.rigid_state.velocity.value) &&
+           finite(boundary.rigid_state.attitude.value) &&
+           finite(boundary.rigid_state.angular_rate.value) &&
+           std::isfinite(boundary.mass_state.context.sample_time.seconds) &&
+           std::isfinite(boundary.mass_state.mass_kilograms) &&
+           finite(boundary.mass_state.body_origin_to_center_of_mass.value) &&
+           finite(boundary.mass_state.inertia_about_center_of_mass.value);
+}
+
+[[nodiscard]] bool valid_mission_boundary_shape(
+    const CommittedRigidMassBoundary& boundary) noexcept {
+    return !boundary.rigid_context.frame.id.empty() &&
+           !boundary.rigid_context.clock_domain.id.empty() &&
+           boundary.rigid_context.configuration_revision >= 0 &&
+           boundary.rigid_context.quality == DataQuality::Valid &&
+           boundary.rigid_context.sample_time.tick >= 0 &&
+           !boundary.mass_state.context.frame.id.empty() &&
+           boundary.mass_state.context.clock_domain.id ==
+               boundary.rigid_context.clock_domain.id &&
+           boundary.mass_state.context.configuration_revision ==
+               boundary.rigid_context.configuration_revision &&
+           boundary.mass_state.context.quality == DataQuality::Valid &&
+           boundary.mass_state.context.sample_time.tick ==
+               boundary.rigid_context.sample_time.tick &&
+           boundary.mass_state.context.sample_time.seconds ==
+               boundary.rigid_context.sample_time.seconds &&
+           !boundary.mass_state.mass_state_id.empty() &&
+           boundary.mass_state.mass_kilograms > 0.0;
+}
+
+[[nodiscard]] bool finite_mission_summary(
+    const MissionMetricSummary& summary) noexcept {
+    return finite_mission_metrics(summary.terminal) &&
+           std::isfinite(summary.peak_speed_meters_per_second) &&
+           std::isfinite(summary.maximum_downrange_meters) &&
+           std::isfinite(summary.minimum_remaining_mass_kilograms);
+}
+
+[[nodiscard]] bool finite_mission_result(
+    const CommittedMissionResultOutput& result) noexcept {
+    if (!std::isfinite(result.final_time_seconds) ||
+        !std::isfinite(result.termination.trigger_time_seconds) ||
+        !finite_mission_summary(result.metrics) ||
+        !finite_mission_boundary(result.terminal_boundary)) {
+        return false;
+    }
+    return std::all_of(
+        result.terminal_predicates.begin(),
+        result.terminal_predicates.end(), [](const auto& predicate) {
+            return std::isfinite(predicate.observed);
+        });
+}
+
+} // namespace
+
+CommittedMissionAccumulatorState
+clone_committed_mission_accumulator_state(
+    const CommittedMissionAccumulatorState& state) {
+    return state;
+}
+
+bool validate_committed_mission_accumulator_state_finite(
+    const CommittedMissionAccumulatorState& state) noexcept {
+    if (!state.initialized) {
+        return true;
+    }
+    return finite_mission_boundary(state.opening_boundary) &&
+           finite_mission_boundary(state.latest_boundary) &&
+           finite_mission_summary(state.metrics) &&
+           (!state.terminal_result_present ||
+            finite_mission_result(state.terminal_result));
+}
+
+bool validate_committed_mission_accumulator_state_invariants(
+    const CommittedMissionAccumulatorState& state) noexcept {
+    if (!state.initialized) {
+        return !state.terminal_result_present &&
+               state.metrics.evaluated_sample_count == 0U;
+    }
+    const auto opening_tick =
+        state.opening_boundary.rigid_context.sample_time.tick;
+    const auto latest_tick =
+        state.latest_boundary.rigid_context.sample_time.tick;
+    if (!valid_mission_boundary_shape(state.opening_boundary) ||
+        !valid_mission_boundary_shape(state.latest_boundary) ||
+        latest_tick < opening_tick ||
+        state.latest_boundary.rigid_context.sample_time.seconds <
+            state.opening_boundary.rigid_context.sample_time.seconds ||
+        state.latest_boundary.mass_state.mass_kilograms >
+            state.opening_boundary.mass_state.mass_kilograms ||
+        state.metrics.evaluated_sample_count !=
+            static_cast<std::size_t>(latest_tick - opening_tick + 1) ||
+        state.metrics.peak_speed_tick < opening_tick ||
+        state.metrics.peak_speed_tick > latest_tick ||
+        state.metrics.maximum_downrange_tick < opening_tick ||
+        state.metrics.maximum_downrange_tick > latest_tick ||
+        state.metrics.minimum_remaining_mass_tick < opening_tick ||
+        state.metrics.minimum_remaining_mass_tick > latest_tick) {
+        return false;
+    }
+    if (!state.terminal_result_present) {
+        return true;
+    }
+    const auto& result = state.terminal_result;
+    return (result.status == MissionResultStatus::Completed ||
+            result.status == MissionResultStatus::Aborted) &&
+           result.initial_tick == opening_tick &&
+           result.final_tick == latest_tick &&
+           result.metrics.evaluated_sample_count ==
+               state.metrics.evaluated_sample_count &&
+           result.terminal_boundary.rigid_context.sample_time.tick ==
+               latest_tick &&
+           !result.termination.reason_code.empty() &&
+           result.termination.priority >= 0;
+}
+
+bool validate_committed_mission_accumulator_state(
+    const CommittedMissionAccumulatorState& state) noexcept {
+    return validate_committed_mission_accumulator_state_finite(state) &&
+           validate_committed_mission_accumulator_state_invariants(state);
+}
+
+void swap_committed_mission_accumulator_state(
+    CommittedMissionAccumulatorState& lhs,
+    CommittedMissionAccumulatorState& rhs) noexcept {
+    static_assert(
+        std::is_nothrow_swappable_v<CommittedMissionAccumulatorState>,
+        "committed mission accumulator codec requires noexcept swap");
+    using std::swap;
+    swap(lhs, rhs);
+}
+
+const CommittedMissionAccumulatorStateCodec&
+committed_mission_accumulator_state_codec() noexcept {
+    static const CommittedMissionAccumulatorStateCodec codec{
+        &clone_committed_mission_accumulator_state,
+        &validate_committed_mission_accumulator_state,
+        &validate_committed_mission_accumulator_state_finite,
+        &validate_committed_mission_accumulator_state_invariants,
+        &swap_committed_mission_accumulator_state,
+        &project_committed_mission_accumulator};
+    return codec;
 }
 
 NumericalOutcome<TwoIntervalMassCommitOutput>

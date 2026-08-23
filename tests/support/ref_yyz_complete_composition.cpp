@@ -441,7 +441,8 @@ namespace {
 
 [[nodiscard]] CompleteStaticCompositionSource make_source(
     const StaticPackageDescriptor& package, bool include_navigation,
-    double base_step_seconds, std::int64_t terminal_tick) {
+    bool include_runwide_evaluation, double base_step_seconds,
+    std::int64_t terminal_tick) {
     CompleteStaticCompositionSource source;
     source.source_version =
         std::string(gnc::compiler::kCompleteStaticCompositionSourceVersion);
@@ -462,10 +463,17 @@ namespace {
 
     std::vector<std::size_t> selected_model_indices;
     for (std::size_t index = 0U; index < package.models.size(); ++index) {
-        if (include_navigation ||
-            package.models[index].definition.model_id !=
-                gnc::packages::yyz::
-                    kTruthPassthroughNavigationModelIdentity) {
+        const auto& model_id = package.models[index].definition.model_id;
+        const bool navigation_only =
+            model_id == gnc::packages::yyz::
+                            kTruthPassthroughNavigationModelIdentity;
+        const bool runwide_only =
+            model_id == gnc::packages::yyz::
+                            kCommittedMissionAccumulatorModelIdentity ||
+            model_id == gnc::packages::yyz::
+                            kRunwideCommittedMissionResultModelIdentity;
+        if ((!navigation_only || include_navigation) &&
+            (!runwide_only || include_runwide_evaluation)) {
             selected_model_indices.push_back(index);
         }
     }
@@ -558,9 +566,7 @@ namespace {
                                 provider_model.definition.model_id ==
                                 gnc::packages::yyz::
                                     kRigidStepModelIdentity;
-                        } else if (consumer.definition.model_id ==
-                                   gnc::packages::yyz::
-                                       kAltitudePitchGuidanceModelIdentity) {
+                        } else {
                             target_provider =
                                 provider_model.definition.model_id ==
                                 gnc::packages::yyz::
@@ -653,13 +659,8 @@ namespace {
     transaction.transaction_id = "transaction.ref-yyz";
     transaction.scope = vehicle_scope;
     transaction.source = ref("transactions/ref-yyz");
-    CompleteSourceEvaluatorHistory evaluator;
-    evaluator.history_id = "history.ref-yyz";
-    evaluator.source = ref("evaluators/ref-yyz/history");
     std::map<std::pair<std::string, std::string>, std::string>
         owner_by_schema_layout;
-    const gnc::model_sdk::StaticEvaluatorHistoryShapeDescriptor*
-        evaluator_shape = nullptr;
     for (const auto index : selected_model_indices) {
         const auto& model = package.models[index];
         if (model.runtime_component.has_value() &&
@@ -671,31 +672,57 @@ namespace {
                 std::make_pair(schema.schema_id, schema.layout_id),
                 occurrence_id(index));
         }
+    }
+
+    std::vector<CompleteSourceEvaluatorHistory> evaluators;
+    for (const auto index : selected_model_indices) {
+        const auto& model = package.models[index];
         if (is_terminal_evaluator(model)) {
+            CompleteSourceEvaluatorHistory evaluator;
             evaluator.evaluator_occurrence_id = occurrence_id(index);
+            if (model.definition.model_id ==
+                gnc::packages::yyz::
+                    kCommittedMissionResultModelIdentity) {
+                evaluator.history_id = "history.ref-yyz";
+                evaluator.source = ref("evaluators/ref-yyz/history");
+            } else {
+                require(model.definition.model_id ==
+                            gnc::packages::yyz::
+                                kRunwideCommittedMissionResultModelIdentity,
+                        "REF graph contains an unknown terminal evaluator");
+                evaluator.history_id = "history.ref-yyz.runwide";
+                evaluator.source =
+                    ref("evaluators/ref-yyz/runwide-history");
+            }
             require(model.runtime_component->evaluator_history_shape
                         .has_value(),
                     "REF evaluator lacks a package history shape");
-            evaluator_shape =
-                &*model.runtime_component->evaluator_history_shape;
+            const auto& evaluator_shape =
+                *model.runtime_component->evaluator_history_shape;
+            evaluator.committed_history_depth = evaluator_shape.depth;
+            for (const auto& member : evaluator_shape.ordered_members) {
+                const auto owner = owner_by_schema_layout.find(
+                    {member.state_schema_id, member.state_layout_id});
+                require(owner != owner_by_schema_layout.end(),
+                        "REF evaluator member lacks its exact state owner");
+                evaluator.owner_occurrence_ids.push_back(owner->second);
+            }
+            require(evaluator.owner_occurrence_ids.size() ==
+                        evaluator_shape.ordered_members.size(),
+                    "REF evaluator history member count is incomplete");
+            evaluators.push_back(std::move(evaluator));
         }
     }
-    require(evaluator_shape != nullptr,
-            "REF graph lacks an evaluator history shape");
-    evaluator.committed_history_depth = evaluator_shape->depth;
-    for (const auto& member : evaluator_shape->ordered_members) {
-        const auto owner = owner_by_schema_layout.find(
-            {member.state_schema_id, member.state_layout_id});
-        require(owner != owner_by_schema_layout.end(),
-                "REF evaluator member lacks its exact state owner");
-        evaluator.owner_occurrence_ids.push_back(owner->second);
-    }
-    require(transaction.owner_occurrence_ids.size() == 2U &&
-                evaluator.owner_occurrence_ids.size() == 2U &&
-                !evaluator.evaluator_occurrence_id.empty(),
-            "REF graph lacks two state owners or evaluator");
+    const std::size_t expected_state_owner_count =
+        include_runwide_evaluation ? 3U : 2U;
+    const std::size_t expected_evaluator_count =
+        include_runwide_evaluation ? 2U : 1U;
+    require(transaction.owner_occurrence_ids.size() ==
+                expected_state_owner_count &&
+                evaluators.size() == expected_evaluator_count,
+            "REF graph has incomplete state-owner/evaluator topology");
     source.transactions.push_back(std::move(transaction));
-    source.evaluator_histories.push_back(std::move(evaluator));
+    source.evaluator_histories = std::move(evaluators);
     source.package_build_locks.push_back(
         {package.package_id, package.package_version,
          "build.ref-yyz.release", ref("packages/yyz/build")});
@@ -737,7 +764,7 @@ namespace {
 
 [[nodiscard]] CompleteStaticCompositionSource make_complete_source(
     const StaticPackageDescriptor& package) {
-    return make_source(package, false, 0.1, 2);
+    return make_source(package, false, false, 0.1, 2);
 }
 
 gnc::compiler::CompleteOutcome<gnc::contracts::ExecutionPlanImage>
@@ -824,7 +851,7 @@ gnc::compiler::CompleteStaticCompositionSource
 make_00a_target_rate_source(
     const gnc::model_sdk::StaticPackageDescriptor& package,
     std::int64_t terminal_tick) {
-    auto source = make_source(package, true, 0.01, terminal_tick);
+    auto source = make_source(package, true, true, 0.01, terminal_tick);
     source.mission_id =
         "mission.qualification.yyz.00a-target-rate@1";
     source.plan_id = "plan.qualification.yyz.00a-target-rate";
@@ -838,43 +865,67 @@ make_00a_target_rate_source(
         source, gnc::packages::yyz::kPitchMomentControllerModelIdentity);
     const auto& actuator = occurrence_for(
         source, gnc::packages::yyz::kIdealBodyMomentActuatorModelIdentity);
-    auto& evaluator = occurrence_for(
+    auto& terminal_window_evaluator = occurrence_for(
         source,
         gnc::packages::yyz::kCommittedMissionResultModelIdentity);
+    auto& accumulator = occurrence_for(
+        source,
+        gnc::packages::yyz::kCommittedMissionAccumulatorModelIdentity);
+    auto& runwide_evaluator = occurrence_for(
+        source,
+        gnc::packages::yyz::kRunwideCommittedMissionResultModelIdentity);
 
-    // This conformance source retains the package's fixed three-boundary
-    // terminal window. Disable predicates that need the run opening boundary,
-    // then use an absolute mass sentinel derived from the finite target grid.
-    // With the fixture's 100 kg opening mass and 0.005 kg/tick burn, the
-    // midpoint between the last two boundaries first becomes true at the
-    // requested terminal tick.
-    const double terminal_mass_threshold =
-        100.0 - 0.005 * static_cast<double>(terminal_tick) + 0.0025;
-    std::size_t configured_predicates = 0U;
-    for (auto& field : evaluator.configuration.fields) {
-        if (field.field_id == "predicates.0.threshold") {
-            field.value = terminal_mass_threshold;
-            ++configured_predicates;
-        } else if (field.field_id == "predicates.1.threshold" ||
-                   field.field_id == "predicates.2.threshold") {
-            field.value = (std::numeric_limits<double>::max)();
-            ++configured_predicates;
+    const auto configure_predicates = [&](CompleteSourceOccurrence& occurrence,
+                                          double duration_threshold,
+                                          std::string_view provenance_prefix) {
+        std::size_t configured_predicates = 0U;
+        for (auto& field : occurrence.configuration.fields) {
+            if (field.field_id == "predicates.0.threshold") {
+                field.value = 0.0;
+                ++configured_predicates;
+            } else if (field.field_id == "predicates.1.threshold") {
+                field.value = duration_threshold;
+                ++configured_predicates;
+            } else if (field.field_id == "predicates.2.threshold") {
+                field.value = (std::numeric_limits<double>::max)();
+                ++configured_predicates;
+            }
         }
-    }
-    require(configured_predicates == 3U,
-            "target evaluator predicate configuration is incomplete");
-    std::size_t configured_predicate_sources = 0U;
-    for (auto& provenance : evaluator.configuration_field_sources) {
-        if (provenance.field_id == "predicates.0.threshold" ||
-            provenance.field_id == "predicates.1.threshold" ||
-            provenance.field_id == "predicates.2.threshold") {
-            provenance.source = ref(
-                "target-rate/evaluator/" + provenance.field_id);
-            ++configured_predicate_sources;
+        require(configured_predicates == 3U,
+                "target evaluator predicate configuration is incomplete");
+        std::size_t configured_sources = 0U;
+        for (auto& provenance :
+             occurrence.configuration_field_sources) {
+            if (provenance.field_id == "predicates.0.threshold" ||
+                provenance.field_id == "predicates.1.threshold" ||
+                provenance.field_id == "predicates.2.threshold") {
+                provenance.source = ref(
+                    std::string(provenance_prefix) + "/" +
+                    provenance.field_id);
+                ++configured_sources;
+            }
         }
-    }
-    require(configured_predicate_sources == 3U,
-            "target evaluator predicate provenance is incomplete");
+        require(configured_sources == 3U,
+                "target evaluator predicate provenance is incomplete");
+    };
+
+    constexpr double kTargetStepSeconds = 0.01;
+    const double terminal_window_duration_seconds =
+        static_cast<double>(
+            gnc::packages::yyz::kCommittedMissionHistoryDepth - 1U) *
+            kTargetStepSeconds -
+        1.0e-12;
+    const double runwide_duration_seconds =
+        static_cast<double>(terminal_tick) * kTargetStepSeconds;
+    configure_predicates(
+        terminal_window_evaluator, terminal_window_duration_seconds,
+        "target-rate/terminal-window-evaluator");
+    configure_predicates(
+        accumulator, runwide_duration_seconds,
+        "target-rate/committed-mission-accumulator");
+    configure_predicates(
+        runwide_evaluator, runwide_duration_seconds,
+        "target-rate/runwide-evaluator");
 
     source.occurrence_schedule_overrides = {
         {navigation.occurrence_id, 1U, 0U, 0U,

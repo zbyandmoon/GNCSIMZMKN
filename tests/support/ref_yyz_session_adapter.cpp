@@ -495,6 +495,13 @@ void build_slots(const ExecutionPlanImage& image,
         }
         if (materializer == nullptr) {
             materializer = slot_materializer_if<
+                yyz::CommittedMissionAccumulatorState>(
+                image, slot,
+                yyz::kCommittedMissionAccumulatorStateLayoutIdentity,
+                options, trace);
+        }
+        if (materializer == nullptr) {
+            materializer = slot_materializer_if<
                 yyz::CommittedMissionResultOutput>(
                 image, slot, yyz::kMissionResultLayoutIdentity, options,
                 trace,
@@ -504,6 +511,21 @@ void build_slots(const ExecutionPlanImage& image,
                     (std::numeric_limits<std::size_t>::max)());
             if (materializer != nullptr) {
                 adapter.mission_result_slot_handle = slot.handle;
+                adapter.terminal_window_result_slot_handle = slot.handle;
+            }
+        }
+        if (materializer == nullptr) {
+            materializer = slot_materializer_if<
+                yyz::CommittedMissionResultOutput>(
+                image, slot,
+                yyz::kRunwideCommittedMissionResultLayoutIdentity,
+                options, trace,
+                options.fail_terminal_result_seal_clone ? 1U :
+                    (std::numeric_limits<std::size_t>::max)(),
+                options.fail_terminal_final_precommit ? 5U :
+                    (std::numeric_limits<std::size_t>::max)());
+            if (materializer != nullptr) {
+                adapter.runwide_result_slot_handle = slot.handle;
             }
         }
         if (materializer == nullptr) {
@@ -751,6 +773,63 @@ void build_initial_states(
                             }
                             new (destination)
                                 yyz::MassState(std::move(outcome.value()));
+                            return true;
+                        } catch (...) {
+                            return false;
+                        }
+                    }));
+            continue;
+        }
+        if (entry_is<yyz::CommittedMissionAccumulatorInitialStateCall>(
+                image, binding->builder_entry_handle)) {
+            const auto builder = exact_call<
+                yyz::CommittedMissionResultDefinitionBuilderCall>(
+                image, component_found->definition_builder_entry_handle);
+            auto definition = require_outcome(
+                builder(configuration),
+                "mission accumulator definition rejected Image configuration");
+            yyz::CommittedMissionAccumulatorInitialStateInput input{
+                initial_integer(*binding, "configuration_revision")};
+            const auto initial = exact_call<
+                yyz::CommittedMissionAccumulatorInitialStateCall>(
+                image, binding->builder_entry_handle);
+            const auto codec_getter = exact_call<
+                yyz::CommittedMissionAccumulatorStateCodecGetter>(
+                image, block.codec_entry_handle);
+            adapter.mission_accumulator_state_block_handle = block.handle;
+            provider.initial_states.emplace(
+                handle,
+                make_state_materializer<
+                    yyz::CommittedMissionAccumulatorState>(
+                    std::string(
+                        yyz::kCommittedMissionAccumulatorStateLayoutIdentity),
+                    block.codec_entry_handle, codec_getter(), handle,
+                    binding->builder_entry_handle, trace,
+                    fail_next_initial_state_construct,
+                    fail_next_state_copy,
+                    fail_next_state_replace,
+                    fail_next_state_validation,
+                    disable_state_nofail_swap,
+                    provider.coordination,
+                    options.fail_state_copy_ordinal,
+                    [definition = std::move(definition),
+                     input = std::move(input), initial, fail, trace,
+                     handle](const SessionObjectAccess&,
+                             void* destination) mutable noexcept {
+                        if (fail) {
+                            record(trace, TraceAction::InjectedFailure,
+                                   TraceObjectKind::State, handle);
+                            return false;
+                        }
+                        try {
+                            auto outcome = initial(definition, input);
+                            if (!outcome.succeeded() ||
+                                !outcome.has_value()) {
+                                return false;
+                            }
+                            new (destination)
+                                yyz::CommittedMissionAccumulatorState(
+                                    std::move(outcome.value()));
                             return true;
                         } catch (...) {
                             return false;
@@ -2117,6 +2196,118 @@ void build_evaluator_runtime(
             std::move(definition), std::move(bindings), fail, trace));
 }
 
+void build_runwide_evaluator_runtime(
+    const ExecutionPlanImage& image,
+    const PlanImageRuntimeComponent& component, bool fail,
+    const std::shared_ptr<MaterializationTrace>& trace,
+    CompiledProvider& provider) {
+    const auto config = canonical_configuration(
+        component_occurrence(image, component).canonical_configuration);
+    const auto builder = exact_call<
+        yyz::CommittedMissionResultDefinitionBuilderCall>(
+        image, component.definition_builder_entry_handle);
+    auto definition = require_outcome(
+        builder(config),
+        "runwide evaluator definition rejected Image config");
+    const auto factory = exact_call<
+        yyz::RunwideCommittedMissionResultRuntimeCellFactoryCall>(
+        image, component.runtime_cell_factory_entry_handle);
+    const auto& callsite = component_callsite<
+        yyz::RunwideCommittedMissionHistoryEvaluationCall>(image,
+                                                            component);
+    if (component.evaluator_history_handles.size() != 1U) {
+        throw std::runtime_error("runwide evaluator history shape changed");
+    }
+    yyz::RunwideCommittedMissionResultRuntimeCellBindings bindings;
+    bindings.boundary_evaluation_callsite_handle = callsite.handle;
+    bindings.committed_history_handle =
+        component.evaluator_history_handles[0U];
+    bindings.runwide_result_output =
+        output_writer<yyz::CommittedMissionResultOutput>(callsite, 0U);
+    bindings.boundary_evaluation = exact_call<
+        yyz::RunwideCommittedMissionHistoryEvaluationCall>(
+        image, callsite.entry_handle);
+    provider.runtime_components.emplace(
+        component.handle,
+        fixed_runtime_materializer<
+            yyz::RunwideCommittedMissionResultRuntimeCell>(
+            component, factory_context(image, component), factory,
+            std::move(definition), std::move(bindings), fail, trace));
+}
+
+void build_accumulator_runtime(
+    const ExecutionPlanImage& image,
+    const PlanImageRuntimeComponent& component, bool fail,
+    const std::shared_ptr<MaterializationTrace>& trace,
+    CompiledProvider& provider) {
+    if (component.state_block_handles.size() != 1U ||
+        component.transaction_handles.size() != 1U) {
+        throw std::runtime_error(
+            "mission accumulator state/transaction shape changed");
+    }
+    const auto config = canonical_configuration(
+        component_occurrence(image, component).canonical_configuration);
+    const auto builder = exact_call<
+        yyz::CommittedMissionResultDefinitionBuilderCall>(
+        image, component.definition_builder_entry_handle);
+    auto definition = require_outcome(
+        builder(config),
+        "mission accumulator definition rejected Image config");
+    const auto factory = exact_call<
+        yyz::CommittedMissionAccumulatorRuntimeCellFactoryCall>(
+        image, component.runtime_cell_factory_entry_handle);
+    const auto& publish = component_callsite<
+        yyz::CommittedMissionAccumulatorPublishProjectionCall>(image,
+                                                                component);
+    const auto& evolve = component_callsite<
+        yyz::CommittedMissionAccumulatorIntervalEvolutionCall>(image,
+                                                                component);
+    const auto* transaction =
+        find_handle(image.transactions(), component.transaction_handles[0U]);
+    const gnc::contracts::PlanImageTransactionCandidateMember* candidate =
+        nullptr;
+    if (transaction != nullptr) {
+        const auto found = std::find_if(
+            transaction->candidates.begin(), transaction->candidates.end(),
+            [&component, &evolve](const auto& member) {
+                return member.owner_occurrence_handle ==
+                           component.occurrence_handle &&
+                       member.producer_kind == "RuntimeCallsite" &&
+                       member.producer_handle == evolve.handle;
+            });
+        if (found != transaction->candidates.end()) candidate = &*found;
+    }
+    if (candidate == nullptr) {
+        throw std::runtime_error(
+            "mission accumulator candidate writer is missing");
+    }
+
+    yyz::CommittedMissionAccumulatorRuntimeCellBindings bindings;
+    bindings.state_block_handle = component.state_block_handles[0U];
+    bindings.transaction_handle = component.transaction_handles[0U];
+    bindings.publish_projection_callsite_handle = publish.handle;
+    bindings.interval_evolution_callsite_handle = evolve.handle;
+    bindings.accumulator_output =
+        output_writer<yyz::CommittedMissionAccumulatorState>(publish, 0U);
+    bindings.candidate_state_writer = {candidate->writer_token_handle};
+    bindings.rigid_observation_input_slot_handle =
+        typed_input_slot<yyz::CommittedRigidObservation>(image, evolve);
+    bindings.mass_properties_input_slot_handle =
+        typed_input_slot<yyz::MassPropertiesInput>(image, evolve);
+    bindings.publish_projection = exact_call<
+        yyz::CommittedMissionAccumulatorPublishProjectionCall>(
+        image, publish.entry_handle);
+    bindings.interval_evolution = exact_call<
+        yyz::CommittedMissionAccumulatorIntervalEvolutionCall>(
+        image, evolve.entry_handle);
+    provider.runtime_components.emplace(
+        component.handle,
+        fixed_runtime_materializer<
+            yyz::CommittedMissionAccumulatorRuntimeCell>(
+            component, factory_context(image, component), factory,
+            std::move(definition), std::move(bindings), fail, trace));
+}
+
 void build_mass_runtime(
     const ExecutionPlanImage& image,
     const PlanImageRuntimeComponent& component, bool fail,
@@ -2400,6 +2591,16 @@ void build_runtime_components(
                        yyz::CommittedMissionResultRuntimeCellFactoryCall>(
                        image, entry_handle)) {
             build_evaluator_runtime(image, *component, fail, trace, provider);
+        } else if (entry_is<
+                       yyz::CommittedMissionAccumulatorRuntimeCellFactoryCall>(
+                       image, entry_handle)) {
+            build_accumulator_runtime(image, *component, fail, trace,
+                                      provider);
+        } else if (entry_is<
+                       yyz::RunwideCommittedMissionResultRuntimeCellFactoryCall>(
+                       image, entry_handle)) {
+            build_runwide_evaluator_runtime(image, *component, fail, trace,
+                                            provider);
         } else {
             throw std::runtime_error("unsupported REF-YYZ Runtime Cell entry");
         }
@@ -3446,6 +3647,125 @@ void build_propulsion_invocations(
         });
 }
 
+void build_accumulator_invocations(
+    const ExecutionPlanImage& image,
+    const PlanImageRuntimeComponent& component,
+    const AdapterOptions& options,
+    const std::shared_ptr<MaterializationTrace>& trace,
+    const std::shared_ptr<OpeningBoundaryProbe>& probe,
+    CompiledProvider& provider) {
+    const auto& projection = component_callsite<
+        yyz::CommittedMissionAccumulatorPublishProjectionCall>(image,
+                                                                component);
+    const auto factory = component.runtime_cell_factory_entry_handle;
+    install_invocation<yyz::CommittedMissionAccumulatorRuntimeCell>(
+        provider, component, projection,
+        [options, trace, probe, factory](
+            const SessionInvocationContext& context) -> SessionResult {
+            std::size_t ordinal = 0U;
+            auto status = begin_boundary_invocation(
+                context, options, trace, probe, ordinal);
+            if (!status) return status;
+            ++probe->mission_accumulator_projection_calls;
+            const auto* cell = checked_runtime<
+                yyz::CommittedMissionAccumulatorRuntimeCell>(context,
+                                                              factory);
+            if (cell == nullptr) {
+                return {gnc::kernel::SessionError::ObjectTypeMismatch,
+                        context.component_handle(),
+                        "mission accumulator projection Runtime Cell type mismatch"};
+            }
+            const auto* state = checked_committed<
+                yyz::CommittedMissionAccumulatorState>(
+                context, cell->bindings.state_block_handle, status);
+            if (state == nullptr) return status;
+            const auto interval = interval_context(
+                context, cell->definition.body_frame,
+                cell->definition.clock_domain,
+                cell->definition.configuration_revision);
+            const auto output = cell->bindings.publish_projection(
+                interval, *state);
+            if (options.omit_output_boundary_ordinal == ordinal) return {};
+            return write_value(
+                context, cell->bindings.accumulator_output.slot_handle,
+                selected_writer_token(
+                    options, ordinal,
+                    cell->bindings.accumulator_output.writer_token.value),
+                output);
+        });
+
+    const auto& evolve = component_callsite<
+        yyz::CommittedMissionAccumulatorIntervalEvolutionCall>(image,
+                                                                component);
+    if (component.transaction_handles.size() != 1U) {
+        throw std::runtime_error(
+            "mission accumulator transaction shape changed");
+    }
+    const auto* transaction = find_handle(
+        image.transactions(), component.transaction_handles[0U]);
+    const gnc::contracts::PlanImageTransactionCandidateMember* candidate =
+        nullptr;
+    if (transaction != nullptr) {
+        const auto found = std::find_if(
+            transaction->candidates.begin(), transaction->candidates.end(),
+            [&component, &evolve](const auto& member) {
+                return member.owner_occurrence_handle ==
+                           component.occurrence_handle &&
+                       member.producer_kind == "RuntimeCallsite" &&
+                       member.producer_handle == evolve.handle;
+            });
+        if (found != transaction->candidates.end()) candidate = &*found;
+    }
+    if (candidate == nullptr) {
+        throw std::runtime_error(
+            "mission accumulator evolution candidate shape changed");
+    }
+    const auto candidate_slot = candidate->candidate_state_slot_handle;
+    const auto candidate_token = candidate->writer_token_handle;
+    install_invocation<yyz::CommittedMissionAccumulatorRuntimeCell>(
+        provider, component, evolve,
+        [options, trace, probe, factory, candidate_slot, candidate_token](
+            const SessionInvocationContext& context) -> SessionResult {
+            std::size_t ordinal = 0U;
+            auto status = begin_boundary_invocation(
+                context, options, trace, probe, ordinal);
+            if (!status) return status;
+            ++probe->mission_accumulator_evolution_calls;
+            const auto* cell = checked_runtime<
+                yyz::CommittedMissionAccumulatorRuntimeCell>(context,
+                                                              factory);
+            if (cell == nullptr) {
+                return {gnc::kernel::SessionError::ObjectTypeMismatch,
+                        context.component_handle(),
+                        "mission accumulator evolution Runtime Cell type mismatch"};
+            }
+            const auto* state = checked_committed<
+                yyz::CommittedMissionAccumulatorState>(
+                context, cell->bindings.state_block_handle, status);
+            if (state == nullptr) return status;
+            const auto* observation =
+                checked_input<yyz::CommittedRigidObservation>(
+                    context,
+                    cell->bindings.rigid_observation_input_slot_handle,
+                    status);
+            if (observation == nullptr) return status;
+            const auto* mass = checked_input<yyz::MassPropertiesInput>(
+                context, cell->bindings.mass_properties_input_slot_handle,
+                status);
+            if (mass == nullptr) return status;
+            const auto evolved = cell->bindings.interval_evolution(
+                cell->definition, *state, {*observation, *mass});
+            if (!evolved.succeeded() || !evolved.has_value()) {
+                return {gnc::kernel::SessionError::InvocationFailed,
+                        context.callsite_handle(),
+                        "mission accumulator interval evolution failed"};
+            }
+            return write_candidate_value(
+                context, candidate_slot, candidate_token,
+                evolved.value());
+        });
+}
+
 void build_evaluator_invocations(
     const ExecutionPlanImage& image,
     const PlanImageRuntimeComponent& component,
@@ -3640,6 +3960,211 @@ void build_evaluator_invocations(
         });
 }
 
+void build_runwide_evaluator_invocations(
+    const ExecutionPlanImage& image,
+    const PlanImageRuntimeComponent& component,
+    const AdapterOptions& options,
+    const std::shared_ptr<MaterializationTrace>& trace,
+    const std::shared_ptr<OpeningBoundaryProbe>& probe,
+    CompiledProvider& provider) {
+    const auto& callsite = component_callsite<
+        yyz::RunwideCommittedMissionHistoryEvaluationCall>(image,
+                                                            component);
+    if (component.evaluator_history_handles.size() != 1U) {
+        throw std::runtime_error(
+            "runwide evaluator history handle is not singular");
+    }
+    const auto* linked_history = find_handle(
+        image.evaluator_histories(),
+        component.evaluator_history_handles.front());
+    if (linked_history == nullptr ||
+        linked_history->evaluator_callsite_handle != callsite.handle ||
+        linked_history->history_depth !=
+            yyz::kRunwideCommittedMissionHistoryDepth ||
+        linked_history->ordered_members.size() != 3U ||
+        linked_history->ordered_members[0U].member_id !=
+            yyz::kRunwideCommittedMissionAccumulatorHistoryMemberId ||
+        linked_history->ordered_members[0U].state_schema_id !=
+            yyz::kCommittedMissionAccumulatorStateSchemaIdentity ||
+        linked_history->ordered_members[0U].state_layout_id !=
+            yyz::kCommittedMissionAccumulatorStateLayoutIdentity ||
+        linked_history->ordered_members[1U].member_id !=
+            yyz::kRunwideCommittedMissionRigidHistoryMemberId ||
+        linked_history->ordered_members[1U].state_schema_id !=
+            yyz::kRigidStateSchemaIdentity ||
+        linked_history->ordered_members[1U].state_layout_id !=
+            yyz::kRigidStateLayoutIdentity ||
+        linked_history->ordered_members[2U].member_id !=
+            yyz::kRunwideCommittedMissionMassHistoryMemberId ||
+        linked_history->ordered_members[2U].state_schema_id !=
+            yyz::kMassStateSchemaIdentity ||
+        linked_history->ordered_members[2U].state_layout_id !=
+            yyz::kMassStateLayoutIdentity) {
+        throw std::runtime_error("runwide evaluator history shape changed");
+    }
+    const auto history = *linked_history;
+    const auto factory = component.runtime_cell_factory_entry_handle;
+    install_invocation<yyz::RunwideCommittedMissionResultRuntimeCell>(
+        provider, component, callsite,
+        [options, trace, probe, history, factory](
+            const SessionInvocationContext& context) -> SessionResult {
+            std::size_t ordinal = 0U;
+            auto status = begin_boundary_invocation(
+                context, options, trace, probe, ordinal);
+            if (!status) return status;
+            probe->terminal_evaluator_called = true;
+            ++probe->terminal_evaluator_calls;
+            const auto* cell = checked_runtime<
+                yyz::RunwideCommittedMissionResultRuntimeCell>(context,
+                                                                factory);
+            if (cell == nullptr ||
+                cell->bindings.boundary_evaluation_callsite_handle !=
+                    context.callsite_handle() ||
+                cell->bindings.committed_history_handle != history.handle ||
+                cell->bindings.boundary_evaluation == nullptr ||
+                cell->bindings.runwide_result_output.slot_handle == 0U ||
+                cell->bindings.runwide_result_output.writer_token.value ==
+                    0U) {
+                return {gnc::kernel::SessionError::ObjectTypeMismatch,
+                        context.component_handle(),
+                        "runwide evaluator Runtime Cell binding mismatch"};
+            }
+            const auto requested_history =
+                options.wrong_terminal_history_handle
+                    ? history.handle + 1U
+                    : cell->bindings.committed_history_handle;
+            gnc::kernel::SessionCommittedHistoryInfo info;
+            status = context.history().info(requested_history, info);
+            if (!status) return status;
+            if (info.history_handle != history.handle ||
+                info.history_depth !=
+                    yyz::kRunwideCommittedMissionHistoryDepth ||
+                info.sample_count !=
+                    yyz::kRunwideCommittedMissionHistoryDepth ||
+                info.member_count != history.ordered_members.size() ||
+                info.first_tick != context.tick() ||
+                info.last_tick != context.tick()) {
+                return {gnc::kernel::SessionError::HistoryValidationFailed,
+                        history.handle,
+                        "runwide evaluator history is incomplete"};
+            }
+            if (options.fail_terminal_evaluator) {
+                return {gnc::kernel::SessionError::InvocationFailed,
+                        context.callsite_handle(),
+                        "injected runwide evaluator failure"};
+            }
+
+            std::array<gnc::kernel::SessionObjectIdentityView, 3U> views;
+            std::array<std::int64_t, 3U> ticks{};
+            for (std::size_t member = 0U; member < views.size(); ++member) {
+                status = context.history().read(
+                    history.handle, 0U, member, ticks[member], views[member]);
+                if (!status) return status;
+            }
+            const auto& accumulator_plan = history.ordered_members[0U];
+            const auto& rigid_plan = history.ordered_members[1U];
+            const auto& mass_plan = history.ordered_members[2U];
+            const bool accumulator_matches =
+                views[0U] &&
+                views[0U].role ==
+                    SessionObjectRole::CommittedHistoryValue &&
+                views[0U].image_object_handle ==
+                    accumulator_plan.committed_state_slot_handle &&
+                views[0U].size_bytes ==
+                    sizeof(yyz::CommittedMissionAccumulatorState) &&
+                views[0U].alignment_bytes ==
+                    alignof(yyz::CommittedMissionAccumulatorState) &&
+                views[0U].type_identity ==
+                    &typeid(yyz::CommittedMissionAccumulatorState);
+            const bool rigid_matches =
+                views[1U] &&
+                views[1U].role ==
+                    SessionObjectRole::CommittedHistoryValue &&
+                views[1U].image_object_handle ==
+                    rigid_plan.committed_state_slot_handle &&
+                views[1U].size_bytes == sizeof(yyz::RigidState) &&
+                views[1U].alignment_bytes == alignof(yyz::RigidState) &&
+                views[1U].type_identity == &typeid(yyz::RigidState);
+            const bool mass_matches =
+                views[2U] &&
+                views[2U].role ==
+                    SessionObjectRole::CommittedHistoryValue &&
+                views[2U].image_object_handle ==
+                    mass_plan.committed_state_slot_handle &&
+                views[2U].size_bytes == sizeof(yyz::MassState) &&
+                views[2U].alignment_bytes == alignof(yyz::MassState) &&
+                views[2U].type_identity == &typeid(yyz::MassState);
+            if (!accumulator_matches || !rigid_matches || !mass_matches ||
+                ticks[0U] != info.last_tick ||
+                ticks[1U] != info.last_tick ||
+                ticks[2U] != info.last_tick) {
+                return {gnc::kernel::SessionError::ObjectTypeMismatch,
+                        history.handle,
+                        "runwide evaluator history member type or order mismatch"};
+            }
+
+            yyz::RunwideCommittedMissionStateHistoryInput input;
+            input.accumulators[0U] = *static_cast<const
+                yyz::CommittedMissionAccumulatorState*>(views[0U].address);
+            input.rigid_states[0U] =
+                *static_cast<const yyz::RigidState*>(views[1U].address);
+            input.mass_states[0U] =
+                *static_cast<const yyz::MassState*>(views[2U].address);
+            auto output = cell->bindings.boundary_evaluation(
+                cell->definition, input);
+            if (!output.succeeded() || !output.has_value()) {
+                return {gnc::kernel::SessionError::InvocationFailed,
+                        context.callsite_handle(),
+                        "runwide committed mission evaluation failed"};
+            }
+            auto value = output.value();
+            if (options.invalid_terminal_output) {
+                value.final_time_seconds =
+                    (std::numeric_limits<double>::quiet_NaN)();
+            }
+            const auto& aggregate = input.accumulators[0U];
+            const auto expected_initial_tick =
+                aggregate.initialized
+                    ? aggregate.opening_boundary.rigid_context.sample_time.tick
+                    : info.last_tick;
+            const auto expected_sample_count =
+                aggregate.metrics.evaluated_sample_count + 1U;
+            const bool valid_output =
+                (value.status == yyz::MissionResultStatus::Completed ||
+                 value.status == yyz::MissionResultStatus::Aborted) &&
+                value.initial_tick == expected_initial_tick &&
+                value.final_tick == info.last_tick &&
+                std::isfinite(value.final_time_seconds) &&
+                !value.termination.reason_code.empty() &&
+                value.termination.priority >= 0 &&
+                value.metrics.evaluated_sample_count ==
+                    expected_sample_count &&
+                std::isfinite(value.metrics.terminal.duration_seconds) &&
+                std::isfinite(value.metrics.terminal.downrange_meters) &&
+                std::isfinite(
+                    value.metrics.terminal.remaining_mass_kilograms) &&
+                value.terminal_boundary.rigid_context.sample_time.tick ==
+                    value.final_tick &&
+                value.terminal_boundary.mass_state.context.sample_time.tick ==
+                    value.final_tick;
+            if (!valid_output) {
+                return {gnc::kernel::SessionError::ObjectValidationFailed,
+                        context.callsite_handle(),
+                        "runwide evaluator output is invalid"};
+            }
+            if (options.omit_terminal_output) return {};
+            const auto token =
+                options.wrong_terminal_writer_token
+                    ? cell->bindings.runwide_result_output.writer_token.value +
+                          1U
+                    : cell->bindings.runwide_result_output.writer_token.value;
+            return write_value(
+                context,
+                cell->bindings.runwide_result_output.slot_handle,
+                token, value);
+        });
+}
+
 [[nodiscard]] std::int64_t opening_configuration_revision(
     const ExecutionPlanImage& image) {
     for (const auto& binding : image.initial_bindings()) {
@@ -3710,6 +4235,16 @@ void build_invocations(
                        image, factory)) {
             build_evaluator_invocations(image, *component, options, trace,
                                         probe, provider);
+        } else if (entry_is<
+                       yyz::CommittedMissionAccumulatorRuntimeCellFactoryCall>(
+                       image, factory)) {
+            build_accumulator_invocations(image, *component, options, trace,
+                                          probe, provider);
+        } else if (entry_is<
+                       yyz::RunwideCommittedMissionResultRuntimeCellFactoryCall>(
+                       image, factory)) {
+            build_runwide_evaluator_invocations(
+                image, *component, options, trace, probe, provider);
         }
     }
 }
@@ -3920,12 +4455,19 @@ kernel::SessionResult read_committed_history_for_qualification(
     result.clear();
     try {
         const auto histories = session.committed_histories();
-        if (histories.size() != 1U ||
-            histories.front().member_count != 2U) {
+        const auto history_found = std::find_if(
+            histories.begin(), histories.end(), [](const auto& history) {
+                return history.member_count == 2U;
+            });
+        if (history_found == histories.end() ||
+            std::count_if(
+                histories.begin(), histories.end(), [](const auto& history) {
+                    return history.member_count == 2U;
+                }) != 1) {
             return {kernel::SessionError::HistoryValidationFailed, 0U,
                     "REF-YYZ committed history shape is unavailable"};
         }
-        const auto& history = histories.front();
+        const auto& history = *history_found;
         result.reserve(history.sample_count);
         for (std::size_t sample_index = 0U;
              sample_index < history.sample_count; ++sample_index) {
@@ -4070,6 +4612,81 @@ kernel::SessionResult read_mission_result_for_qualification(
     }
 }
 
+kernel::SessionResult read_runwide_mission_result_for_qualification(
+    const kernel::Session& session, const RefYyzSessionAdapter& adapter,
+    MissionResultProbe& result) noexcept {
+    auto selected = adapter;
+    selected.mission_result_slot_handle = adapter.runwide_result_slot_handle;
+    return read_mission_result_for_qualification(session, selected, result);
+}
+
+kernel::SessionResult read_mission_accumulator_for_qualification(
+    const kernel::Session& session, const RefYyzSessionAdapter& adapter,
+    MissionAccumulatorProbe& result) noexcept {
+    result = {};
+    try {
+        kernel::SessionObjectIdentityView view;
+        auto status = kernel::qualification::SessionAccess::read_committed(
+            session, adapter.mission_accumulator_state_block_handle, view);
+        if (!status) return status;
+        if (!view ||
+            view.role != kernel::SessionObjectRole::CommittedState ||
+            view.image_object_handle !=
+                adapter.mission_accumulator_state_block_handle ||
+            view.codec_entry_handle == 0U ||
+            view.size_bytes !=
+                sizeof(yyz::CommittedMissionAccumulatorState) ||
+            view.alignment_bytes !=
+                alignof(yyz::CommittedMissionAccumulatorState) ||
+            view.type_identity !=
+                &typeid(yyz::CommittedMissionAccumulatorState)) {
+            return {kernel::SessionError::ObjectTypeMismatch,
+                    adapter.mission_accumulator_state_block_handle,
+                    "mission accumulator qualification type mismatch"};
+        }
+        const auto& value = *static_cast<const
+            yyz::CommittedMissionAccumulatorState*>(view.address);
+        result.present = true;
+        result.initialized = value.initialized;
+        result.terminal_result_present = value.terminal_result_present;
+        if (!value.initialized) return {};
+        result.opening_tick =
+            value.opening_boundary.rigid_context.sample_time.tick;
+        result.latest_tick =
+            value.latest_boundary.rigid_context.sample_time.tick;
+        result.evaluated_sample_count =
+            value.metrics.evaluated_sample_count;
+        result.duration_seconds = value.metrics.terminal.duration_seconds;
+        result.downrange_meters =
+            value.metrics.terminal.downrange_meters;
+        result.vertical_displacement_meters =
+            value.metrics.terminal.vertical_displacement_meters;
+        result.remaining_mass_kilograms =
+            value.metrics.terminal.remaining_mass_kilograms;
+        result.consumed_mass_kilograms =
+            value.metrics.terminal.consumed_mass_kilograms;
+        result.terminal_speed_meters_per_second =
+            value.metrics.terminal.speed_meters_per_second;
+        result.peak_speed_meters_per_second =
+            value.metrics.peak_speed_meters_per_second;
+        result.peak_speed_tick = value.metrics.peak_speed_tick;
+        result.maximum_downrange_meters =
+            value.metrics.maximum_downrange_meters;
+        result.maximum_downrange_tick =
+            value.metrics.maximum_downrange_tick;
+        result.minimum_remaining_mass_kilograms =
+            value.metrics.minimum_remaining_mass_kilograms;
+        result.minimum_remaining_mass_tick =
+            value.metrics.minimum_remaining_mass_tick;
+        return {};
+    } catch (...) {
+        result = {};
+        return {kernel::SessionError::InternalFailure,
+                adapter.mission_accumulator_state_block_handle,
+                "mission accumulator qualification copy failed"};
+    }
+}
+
 kernel::SessionResult read_sealed_observation_snapshot_for_qualification(
     const kernel::Session& session,
     SealedObservationSnapshot& result) noexcept {
@@ -4119,9 +4736,17 @@ kernel::SessionResult read_sealed_observation_snapshot_for_qualification(
             } else if (slot->layout_id == yyz::kMassFlowLayoutIdentity) {
                 status = copy_sealed_value(session, seal, result.mass_flow);
             } else if (slot->layout_id ==
+                       yyz::kCommittedMissionAccumulatorStateLayoutIdentity) {
+                status = copy_sealed_value(
+                    session, seal, result.mission_accumulator);
+            } else if (slot->layout_id ==
                        yyz::kMissionResultLayoutIdentity) {
                 status = copy_sealed_value(session, seal,
                                            result.mission_result);
+            } else if (slot->layout_id ==
+                       yyz::kRunwideCommittedMissionResultLayoutIdentity) {
+                status = copy_sealed_value(
+                    session, seal, result.runwide_mission_result);
             } else {
                 result = {};
                 return {kernel::SessionError::ObjectTypeMismatch,

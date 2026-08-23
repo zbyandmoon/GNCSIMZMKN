@@ -1,6 +1,6 @@
 # YYZ rigid step and mass boundary
 
-本 package 目前包含两个连续的 R1 YYZ 产品切片和一个 R3 target-conformance 导航组件：单段刚体 candidate、两段刚体/标量燃耗的 typed atomic-boundary composition，以及 `TruthPassthroughNavigation`。对应 model identity 包括 `gnc.package.yyz.rigid-step.frozen-interval.experimental@1`、`gnc.package.yyz.two-interval-mass-commit.experimental@1` 和 `gnc.package.yyz.navigation.truth-passthrough.experimental@1`。
+本 package 目前包含两个连续的 R1 YYZ 产品切片，以及 R3 target-conformance 的导航与 committed mission evaluation 组件：单段刚体 candidate、两段刚体/标量燃耗的 typed atomic-boundary composition、`TruthPassthroughNavigation`、constant-space `CommittedMissionAccumulator` 和 runwide terminal evaluator。对应稳定产品 identity 由 package descriptor 与 exact implementation table 共同冻结。
 
 单段刚体调用链：
 
@@ -26,9 +26,9 @@ package descriptor 将 AerodynamicTable 声明为 `vehicle.output + PureQuery`�
 
 R2 package contribution 进一步冻结了真实 uniform-environment PureQuery、RigidBody/Mass 两个 StateOwner、initial/projection/derivative/evolution entries，以及 guidance/controller/actuator/fixed supplied-propulsion/terminal evaluator 的静态合同。Mass 的既有 `NumericalPolicy` 已进入 canonical Definition/config，runtime-facing initial/evolution entries 不要求 Session 另行生成策略。`ControlledPropelledRigidMassStepKernel` 等 R1 wrapper 仍只作为科学/oracle compatibility composition，不被登记为 StateOwner 或 RuntimeComponent。
 
-package 现在为八个 RuntimeComponent 提供各自 package-specific typed `RuntimeCellFactory`，并为 RigidBody/Mass state 与真实 stored value 提供窄进程内 codec。R2/R3 exact-link 这些 entry、call shape、独立 C++ type witness 及 numeric handle，factory binding 压缩为稳定的 state/input/output/writer/invocation/provider/interval/integration/transaction/history handle。uniform environment 与 aero 的正式 query output 走授权 caller 的局部 typed return，不分配 CycleFrame result slot；ForceMomentClosure 的正式 output 由唯一 Closure Coordinator writer 写入 held interval slot。显式 composition adapter 负责恢复 package 类型并调用已链接 entry；Kernel 不按 model id/type switch 重建 invocation set，telemetry 也不成为 environment/aero/closure 的权威 result flow。
+package 现在为十个 RuntimeComponent 提供各自 package-specific typed `RuntimeCellFactory`，并为 RigidBody、Mass、CommittedMissionAccumulator state 与真实 stored value 提供窄进程内 codec。R2/R3 exact-link 这些 entry、call shape、独立 C++ type witness 及 numeric handle，factory binding 压缩为稳定的 state/input/output/writer/invocation/provider/interval/integration/transaction/history handle。uniform environment 与 aero 的正式 query output 走授权 caller 的局部 typed return，不分配 CycleFrame result slot；ForceMomentClosure 的正式 output 由唯一 Closure Coordinator writer 写入 held interval slot。显式 composition adapter 负责恢复 package 类型并调用已链接 entry；Kernel 不按 model id/type switch 重建 invocation set，telemetry 也不成为 environment/aero/closure 的权威 result flow。
 
-00A target-rate composition 通过 programmatic source override 选择 `0.01 s` base、navigation/guidance/controller/actuator interval `1/5/2/1`、observation interval `4`、全零 offset 与 HeldLatest age `4/1`。`r3.kernel-yyz-target-rate.probe` 对 tick-31 短跑验证完整调用、source tick 和 age 序列，并以两次 3000-tick 运行验证 bit determinism；该结果保持 `target_conformance/science_verdict_pending`。
+00A target-rate composition 通过 programmatic source override 选择 `0.01 s` base、navigation/guidance/controller/actuator interval `1/5/2/1`、observation interval `4`、全零 offset 与 HeldLatest age `4/1`。目标组合增加 per-Session `CommittedMissionAccumulator` state owner：每次普通 interval candidate 只合入当 tick 已发布的 committed rigid observation 和 mass properties，ModelCommit 后更新 opening/latest boundary、sample count、全程 extrema 与 earliest terminal decision。终端时，depth-one history 将累计到 tick 2999 的状态与 tick 3000 committed rigid/mass boundary 合并，输出覆盖 tick 0～3000、`3001` 个样本和 `30.0 s` 的 `duration-complete` runwide result。既有 depth-three evaluator 继续输出带 `window` 命名的 tick 2998～3000 诊断。`r3.kernel-yyz-target-rate.probe` 对 tick-31 短跑验证完整调用、source tick、age、transaction/lifecycle 语义，并以两次 3000-tick 运行验证 bit determinism；证据保持 `target_conformance/science_verdict_pending`。
 
 两段边界调用链：
 

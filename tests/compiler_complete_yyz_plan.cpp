@@ -2627,7 +2627,9 @@ void verify_high_value_negatives() {
             "missing RuntimeCell factory plan reference did not fail closed before image lookup");
 
     auto missing_entry = implementation;
-    missing_entry.entries.pop_back();
+    require(!missing_entry.entries.empty(),
+            "missing-entry mutation fixture is absent");
+    missing_entry.entries.erase(missing_entry.entries.begin());
     const auto entry_failure = gnc::compiler::link_complete_execution_plan(
         positive.value->plan, positive.value->proofs, {missing_entry});
     require(!entry_failure.succeeded() &&

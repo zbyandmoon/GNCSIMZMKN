@@ -173,6 +173,8 @@ struct OpeningBoundaryProbe {
     bool held_form_written = false;
     bool terminal_evaluator_called = false;
     std::size_t terminal_evaluator_calls = 0U;
+    std::size_t mission_accumulator_projection_calls = 0U;
+    std::size_t mission_accumulator_evolution_calls = 0U;
     std::size_t environment_query_calls = 0U;
     std::size_t aerodynamic_query_calls = 0U;
     std::size_t discarded_boundary_evaluations = 0U;
@@ -236,6 +238,27 @@ struct MissionResultProbe {
     std::int64_t terminal_tick = -1;
 };
 
+struct MissionAccumulatorProbe {
+    bool present = false;
+    bool initialized = false;
+    std::int64_t opening_tick = -1;
+    std::int64_t latest_tick = -1;
+    std::size_t evaluated_sample_count = 0U;
+    double duration_seconds = 0.0;
+    double downrange_meters = 0.0;
+    double vertical_displacement_meters = 0.0;
+    double remaining_mass_kilograms = 0.0;
+    double consumed_mass_kilograms = 0.0;
+    double terminal_speed_meters_per_second = 0.0;
+    double peak_speed_meters_per_second = 0.0;
+    std::int64_t peak_speed_tick = -1;
+    double maximum_downrange_meters = 0.0;
+    std::int64_t maximum_downrange_tick = -1;
+    double minimum_remaining_mass_kilograms = 0.0;
+    std::int64_t minimum_remaining_mass_tick = -1;
+    bool terminal_result_present = false;
+};
+
 // Package-aware qualification evidence. Every optional holds the exact
 // concrete value copied from the current committed seal; seal metadata keeps
 // the authoritative sample time and quality for each value.
@@ -252,8 +275,12 @@ struct SealedObservationSnapshot {
     std::optional<packages::yyz::IdealBodyMomentActuatorOutput> actuator;
     std::optional<packages::yyz::SuppliedPropulsionBodyWrench> propulsion;
     std::optional<packages::yyz::MassFlowIntervalInput> mass_flow;
+    std::optional<packages::yyz::CommittedMissionAccumulatorState>
+        mission_accumulator;
     std::optional<packages::yyz::CommittedMissionResultOutput>
         mission_result;
+    std::optional<packages::yyz::CommittedMissionResultOutput>
+        runwide_mission_result;
 };
 
 struct CapturedFrameView {
@@ -320,7 +347,10 @@ struct RefYyzSessionAdapter {
     std::shared_ptr<bool> disable_state_nofail_swap;
     std::uint32_t mass_state_block_handle = 0U;
     std::uint32_t rigid_state_block_handle = 0U;
+    std::uint32_t mission_accumulator_state_block_handle = 0U;
     std::uint32_t mission_result_slot_handle = 0U;
+    std::uint32_t terminal_window_result_slot_handle = 0U;
+    std::uint32_t runwide_result_slot_handle = 0U;
     std::uint32_t first_non_state_slot_handle = 0U;
     std::string error;
 
@@ -367,6 +397,16 @@ struct NonTrivialObjectProbe {
 [[nodiscard]] kernel::SessionResult read_mission_result_for_qualification(
     const kernel::Session& session, const RefYyzSessionAdapter& adapter,
     MissionResultProbe& result) noexcept;
+
+[[nodiscard]] kernel::SessionResult
+read_runwide_mission_result_for_qualification(
+    const kernel::Session& session, const RefYyzSessionAdapter& adapter,
+    MissionResultProbe& result) noexcept;
+
+[[nodiscard]] kernel::SessionResult
+read_mission_accumulator_for_qualification(
+    const kernel::Session& session, const RefYyzSessionAdapter& adapter,
+    MissionAccumulatorProbe& result) noexcept;
 
 [[nodiscard]] kernel::SessionResult
 read_sealed_observation_snapshot_for_qualification(
