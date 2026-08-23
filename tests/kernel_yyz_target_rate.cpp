@@ -169,9 +169,20 @@ template <std::size_t Size>
 [[nodiscard]] bool exactly_same(const kernel::RuntimeDiagnostic& lhs,
                                 const kernel::RuntimeDiagnostic& rhs) noexcept {
     return lhs.code == rhs.code && lhs.stage == rhs.stage &&
+           lhs.operation == rhs.operation &&
+           lhs.source_kind == rhs.source_kind &&
+           lhs.source_handle == rhs.source_handle &&
+           lhs.source_field == rhs.source_field &&
+           lhs.subject_kind == rhs.subject_kind &&
+           lhs.subject_reference_kind == rhs.subject_reference_kind &&
            lhs.subject_handle == rhs.subject_handle &&
+           lhs.run_id == rhs.run_id &&
+           lhs.run_context_present == rhs.run_context_present &&
            lhs.tick == rhs.tick &&
            lhs.base_epoch == rhs.base_epoch &&
+           lhs.simulation_context_present ==
+               rhs.simulation_context_present &&
+           lhs.cause_kind == rhs.cause_kind &&
            lhs.cause_code == rhs.cause_code &&
            lhs.cause_ref == rhs.cause_ref &&
            lhs.validity_effect == rhs.validity_effect &&
@@ -435,9 +446,15 @@ void verify_static_target_contract(
             "observation cadence plan/proof evidence is incomplete");
 
     const auto baseline = ref_yyz::compile_complete_image();
-    require(baseline.succeeded() &&
-                baseline.value->observation_schedules().empty() &&
-                baseline.value->fingerprint() == kBaselineFingerprint &&
+    require(baseline.succeeded(), diagnostic_text(baseline));
+    require(baseline.value->fingerprint() == kBaselineFingerprint,
+            std::string("unexpected empty-extension baseline fingerprint: ") +
+                baseline.value->fingerprint() +
+                "; source=" + baseline.value->source_semantic_hash() +
+                "; descriptor=" +
+                baseline.value->descriptor_semantic_hash() +
+                "; proof=" + baseline.value->proof_index_hash());
+    require(baseline.value->observation_schedules().empty() &&
                 baseline.value->source_semantic_hash() !=
                     short_image->source_semantic_hash() &&
                 baseline.value->descriptor_semantic_hash() !=
@@ -445,7 +462,7 @@ void verify_static_target_contract(
                 baseline.value->proof_index_hash() !=
                     short_image->proof_index_hash() &&
                 baseline.value->fingerprint() != short_image->fingerprint(),
-            "target facts changed the empty-extension baseline or reused its identity");
+            "target facts reused the empty-extension baseline identity");
 
     auto alternate = source;
     alternate.observation_schedules.front().step_interval = 3U;

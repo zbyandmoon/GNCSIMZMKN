@@ -5433,11 +5433,13 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
             });
         const bool selector_authorized =
             selector != plan.entity_selectors.end();
+        // Preserve the accepted single-scope proof vector exactly. The
+        // selector extension replaces that premise only for a cross-entity
+        // binding, where `compatible=true` would be false without the
+        // package-authored selector authorization.
         std::vector<std::string> scope_premises{
-            "authorization=" +
-                std::string(selector_authorized
-                                ? "entity-selector"
-                                : "direct-scope-compatibility"),
+            selector_authorized ? "authorization=entity-selector"
+                                : "compatible=true",
             "provider=" + binding.provider_occurrence_id,
             "consumer=" + binding.consumer_occurrence_id};
         std::vector<std::string> scope_prerequisites{
@@ -6050,8 +6052,14 @@ all_plan_elements(const CompleteExecutionPlanDescriptor& plan) {
                 std::to_string(history.committed_history_depth),
             "ordered-member-count=" +
                 std::to_string(history.ordered_members.size()),
-            "branch-decision-slot=" + history.branch_decision_slot_id,
             "candidate-slot-count=0"};
+        // The branch decision is an opt-in evaluator extension.  Omitting it
+        // from a legacy committed-history evaluator must preserve the
+        // accepted proof and Image identity byte-for-byte.
+        if (!history.branch_decision_slot_id.empty()) {
+            premises.push_back("branch-decision-slot=" +
+                               history.branch_decision_slot_id);
+        }
         for (std::size_t index = 0U;
              index < history.ordered_members.size(); ++index) {
             const auto& member = history.ordered_members[index];

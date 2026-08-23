@@ -425,6 +425,8 @@ template <typename Value>
         return "run.held_output.clone_failed";
     case RuntimeDiagnosticCode::HeldOutputValidationFailed:
         return "run.held_output.validation_failed";
+    case RuntimeDiagnosticCode::CommandSubmissionRejected:
+        return "run.command.submission_rejected";
     }
     return "run.internal.failure";
 }
@@ -498,6 +500,472 @@ struct CheckpointHeldOutput {
     bool present = false;
     CheckpointStoredValue value;
 };
+
+[[nodiscard]] RuntimeOperation operation_for_stage(
+    RuntimeDiagnosticStage stage) noexcept {
+    switch (stage) {
+    case RuntimeDiagnosticStage::SessionCreation:
+        return RuntimeOperation::CreateSession;
+    case RuntimeDiagnosticStage::InitializationRequest:
+    case RuntimeDiagnosticStage::InitializationValidation:
+    case RuntimeDiagnosticStage::Materialization:
+    case RuntimeDiagnosticStage::InitialState:
+        return RuntimeOperation::Initialize;
+    case RuntimeDiagnosticStage::ResetRequest:
+    case RuntimeDiagnosticStage::ResetState:
+    case RuntimeDiagnosticStage::ResetPrecommit:
+        return RuntimeOperation::Reset;
+    case RuntimeDiagnosticStage::CheckpointBarrier:
+    case RuntimeDiagnosticStage::CheckpointClone:
+    case RuntimeDiagnosticStage::CheckpointValidation:
+        return RuntimeOperation::Checkpoint;
+    case RuntimeDiagnosticStage::RestoreRequest:
+    case RuntimeDiagnosticStage::RestoreMaterialization:
+    case RuntimeDiagnosticStage::RestoreState:
+    case RuntimeDiagnosticStage::RestorePrecommit:
+        return RuntimeOperation::Restore;
+    case RuntimeDiagnosticStage::CommandSubmission:
+        return RuntimeOperation::SubmitCommand;
+    case RuntimeDiagnosticStage::RunDrive:
+        return RuntimeOperation::RunToTerminal;
+    case RuntimeDiagnosticStage::Schedule:
+    case RuntimeDiagnosticStage::History:
+    case RuntimeDiagnosticStage::BoundaryInvocation:
+    case RuntimeDiagnosticStage::CandidateProduction:
+    case RuntimeDiagnosticStage::ObservationSeal:
+    case RuntimeDiagnosticStage::Precommit:
+    case RuntimeDiagnosticStage::Finalization:
+    case RuntimeDiagnosticStage::Lifecycle:
+    case RuntimeDiagnosticStage::CommandReduction:
+    case RuntimeDiagnosticStage::EventConsumption:
+    case RuntimeDiagnosticStage::HeldOutputInjection:
+    case RuntimeDiagnosticStage::HeldOutputCommit:
+        return RuntimeOperation::ExecuteStep;
+    }
+    return RuntimeOperation::None;
+}
+
+[[nodiscard]] RuntimeDiagnosticSubjectKind default_subject_for_operation(
+    RuntimeOperation operation) noexcept {
+    switch (operation) {
+    case RuntimeOperation::CreateSession:
+    case RuntimeOperation::ExecuteStep:
+    case RuntimeOperation::RunToTerminal:
+    case RuntimeOperation::Dispose:
+    case RuntimeOperation::None:
+        return RuntimeDiagnosticSubjectKind::Session;
+    case RuntimeOperation::Initialize:
+    case RuntimeOperation::Reset:
+        return RuntimeDiagnosticSubjectKind::Run;
+    case RuntimeOperation::Checkpoint:
+    case RuntimeOperation::Restore:
+        return RuntimeDiagnosticSubjectKind::Checkpoint;
+    case RuntimeOperation::SubmitCommand:
+        return RuntimeDiagnosticSubjectKind::Command;
+    }
+    return RuntimeDiagnosticSubjectKind::Session;
+}
+
+[[nodiscard]] bool is_image_field_error(SessionError error) noexcept {
+    switch (error) {
+    case SessionError::UnsupportedImageRevision:
+    case SessionError::InvalidImageHandle:
+    case SessionError::InvalidImageStructure:
+    case SessionError::InvalidStorageLayout:
+    case SessionError::StorageBoundsViolation:
+    case SessionError::StorageOverlap:
+    case SessionError::MissingMaterializer:
+    case SessionError::InvalidMaterializerIdentity:
+    case SessionError::ObjectSizeMismatch:
+    case SessionError::ObjectAlignmentMismatch:
+    case SessionError::ObjectLayoutMismatch:
+    case SessionError::ObjectCodecMismatch:
+    case SessionError::ObjectTypeMismatch:
+    case SessionError::PreparationFailed:
+    case SessionError::RuntimeCellFailed:
+    case SessionError::SlotConstructionFailed:
+    case SessionError::InitialStateFailed:
+    case SessionError::ResetStateFailed:
+    case SessionError::ResetCapabilityMissing:
+    case SessionError::ObjectValidationFailed:
+    case SessionError::InvalidSchedule:
+        return true;
+    case SessionError::None:
+    case SessionError::NullImage:
+    case SessionError::NullMaterializationProvider:
+    case SessionError::EmptyRunId:
+    case SessionError::DuplicateRunId:
+    case SessionError::RunBindingMismatch:
+    case SessionError::AllocationFailure:
+    case SessionError::ResetPrecommitFailed:
+    case SessionError::InvalidLifecycleTransition:
+    case SessionError::FrameAlreadyOpen:
+    case SessionError::FrameNotOpen:
+    case SessionError::FrameSlotAbsent:
+    case SessionError::StaleFrameView:
+    case SessionError::StateAuthorizationFailure:
+    case SessionError::ReaderAuthorizationFailure:
+    case SessionError::WriterAuthorizationFailure:
+    case SessionError::CandidateAuthorizationFailure:
+    case SessionError::CandidateRearmFailed:
+    case SessionError::CandidateValidationFailed:
+    case SessionError::HistoryAuthorizationFailure:
+    case SessionError::HistoryValidationFailed:
+    case SessionError::ObservationSealFailed:
+    case SessionError::TransactionPrecommitFailed:
+    case SessionError::InvocationFailed:
+    case SessionError::InternalFailure:
+    case SessionError::UnsupportedCheckpointCapability:
+    case SessionError::CheckpointBarrierUnavailable:
+    case SessionError::CheckpointCloneFailed:
+    case SessionError::CheckpointValidationFailed:
+    case SessionError::RestoreRequestInvalid:
+    case SessionError::RestoreCompatibilityMismatch:
+    case SessionError::RestoreCloneFailed:
+    case SessionError::RestorePrecommitFailed:
+    case SessionError::HeldOutputMissing:
+    case SessionError::HeldOutputExpired:
+    case SessionError::HeldOutputCloneFailed:
+    case SessionError::HeldOutputValidationFailed:
+        return false;
+    }
+    return false;
+}
+
+[[nodiscard]] RuntimeApiField api_field_for_cause(
+    SessionError error) noexcept {
+    switch (error) {
+    case SessionError::NullImage: return RuntimeApiField::Image;
+    case SessionError::NullMaterializationProvider:
+        return RuntimeApiField::MaterializationProvider;
+    case SessionError::EmptyRunId:
+    case SessionError::DuplicateRunId: return RuntimeApiField::RunId;
+    case SessionError::RunBindingMismatch: return RuntimeApiField::RunBinding;
+    case SessionError::InvalidLifecycleTransition:
+        return RuntimeApiField::SessionLifecycle;
+    case SessionError::UnsupportedImageRevision:
+        return RuntimeApiField::ImageRevision;
+    case SessionError::InvalidImageHandle:
+    case SessionError::InvalidImageStructure:
+    case SessionError::InvalidStorageLayout:
+    case SessionError::StorageBoundsViolation:
+    case SessionError::StorageOverlap:
+    case SessionError::MissingMaterializer:
+    case SessionError::InvalidMaterializerIdentity:
+    case SessionError::ObjectSizeMismatch:
+    case SessionError::ObjectAlignmentMismatch:
+    case SessionError::ObjectLayoutMismatch:
+    case SessionError::ObjectCodecMismatch:
+    case SessionError::ObjectTypeMismatch:
+    case SessionError::PreparationFailed:
+    case SessionError::RuntimeCellFailed:
+    case SessionError::SlotConstructionFailed:
+    case SessionError::InitialStateFailed:
+    case SessionError::ResetStateFailed:
+    case SessionError::ResetCapabilityMissing:
+    case SessionError::ObjectValidationFailed:
+    case SessionError::InvalidSchedule:
+        return RuntimeApiField::ImageStructure;
+    case SessionError::UnsupportedCheckpointCapability:
+    case SessionError::CheckpointBarrierUnavailable:
+    case SessionError::CheckpointCloneFailed:
+    case SessionError::CheckpointValidationFailed:
+    case SessionError::RestoreRequestInvalid:
+    case SessionError::RestoreCompatibilityMismatch:
+    case SessionError::RestoreCloneFailed:
+    case SessionError::RestorePrecommitFailed:
+        return RuntimeApiField::Checkpoint;
+    case SessionError::AllocationFailure:
+        return RuntimeApiField::RuntimeAllocation;
+    case SessionError::None:
+    case SessionError::ResetPrecommitFailed:
+    case SessionError::FrameAlreadyOpen:
+    case SessionError::FrameNotOpen:
+    case SessionError::FrameSlotAbsent:
+    case SessionError::StaleFrameView:
+    case SessionError::StateAuthorizationFailure:
+    case SessionError::ReaderAuthorizationFailure:
+    case SessionError::WriterAuthorizationFailure:
+    case SessionError::CandidateAuthorizationFailure:
+    case SessionError::CandidateRearmFailed:
+    case SessionError::CandidateValidationFailed:
+    case SessionError::HistoryAuthorizationFailure:
+    case SessionError::HistoryValidationFailed:
+    case SessionError::ObservationSealFailed:
+    case SessionError::TransactionPrecommitFailed:
+    case SessionError::InvocationFailed:
+    case SessionError::InternalFailure:
+    case SessionError::HeldOutputMissing:
+    case SessionError::HeldOutputExpired:
+    case SessionError::HeldOutputCloneFailed:
+    case SessionError::HeldOutputValidationFailed:
+        return RuntimeApiField::RuntimeExecution;
+    }
+    return RuntimeApiField::RuntimeExecution;
+}
+
+[[nodiscard]] RuntimeApiField command_source_field(
+    CommandSubmissionReason reason) noexcept {
+    switch (reason) {
+    case CommandSubmissionReason::None: return RuntimeApiField::None;
+    case CommandSubmissionReason::InvalidLifecycle:
+        return RuntimeApiField::SessionLifecycle;
+    case CommandSubmissionReason::EmptyCommandId:
+    case CommandSubmissionReason::CommandIdConflict:
+        return RuntimeApiField::CommandId;
+    case CommandSubmissionReason::WrongRunId:
+        return RuntimeApiField::CommandRunId;
+    case CommandSubmissionReason::UnknownRoute:
+        return RuntimeApiField::CommandRoute;
+    case CommandSubmissionReason::TargetMismatch:
+        return RuntimeApiField::CommandTarget;
+    case CommandSubmissionReason::SchemaMismatch:
+        return RuntimeApiField::CommandPayloadSchema;
+    case CommandSubmissionReason::AuthorityMismatch:
+        return RuntimeApiField::CommandAuthority;
+    case CommandSubmissionReason::InvalidTiming:
+        return RuntimeApiField::CommandTiming;
+    case CommandSubmissionReason::InvalidSupersessionKey:
+        return RuntimeApiField::CommandSupersessionKey;
+    case CommandSubmissionReason::CapacityExceeded:
+        return RuntimeApiField::CommandCapacity;
+    case CommandSubmissionReason::MissingPayload:
+    case CommandSubmissionReason::PayloadTypeMismatch:
+    case CommandSubmissionReason::PayloadRejected:
+        return RuntimeApiField::CommandPayload;
+    case CommandSubmissionReason::TransactionOpen:
+        return RuntimeApiField::TransactionCutoff;
+    case CommandSubmissionReason::AllocationFailure:
+        return RuntimeApiField::RuntimeAllocation;
+    }
+    return RuntimeApiField::RuntimeExecution;
+}
+
+[[nodiscard]] bool command_reason_uses_route_source(
+    CommandSubmissionReason reason) noexcept {
+    switch (reason) {
+    case CommandSubmissionReason::TargetMismatch:
+    case CommandSubmissionReason::SchemaMismatch:
+    case CommandSubmissionReason::AuthorityMismatch:
+    case CommandSubmissionReason::CapacityExceeded:
+    case CommandSubmissionReason::PayloadTypeMismatch:
+    case CommandSubmissionReason::PayloadRejected:
+        return true;
+    case CommandSubmissionReason::None:
+    case CommandSubmissionReason::InvalidLifecycle:
+    case CommandSubmissionReason::EmptyCommandId:
+    case CommandSubmissionReason::WrongRunId:
+    case CommandSubmissionReason::UnknownRoute:
+    case CommandSubmissionReason::InvalidTiming:
+    case CommandSubmissionReason::InvalidSupersessionKey:
+    case CommandSubmissionReason::MissingPayload:
+    case CommandSubmissionReason::CommandIdConflict:
+    case CommandSubmissionReason::TransactionOpen:
+    case CommandSubmissionReason::AllocationFailure:
+        return false;
+    }
+    return false;
+}
+
+[[nodiscard]] RuntimeDiagnosticSubjectKind command_subject_kind(
+    CommandSubmissionReason reason) noexcept {
+    switch (reason) {
+    case CommandSubmissionReason::InvalidLifecycle:
+        return RuntimeDiagnosticSubjectKind::Session;
+    case CommandSubmissionReason::WrongRunId:
+        return RuntimeDiagnosticSubjectKind::Run;
+    case CommandSubmissionReason::UnknownRoute:
+    case CommandSubmissionReason::TargetMismatch:
+    case CommandSubmissionReason::SchemaMismatch:
+    case CommandSubmissionReason::AuthorityMismatch:
+    case CommandSubmissionReason::CapacityExceeded:
+    case CommandSubmissionReason::PayloadTypeMismatch:
+    case CommandSubmissionReason::PayloadRejected:
+        return RuntimeDiagnosticSubjectKind::CommandRoute;
+    case CommandSubmissionReason::TransactionOpen:
+        return RuntimeDiagnosticSubjectKind::Transaction;
+    case CommandSubmissionReason::None:
+    case CommandSubmissionReason::EmptyCommandId:
+    case CommandSubmissionReason::InvalidTiming:
+    case CommandSubmissionReason::MissingPayload:
+    case CommandSubmissionReason::CommandIdConflict:
+    case CommandSubmissionReason::AllocationFailure:
+    case CommandSubmissionReason::InvalidSupersessionKey:
+        return RuntimeDiagnosticSubjectKind::Command;
+    }
+    return RuntimeDiagnosticSubjectKind::Command;
+}
+
+[[nodiscard]] bool has_conformance_source(
+    const contracts::ExecutionPlanImage& image,
+    std::uint32_t handle) noexcept {
+    return handle != 0U && std::any_of(
+        image.conformance().begin(), image.conformance().end(),
+        [handle](const auto& conformance) {
+            return std::find(conformance.image_handles.begin(),
+                             conformance.image_handles.end(),
+                             handle) != conformance.image_handles.end() &&
+                   !conformance.source_refs.empty();
+        });
+}
+
+[[nodiscard]] RuntimeDiagnosticSubjectKind subject_kind_for_handle(
+    const contracts::ExecutionPlanImage& image,
+    std::uint32_t handle,
+    RuntimeDiagnosticSubjectKind fallback) noexcept {
+    if (handle == 0U) return fallback;
+    const auto& data = image.data();
+    if (find_handle(data.packages, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::Package;
+    }
+    if (find_handle(data.entries, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::Entry;
+    }
+    if (find_handle(data.occurrences, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::Occurrence;
+    }
+    if (find_handle(data.preparations, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::Preparation;
+    }
+    if (find_handle(data.queries, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::Query;
+    }
+    if (find_handle(data.closures, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::Closure;
+    }
+    if (find_handle(data.ports, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::Port;
+    }
+    if (find_handle(data.slots, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::Slot;
+    }
+    if (find_handle(data.storage_layouts, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::StorageLayout;
+    }
+    if (find_handle(data.writer_tokens, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::WriterToken;
+    }
+    if (find_handle(data.state_blocks, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::StateBlock;
+    }
+    if (find_handle(data.initial_bindings, handle) != nullptr ||
+        find_handle(data.bindings, handle) != nullptr ||
+        find_handle(data.entity_selectors, handle) != nullptr ||
+        find_handle(data.held_outputs, handle) != nullptr ||
+        find_handle(data.observation_schedules, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::Binding;
+    }
+    if (find_handle(data.runtime_components, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::RuntimeComponent;
+    }
+    if (find_handle(data.callsites, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::Callsite;
+    }
+    if (find_handle(data.invocations, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::Invocation;
+    }
+    if (find_handle(data.regions, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::Region;
+    }
+    if (find_handle(data.integration_scopes, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::IntegrationScope;
+    }
+    if (find_handle(data.transactions, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::Transaction;
+    }
+    if (find_handle(data.command_routes, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::CommandRoute;
+    }
+    if (find_handle(data.event_deliveries, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::EventDelivery;
+    }
+    if (find_handle(data.entities, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::Entity;
+    }
+    if (find_handle(data.known_activations, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::Activation;
+    }
+    if (find_handle(data.evaluator_histories, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::EvaluatorHistory;
+    }
+    if (find_handle(data.resource_plans, handle) != nullptr) {
+        return RuntimeDiagnosticSubjectKind::ResourcePlan;
+    }
+    return RuntimeDiagnosticSubjectKind::ImageObject;
+}
+
+[[nodiscard]] std::string_view command_submission_detail(
+    CommandSubmissionReason reason) noexcept {
+    switch (reason) {
+    case CommandSubmissionReason::None: return {};
+    case CommandSubmissionReason::InvalidLifecycle:
+        return "command submission requires an Initialized Session";
+    case CommandSubmissionReason::EmptyCommandId:
+        return "command id is empty";
+    case CommandSubmissionReason::WrongRunId:
+        return "command RunId does not match the active run";
+    case CommandSubmissionReason::UnknownRoute:
+        return "command route is not available";
+    case CommandSubmissionReason::TargetMismatch:
+        return "command target does not match the route";
+    case CommandSubmissionReason::SchemaMismatch:
+        return "command payload schema does not match the route";
+    case CommandSubmissionReason::AuthorityMismatch:
+        return "command authority does not match the route";
+    case CommandSubmissionReason::InvalidTiming:
+        return "command timing is outside the route window";
+    case CommandSubmissionReason::InvalidSupersessionKey:
+        return "command supersession key is empty";
+    case CommandSubmissionReason::CapacityExceeded:
+        return "command route queue capacity is exhausted";
+    case CommandSubmissionReason::MissingPayload:
+        return "command payload is missing";
+    case CommandSubmissionReason::PayloadTypeMismatch:
+        return "command payload type does not match the route";
+    case CommandSubmissionReason::PayloadRejected:
+        return "command payload was rejected by the package adapter";
+    case CommandSubmissionReason::CommandIdConflict:
+        return "command id was reused with different content";
+    case CommandSubmissionReason::TransactionOpen:
+        return "command submission crossed the transaction cutoff";
+    case CommandSubmissionReason::AllocationFailure:
+        return "command submission storage allocation failed";
+    }
+    return "command submission was rejected";
+}
+
+[[nodiscard]] RuntimeDiagnostic make_api_diagnostic(
+    SessionResult cause, RuntimeDiagnosticStage stage,
+    RuntimeOperation operation,
+    RuntimeDiagnosticSubjectKind subject_kind,
+    contracts::EvidenceValidity validity,
+    RunId run_id = {}, std::int64_t tick = 0,
+    std::uint64_t base_epoch = 0U) noexcept {
+    RuntimeDiagnostic result;
+    result.code = diagnostic_code_for(cause.error);
+    result.stage = stage;
+    result.operation = operation;
+    result.source_kind = RuntimeDiagnosticSourceKind::RuntimeApi;
+    result.source_handle = 0U;
+    result.source_field = api_field_for_cause(cause.error);
+    result.subject_kind = subject_kind;
+    result.subject_reference_kind =
+        RuntimeDiagnosticSubjectReferenceKind::None;
+    result.subject_handle = cause.image_handle;
+    result.run_id = std::move(run_id);
+    result.run_context_present = !result.run_id.empty();
+    result.tick = tick;
+    result.base_epoch = base_epoch;
+    result.simulation_context_present = false;
+    result.cause_kind = RuntimeDiagnosticCauseKind::SessionError;
+    result.cause_code = cause.error;
+    result.cause_ref = cause.image_handle;
+    result.validity_effect = validity;
+    result.disposition = RuntimeFailureDisposition::FailOperation;
+    result.message_key = message_key_for(result.code);
+    result.detail = cause.detail;
+    return result;
+}
 
 } // namespace
 
@@ -621,6 +1089,20 @@ RunBinding exact_run_binding(const contracts::ExecutionPlanImage& image) {
     return {image.fingerprint(), image.plan_id(), image.mission_id(),
             image.source_semantic_hash(),
             image.descriptor_semantic_hash()};
+}
+
+std::string_view to_string(CancellationReason reason) noexcept {
+    switch (reason) {
+    case CancellationReason::None: return "None";
+    case CancellationReason::EmptyRequestId: return "EmptyRequestId";
+    case CancellationReason::EmptyRunId: return "EmptyRunId";
+    case CancellationReason::WrongRunId: return "WrongRunId";
+    case CancellationReason::InvalidLifecycle: return "InvalidLifecycle";
+    case CancellationReason::DuplicateRequest: return "DuplicateRequest";
+    case CancellationReason::OtherRequestAccepted:
+        return "OtherRequestAccepted";
+    }
+    return "InvalidLifecycle";
 }
 
 std::string_view to_string(SessionError error) noexcept {
@@ -778,6 +1260,8 @@ std::string_view to_string(RuntimeDiagnosticCode code) noexcept {
         return "GNC-RUN-HLD-0003";
     case RuntimeDiagnosticCode::HeldOutputValidationFailed:
         return "GNC-RUN-HLD-0004";
+    case RuntimeDiagnosticCode::CommandSubmissionRejected:
+        return "GNC-RUN-CMD-0001";
     }
     return "GNC-RUN-INT-0001";
 }
@@ -827,8 +1311,136 @@ std::string_view to_string(RuntimeDiagnosticStage stage) noexcept {
         return "HeldOutputInjection";
     case RuntimeDiagnosticStage::HeldOutputCommit:
         return "HeldOutputCommit";
+    case RuntimeDiagnosticStage::SessionCreation:
+        return "SessionCreation";
+    case RuntimeDiagnosticStage::CommandSubmission:
+        return "CommandSubmission";
+    case RuntimeDiagnosticStage::RunDrive: return "RunDrive";
     }
     return "Lifecycle";
+}
+
+std::string_view to_string(RuntimeOperation operation) noexcept {
+    switch (operation) {
+    case RuntimeOperation::None: return "None";
+    case RuntimeOperation::CreateSession: return "CreateSession";
+    case RuntimeOperation::Initialize: return "Initialize";
+    case RuntimeOperation::Reset: return "Reset";
+    case RuntimeOperation::Checkpoint: return "Checkpoint";
+    case RuntimeOperation::Restore: return "Restore";
+    case RuntimeOperation::ExecuteStep: return "ExecuteStep";
+    case RuntimeOperation::RunToTerminal: return "RunToTerminal";
+    case RuntimeOperation::SubmitCommand: return "SubmitCommand";
+    case RuntimeOperation::Dispose: return "Dispose";
+    }
+    return "None";
+}
+
+std::string_view to_string(
+    RuntimeDiagnosticSourceKind source_kind) noexcept {
+    switch (source_kind) {
+    case RuntimeDiagnosticSourceKind::RuntimeApi: return "RuntimeApi";
+    case RuntimeDiagnosticSourceKind::ImageConformance:
+        return "ImageConformance";
+    case RuntimeDiagnosticSourceKind::ImageField: return "ImageField";
+    }
+    return "RuntimeApi";
+}
+
+std::string_view to_string(RuntimeApiField field) noexcept {
+    switch (field) {
+    case RuntimeApiField::None: return "None";
+    case RuntimeApiField::Image: return "Image";
+    case RuntimeApiField::MaterializationProvider:
+        return "MaterializationProvider";
+    case RuntimeApiField::RunId: return "RunId";
+    case RuntimeApiField::RunBinding: return "RunBinding";
+    case RuntimeApiField::SessionLifecycle: return "SessionLifecycle";
+    case RuntimeApiField::CommandId: return "CommandId";
+    case RuntimeApiField::CommandRunId: return "CommandRunId";
+    case RuntimeApiField::CommandRoute: return "CommandRoute";
+    case RuntimeApiField::CommandTarget: return "CommandTarget";
+    case RuntimeApiField::CommandPayloadSchema:
+        return "CommandPayloadSchema";
+    case RuntimeApiField::CommandAuthority: return "CommandAuthority";
+    case RuntimeApiField::CommandTiming: return "CommandTiming";
+    case RuntimeApiField::CommandCapacity: return "CommandCapacity";
+    case RuntimeApiField::CommandPayload: return "CommandPayload";
+    case RuntimeApiField::CommandSupersessionKey:
+        return "CommandSupersessionKey";
+    case RuntimeApiField::TransactionCutoff: return "TransactionCutoff";
+    case RuntimeApiField::Checkpoint: return "Checkpoint";
+    case RuntimeApiField::ImageRevision: return "ImageRevision";
+    case RuntimeApiField::ImageStructure: return "ImageStructure";
+    case RuntimeApiField::RuntimeAllocation: return "RuntimeAllocation";
+    case RuntimeApiField::RuntimeExecution: return "RuntimeExecution";
+    }
+    return "None";
+}
+
+std::string_view to_string(
+    RuntimeDiagnosticSubjectKind subject_kind) noexcept {
+    switch (subject_kind) {
+    case RuntimeDiagnosticSubjectKind::Session: return "Session";
+    case RuntimeDiagnosticSubjectKind::Image: return "Image";
+    case RuntimeDiagnosticSubjectKind::MaterializationProvider:
+        return "MaterializationProvider";
+    case RuntimeDiagnosticSubjectKind::Run: return "Run";
+    case RuntimeDiagnosticSubjectKind::Checkpoint: return "Checkpoint";
+    case RuntimeDiagnosticSubjectKind::Command: return "Command";
+    case RuntimeDiagnosticSubjectKind::Package: return "Package";
+    case RuntimeDiagnosticSubjectKind::Entry: return "Entry";
+    case RuntimeDiagnosticSubjectKind::Occurrence: return "Occurrence";
+    case RuntimeDiagnosticSubjectKind::Preparation: return "Preparation";
+    case RuntimeDiagnosticSubjectKind::Query: return "Query";
+    case RuntimeDiagnosticSubjectKind::Closure: return "Closure";
+    case RuntimeDiagnosticSubjectKind::Port: return "Port";
+    case RuntimeDiagnosticSubjectKind::Slot: return "Slot";
+    case RuntimeDiagnosticSubjectKind::StorageLayout:
+        return "StorageLayout";
+    case RuntimeDiagnosticSubjectKind::WriterToken: return "WriterToken";
+    case RuntimeDiagnosticSubjectKind::Binding: return "Binding";
+    case RuntimeDiagnosticSubjectKind::StateBlock: return "StateBlock";
+    case RuntimeDiagnosticSubjectKind::RuntimeComponent:
+        return "RuntimeComponent";
+    case RuntimeDiagnosticSubjectKind::Callsite: return "Callsite";
+    case RuntimeDiagnosticSubjectKind::Invocation: return "Invocation";
+    case RuntimeDiagnosticSubjectKind::Region: return "Region";
+    case RuntimeDiagnosticSubjectKind::IntegrationScope:
+        return "IntegrationScope";
+    case RuntimeDiagnosticSubjectKind::Transaction: return "Transaction";
+    case RuntimeDiagnosticSubjectKind::CommandRoute: return "CommandRoute";
+    case RuntimeDiagnosticSubjectKind::EventDelivery: return "EventDelivery";
+    case RuntimeDiagnosticSubjectKind::Entity: return "Entity";
+    case RuntimeDiagnosticSubjectKind::Activation: return "Activation";
+    case RuntimeDiagnosticSubjectKind::EvaluatorHistory:
+        return "EvaluatorHistory";
+    case RuntimeDiagnosticSubjectKind::ResourcePlan: return "ResourcePlan";
+    case RuntimeDiagnosticSubjectKind::ImageObject: return "ImageObject";
+    }
+    return "ImageObject";
+}
+
+std::string_view to_string(
+    RuntimeDiagnosticSubjectReferenceKind reference_kind) noexcept {
+    switch (reference_kind) {
+    case RuntimeDiagnosticSubjectReferenceKind::None: return "None";
+    case RuntimeDiagnosticSubjectReferenceKind::ImageHandle:
+        return "ImageHandle";
+    case RuntimeDiagnosticSubjectReferenceKind::NumericValue:
+        return "NumericValue";
+    }
+    return "None";
+}
+
+std::string_view to_string(
+    RuntimeDiagnosticCauseKind cause_kind) noexcept {
+    switch (cause_kind) {
+    case RuntimeDiagnosticCauseKind::SessionError: return "SessionError";
+    case RuntimeDiagnosticCauseKind::CommandSubmissionReason:
+        return "CommandSubmissionReason";
+    }
+    return "SessionError";
 }
 
 SessionCommittedStateView::SessionCommittedStateView(
@@ -1469,7 +2081,10 @@ struct Session::Impl final : SessionObjectAccess,
         SessionResult cause, RuntimeDiagnosticStage stage,
         contracts::EvidenceValidity validity,
         RuntimeFailureDisposition disposition =
-            RuntimeFailureDisposition::FailOperation) const noexcept {
+            RuntimeFailureDisposition::FailOperation,
+        RuntimeOperation operation = RuntimeOperation::None,
+        std::optional<RuntimeDiagnosticSubjectKind> subject_override = {})
+        const noexcept {
         RuntimeDiagnostic result;
         result.code = diagnostic_code_for(cause.error);
         if (stage == RuntimeDiagnosticStage::ResetRequest &&
@@ -1478,6 +2093,44 @@ struct Session::Impl final : SessionObjectAccess,
             result.code = RuntimeDiagnosticCode::ResetRequestInvalid;
         }
         result.stage = stage;
+        result.operation = operation == RuntimeOperation::None
+                               ? operation_for_stage(stage)
+                               : operation;
+        const bool numeric_image_subject =
+            cause.error == SessionError::UnsupportedImageRevision ||
+            cause.error == SessionError::InvalidImageHandle;
+        const bool conformance_source =
+            !numeric_image_subject &&
+            has_conformance_source(*image, cause.image_handle);
+        result.source_kind =
+            conformance_source
+                ? RuntimeDiagnosticSourceKind::ImageConformance
+                : (is_image_field_error(cause.error)
+                       ? RuntimeDiagnosticSourceKind::ImageField
+                       : RuntimeDiagnosticSourceKind::RuntimeApi);
+        result.source_handle =
+            result.source_kind == RuntimeDiagnosticSourceKind::RuntimeApi
+                ? 0U
+                : cause.image_handle;
+        result.source_field =
+            result.source_kind == RuntimeDiagnosticSourceKind::ImageConformance
+                ? RuntimeApiField::None
+                : api_field_for_cause(cause.error);
+        result.subject_kind = subject_override.value_or(
+            cause.error == SessionError::UnsupportedImageRevision
+                ? RuntimeDiagnosticSubjectKind::Image
+                : (cause.error == SessionError::InvalidImageHandle
+                       ? RuntimeDiagnosticSubjectKind::ImageObject
+                       : subject_kind_for_handle(
+                             *image, cause.image_handle,
+                             default_subject_for_operation(
+                                 result.operation))));
+        result.subject_reference_kind =
+            numeric_image_subject
+                ? RuntimeDiagnosticSubjectReferenceKind::NumericValue
+                : (cause.image_handle == 0U
+                ? RuntimeDiagnosticSubjectReferenceKind::None
+                : RuntimeDiagnosticSubjectReferenceKind::ImageHandle);
         result.subject_handle = cause.image_handle;
         if (pending_restore_attempt.has_value()) {
             result.run_id = pending_restore_attempt->run_id;
@@ -1490,14 +2143,73 @@ struct Session::Impl final : SessionObjectAccess,
         } else if (current_run_outcome != nullptr) {
             result.run_id = current_run_outcome->run_id;
         }
+        result.run_context_present = !result.run_id.empty();
         result.tick = committed_tick;
         result.base_epoch = committed_epoch;
+        result.simulation_context_present = true;
+        result.cause_kind = RuntimeDiagnosticCauseKind::SessionError;
         result.cause_code = cause.error;
         result.cause_ref = cause.image_handle;
         result.validity_effect = validity;
         result.disposition = disposition;
         result.message_key = message_key_for(result.code);
         result.detail = cause.detail;
+        return result;
+    }
+
+    [[nodiscard]] RuntimeDiagnostic make_command_submission_diagnostic(
+        const CommandSubmissionOutcome& outcome) const noexcept {
+        RuntimeDiagnostic result;
+        result.code = RuntimeDiagnosticCode::CommandSubmissionRejected;
+        result.stage = RuntimeDiagnosticStage::CommandSubmission;
+        result.operation = RuntimeOperation::SubmitCommand;
+        const auto* route = command_route(outcome.route_handle);
+        result.source_kind =
+            route != nullptr &&
+                    command_reason_uses_route_source(outcome.reason) &&
+                    has_conformance_source(*image, outcome.route_handle)
+                ? RuntimeDiagnosticSourceKind::ImageConformance
+                : RuntimeDiagnosticSourceKind::RuntimeApi;
+        result.source_handle =
+            result.source_kind == RuntimeDiagnosticSourceKind::ImageConformance
+                ? outcome.route_handle
+                : 0U;
+        result.source_field =
+            result.source_kind == RuntimeDiagnosticSourceKind::ImageConformance
+                ? RuntimeApiField::None
+                : command_source_field(outcome.reason);
+        result.subject_kind = command_subject_kind(outcome.reason);
+        if (result.subject_kind ==
+            RuntimeDiagnosticSubjectKind::CommandRoute) {
+            result.subject_reference_kind =
+                route == nullptr
+                    ? RuntimeDiagnosticSubjectReferenceKind::NumericValue
+                    : RuntimeDiagnosticSubjectReferenceKind::ImageHandle;
+            result.subject_handle = outcome.route_handle;
+        } else if (result.subject_kind ==
+                       RuntimeDiagnosticSubjectKind::Transaction &&
+                   active_transaction_handle != 0U) {
+            result.subject_reference_kind =
+                RuntimeDiagnosticSubjectReferenceKind::ImageHandle;
+            result.subject_handle = active_transaction_handle;
+        } else {
+            result.subject_reference_kind =
+                RuntimeDiagnosticSubjectReferenceKind::None;
+            result.subject_handle = 0U;
+        }
+        result.run_id = outcome.run_id;
+        result.run_context_present = !result.run_id.empty();
+        result.tick = committed_tick;
+        result.base_epoch = committed_epoch;
+        result.simulation_context_present = true;
+        result.cause_kind =
+            RuntimeDiagnosticCauseKind::CommandSubmissionReason;
+        result.cause_code = SessionError::None;
+        result.cause_ref = static_cast<std::uint32_t>(outcome.reason);
+        result.validity_effect = contracts::EvidenceValidity::Valid;
+        result.disposition = RuntimeFailureDisposition::RejectCommand;
+        result.message_key = message_key_for(result.code);
+        result.detail = command_submission_detail(outcome.reason);
         return result;
     }
 
@@ -1671,7 +2383,9 @@ struct Session::Impl final : SessionObjectAccess,
         committed_run_id.reset();
         committed_run_binding.reset();
         const auto diagnostic = make_diagnostic(
-            cause, stage, contracts::EvidenceValidity::Unknown);
+            cause, stage, contracts::EvidenceValidity::Unknown,
+            RuntimeFailureDisposition::FailOperation,
+            RuntimeOperation::Initialize);
         initialization_outcome = {};
         initialization_outcome.status = InitializationStatus::Failed;
         initialization_outcome.result = cause;
@@ -1707,7 +2421,9 @@ struct Session::Impl final : SessionObjectAccess,
         checkpoint_outcome.barrier_satisfied = barrier_satisfied;
         checkpoint_outcome.checkpoint_commit = false;
         checkpoint_outcome.primary_diagnostic = make_diagnostic(
-            cause, stage, contracts::EvidenceValidity::Unknown);
+            cause, stage, contracts::EvidenceValidity::Unknown,
+            RuntimeFailureDisposition::FailOperation,
+            RuntimeOperation::Checkpoint);
         return checkpoint_outcome;
     }
 
@@ -1729,7 +2445,9 @@ struct Session::Impl final : SessionObjectAccess,
         restore_outcome.committed_tick = committed_tick;
         restore_outcome.primary_diagnostic = make_diagnostic(
             cause, RuntimeDiagnosticStage::RestoreRequest,
-            contracts::EvidenceValidity::Unknown);
+            contracts::EvidenceValidity::Unknown,
+            RuntimeFailureDisposition::FailOperation,
+            RuntimeOperation::Restore);
         pending_restore_attempt.reset();
         return restore_outcome;
     }
@@ -1739,7 +2457,9 @@ struct Session::Impl final : SessionObjectAccess,
         bool binding_matched, bool checkpoint_matched) noexcept {
         last_result = cause;
         const auto diagnostic = make_diagnostic(
-            cause, stage, contracts::EvidenceValidity::Unknown);
+            cause, stage, contracts::EvidenceValidity::Unknown,
+            RuntimeFailureDisposition::FailOperation,
+            RuntimeOperation::Restore);
         restore_outcome = {};
         restore_outcome.status = RestoreStatus::Failed;
         restore_outcome.result = cause;
@@ -1792,7 +2512,9 @@ struct Session::Impl final : SessionObjectAccess,
         SessionResult cause, RuntimeDiagnosticStage stage) noexcept {
         last_result = cause;
         const auto diagnostic = make_diagnostic(
-            cause, stage, contracts::EvidenceValidity::Unknown);
+            cause, stage, contracts::EvidenceValidity::Unknown,
+            RuntimeFailureDisposition::FailOperation,
+            RuntimeOperation::Reset);
         reset_outcome = {};
         reset_outcome.status = ResetStatus::Failed;
         reset_outcome.result = cause;
@@ -6667,7 +7389,8 @@ struct Session::Impl final : SessionObjectAccess,
                 : contracts::EvidenceValidity::Invalid,
             retryable_command_rollback
                 ? RuntimeFailureDisposition::RetryStep
-                : RuntimeFailureDisposition::FailOperation);
+                : RuntimeFailureDisposition::FailOperation,
+            RuntimeOperation::ExecuteStep);
         close_frame();
         if (retryable_command_rollback) {
             step_summary.committed = false;
@@ -8009,8 +8732,12 @@ InitializationOutcome Session::initialize(
             result, RuntimeDiagnosticStage::Lifecycle,
             impl.run_outcome_frozen && impl.current_run_outcome != nullptr
                 ? impl.current_run_outcome->validity
-                : contracts::EvidenceValidity::Unknown);
+                : contracts::EvidenceValidity::Unknown,
+            RuntimeFailureDisposition::FailOperation,
+            RuntimeOperation::Initialize,
+            RuntimeDiagnosticSubjectKind::Run);
         diagnostic.run_id = request.run_id;
+        diagnostic.run_context_present = !diagnostic.run_id.empty();
         InitializationOutcome rejected;
         rejected.status = InitializationStatus::Failed;
         rejected.result = result;
@@ -8473,8 +9200,12 @@ RestoreOutcome Session::restore(RestoreRequest request) noexcept {
             cause, RuntimeDiagnosticStage::Lifecycle,
             impl.run_outcome_frozen && impl.current_run_outcome != nullptr
                 ? impl.current_run_outcome->validity
-                : contracts::EvidenceValidity::Unknown);
+                : contracts::EvidenceValidity::Unknown,
+            RuntimeFailureDisposition::FailOperation,
+            RuntimeOperation::Restore,
+            RuntimeDiagnosticSubjectKind::Run);
         diagnostic.run_id = request.run_id;
+        diagnostic.run_context_present = !diagnostic.run_id.empty();
         impl.restore_outcome = {};
         impl.restore_outcome.status = RestoreStatus::Failed;
         impl.restore_outcome.result = cause;
@@ -8721,8 +9452,12 @@ ResetOutcome Session::reset(ResetRequest request) noexcept {
             result, RuntimeDiagnosticStage::Lifecycle,
             impl.run_outcome_frozen && impl.current_run_outcome != nullptr
                 ? impl.current_run_outcome->validity
-                : contracts::EvidenceValidity::Unknown);
+                : contracts::EvidenceValidity::Unknown,
+            RuntimeFailureDisposition::FailOperation,
+            RuntimeOperation::Reset,
+            RuntimeDiagnosticSubjectKind::Run);
         diagnostic.run_id = request.run_id;
+        diagnostic.run_context_present = !diagnostic.run_id.empty();
         impl.reset_outcome = {};
         impl.reset_outcome.status = ResetStatus::Failed;
         impl.reset_outcome.result = result;
@@ -8915,17 +9650,27 @@ CancellationOutcome Session::request_cancel(
     outcome.observed_committed_epoch =
         impl.cancellation_committed_epoch;
     outcome.observed_committed_tick = impl.cancellation_committed_tick;
+    if (impl.cancellation_has_current_run) {
+        outcome.active_run_id = impl.cancellation_current_run_id;
+    }
 
     if (request.request_id.empty() || request.run_id.empty()) {
         outcome.disposition = CancellationDisposition::Rejected;
+        outcome.reason = request.request_id.empty()
+                             ? CancellationReason::EmptyRequestId
+                             : CancellationReason::EmptyRunId;
         return outcome;
     }
     if (impl.cancellation_accepted) {
-        outcome.disposition =
+        const bool duplicate =
             request.request_id == impl.accepted_cancellation_id &&
-                    request.run_id == impl.accepted_cancellation_run_id
-                ? CancellationDisposition::AlreadyRequested
-                : CancellationDisposition::Superseded;
+            request.run_id == impl.accepted_cancellation_run_id;
+        outcome.disposition = duplicate
+                                  ? CancellationDisposition::AlreadyRequested
+                                  : CancellationDisposition::Superseded;
+        outcome.reason = duplicate
+                             ? CancellationReason::DuplicateRequest
+                             : CancellationReason::OtherRequestAccepted;
         return outcome;
     }
     if (impl.cancellation_lifecycle == SessionState::Initialized &&
@@ -8935,14 +9680,22 @@ CancellationOutcome Session::request_cancel(
         impl.accepted_cancellation_id = request.request_id;
         impl.accepted_cancellation_run_id = request.run_id;
         outcome.disposition = CancellationDisposition::Accepted;
+        outcome.reason = CancellationReason::None;
         return outcome;
     }
-    outcome.disposition =
+    const bool request_targets_other_run =
+        impl.cancellation_lifecycle == SessionState::Initialized &&
+        impl.cancellation_has_current_run &&
+        request.run_id != impl.cancellation_current_run_id;
+    const bool reject =
         impl.cancellation_lifecycle == SessionState::Created ||
-                impl.cancellation_lifecycle == SessionState::Initialized ||
-                impl.cancellation_lifecycle == SessionState::Completed
-            ? CancellationDisposition::Rejected
-            : CancellationDisposition::Superseded;
+        impl.cancellation_lifecycle == SessionState::Initialized ||
+        impl.cancellation_lifecycle == SessionState::Completed;
+    outcome.disposition = reject ? CancellationDisposition::Rejected
+                                 : CancellationDisposition::Superseded;
+    outcome.reason = request_targets_other_run
+                         ? CancellationReason::WrongRunId
+                         : CancellationReason::InvalidLifecycle;
     return outcome;
 }
 
@@ -8952,22 +9705,27 @@ CommandSubmissionOutcome Session::submit_command(
     CommandSubmissionOutcome outcome;
     outcome.command_id = request.command_id;
     outcome.run_id = request.run_id;
+    if (impl.committed_run_id.has_value()) {
+        outcome.active_run_id = *impl.committed_run_id;
+    }
     outcome.route_handle = request.route_handle;
     outcome.observed_committed_epoch = impl.committed_epoch;
     outcome.observed_committed_tick = impl.committed_tick;
+    const auto reject = [&](CommandSubmissionReason reason) noexcept {
+        outcome.status = CommandSubmissionStatus::Rejected;
+        outcome.reason = reason;
+        outcome.ledger_sequence = impl.command_ledger_sequence;
+        outcome.primary_diagnostic =
+            impl.make_command_submission_diagnostic(outcome);
+        return outcome;
+    };
 
     if (impl.state != SessionState::Initialized ||
         !impl.committed_run_id.has_value()) {
-        outcome.status = CommandSubmissionStatus::Rejected;
-        outcome.reason = CommandSubmissionReason::InvalidLifecycle;
-        outcome.ledger_sequence = impl.command_ledger_sequence;
-        return outcome;
+        return reject(CommandSubmissionReason::InvalidLifecycle);
     }
     if (impl.cycle_frame.open || impl.active_transaction_handle != 0U) {
-        outcome.status = CommandSubmissionStatus::Rejected;
-        outcome.reason = CommandSubmissionReason::TransactionOpen;
-        outcome.ledger_sequence = impl.command_ledger_sequence;
-        return outcome;
+        return reject(CommandSubmissionReason::TransactionOpen);
     }
 
     const auto exact_retry = std::find_if(
@@ -9013,9 +9771,10 @@ CommandSubmissionOutcome Session::submit_command(
                request.effective_tick >
                    impl.image->clock().terminal_tick ||
                (request.expiry_tick.has_value() &&
-                *request.expiry_tick < request.effective_tick) ||
-               request.supersession_key.empty()) {
+                *request.expiry_tick < request.effective_tick)) {
         reason = CommandSubmissionReason::InvalidTiming;
+    } else if (request.supersession_key.empty()) {
+        reason = CommandSubmissionReason::InvalidSupersessionKey;
     } else if (!request.payload) {
         reason = CommandSubmissionReason::MissingPayload;
     } else if (request.payload.type_identity() !=
@@ -9041,6 +9800,10 @@ CommandSubmissionOutcome Session::submit_command(
                          : CommandSubmissionStatus::Rejected;
     outcome.reason = reason;
     outcome.ledger_sequence = impl.command_ledger_sequence + 1U;
+    if (outcome.status == CommandSubmissionStatus::Rejected) {
+        outcome.primary_diagnostic =
+            impl.make_command_submission_diagnostic(outcome);
+    }
     try {
         auto next_ledger = impl.command_ledger;
         auto next_outcomes = impl.command_submission_outcomes;
@@ -9060,25 +9823,58 @@ CommandSubmissionOutcome Session::submit_command(
         outcome.status = CommandSubmissionStatus::Rejected;
         outcome.reason = CommandSubmissionReason::AllocationFailure;
         outcome.ledger_sequence = impl.command_ledger_sequence;
+        outcome.primary_diagnostic =
+            impl.make_command_submission_diagnostic(outcome);
         return outcome;
     }
 }
 
-SessionResult Session::dispose() noexcept {
+DisposeOutcome Session::dispose() noexcept {
     auto& impl = *implementation_;
+    const auto make_outcome =
+        [&impl](SessionResult result,
+                std::optional<RuntimeDiagnostic> diagnostic,
+                contracts::EvidenceValidity validity) noexcept {
+            DisposeOutcome outcome;
+            outcome.result = result;
+            if (impl.committed_run_id.has_value()) {
+                outcome.run_id = *impl.committed_run_id;
+            } else if (impl.current_run_outcome != nullptr) {
+                outcome.run_id = impl.current_run_outcome->run_id;
+            }
+            outcome.observed_committed_tick = impl.committed_tick;
+            outcome.observed_committed_epoch = impl.committed_epoch;
+            outcome.validity = validity;
+            outcome.primary_diagnostic = std::move(diagnostic);
+            return outcome;
+        };
     if (impl.state != SessionState::Created &&
         impl.state != SessionState::Completed &&
         impl.state != SessionState::Cancelled &&
         impl.state != SessionState::Failed) {
-        return impl.failure(
+        const auto cause = impl.failure(
             SessionError::InvalidLifecycleTransition, 0U,
             "dispose requires Created, Completed, Cancelled, or Failed Session");
+        return make_outcome(
+            cause,
+            impl.make_diagnostic(
+                cause, RuntimeDiagnosticStage::Lifecycle,
+                contracts::EvidenceValidity::Valid,
+                RuntimeFailureDisposition::FailOperation,
+                RuntimeOperation::Dispose,
+                RuntimeDiagnosticSubjectKind::Session),
+            contracts::EvidenceValidity::Valid);
     }
+    const auto validity =
+        impl.run_outcome_frozen && impl.current_run_outcome != nullptr
+            ? impl.current_run_outcome->validity
+            : contracts::EvidenceValidity::Valid;
+    auto outcome = make_outcome({}, {}, validity);
     impl.unwind();
     impl.state = SessionState::Disposed;
     impl.publish_cancellation_lifecycle(SessionState::Disposed);
     impl.last_result = {};
-    return {};
+    return outcome;
 }
 
 SessionResult Session::qualification_execute_opening_boundary() noexcept {
@@ -9498,27 +10294,72 @@ StepOutcome Session::execute_step() noexcept {
 
 RunDriveOutcome Session::run_to_terminal() noexcept {
     auto& impl = *implementation_;
+    const auto make_outcome =
+        [&impl](RunDriveStatus status, SessionResult result,
+                contracts::EvidenceValidity validity,
+                std::optional<RuntimeDiagnostic> diagnostic) noexcept {
+            RunDriveOutcome outcome;
+            outcome.status = status;
+            outcome.result = result;
+            if (impl.committed_run_id.has_value()) {
+                outcome.run_id = *impl.committed_run_id;
+            } else if (impl.current_run_outcome != nullptr) {
+                outcome.run_id = impl.current_run_outcome->run_id;
+            }
+            outcome.observed_committed_tick = impl.committed_tick;
+            outcome.observed_committed_epoch = impl.committed_epoch;
+            outcome.validity = validity;
+            outcome.primary_diagnostic = std::move(diagnostic);
+            return outcome;
+        };
     if (impl.state != SessionState::Initialized) {
-        return {RunDriveStatus::Failed,
-                impl.failure(
-                    SessionError::InvalidLifecycleTransition, 0U,
-                    "run_to_terminal requires an Initialized Session")};
+        const auto cause = impl.failure(
+            SessionError::InvalidLifecycleTransition, 0U,
+            "run_to_terminal requires an Initialized Session");
+        return make_outcome(
+            RunDriveStatus::Failed, cause,
+            contracts::EvidenceValidity::Valid,
+            impl.make_diagnostic(
+                cause, RuntimeDiagnosticStage::RunDrive,
+                contracts::EvidenceValidity::Valid,
+                RuntimeFailureDisposition::FailOperation,
+                RuntimeOperation::RunToTerminal,
+                RuntimeDiagnosticSubjectKind::Session));
     }
     while (impl.state == SessionState::Initialized) {
         const auto step = execute_step();
         if (step.status == StepStatus::Cancelled ||
             impl.state == SessionState::Cancelled) {
-            return {RunDriveStatus::Cancelled, {}};
+            return make_outcome(
+                RunDriveStatus::Cancelled, {},
+                contracts::EvidenceValidity::Valid, {});
         }
-        if (!step) return {RunDriveStatus::Failed, step.result};
+        if (!step) {
+            const auto validity =
+                step.primary_diagnostic.has_value()
+                    ? step.primary_diagnostic->validity_effect
+                    : contracts::EvidenceValidity::Invalid;
+            return make_outcome(RunDriveStatus::Failed, step.result,
+                                validity, step.primary_diagnostic);
+        }
         if (step.status == StepStatus::Terminated) {
-            return {RunDriveStatus::Completed, {}};
+            return make_outcome(
+                RunDriveStatus::Completed, {},
+                contracts::EvidenceValidity::Valid, {});
         }
     }
-    return {RunDriveStatus::Failed,
-            impl.failure(
-                SessionError::InternalFailure, 0U,
-                "run_to_terminal left the executable lifecycle")};
+    const auto cause = impl.failure(
+        SessionError::InternalFailure, 0U,
+        "run_to_terminal left the executable lifecycle");
+    return make_outcome(
+        RunDriveStatus::Failed, cause,
+        contracts::EvidenceValidity::Invalid,
+        impl.make_diagnostic(
+            cause, RuntimeDiagnosticStage::RunDrive,
+            contracts::EvidenceValidity::Invalid,
+            RuntimeFailureDisposition::FailOperation,
+            RuntimeOperation::RunToTerminal,
+            RuntimeDiagnosticSubjectKind::Session));
 }
 
 std::size_t Session::preparation_count() const noexcept {
@@ -9996,13 +10837,27 @@ SessionCreation create_session(
     std::shared_ptr<const contracts::ExecutionPlanImage> image,
     std::shared_ptr<const SessionMaterializationProvider> provider) noexcept {
     if (image == nullptr) {
-        return {nullptr,
-                {SessionError::NullImage, 0U, "Session requires an Image"}};
+        const SessionResult cause{
+            SessionError::NullImage, 0U, "Session requires an Image"};
+        return {
+            nullptr, cause,
+            make_api_diagnostic(
+                cause, RuntimeDiagnosticStage::SessionCreation,
+                RuntimeOperation::CreateSession,
+                RuntimeDiagnosticSubjectKind::Image,
+                contracts::EvidenceValidity::Invalid)};
     }
     if (provider == nullptr) {
-        return {nullptr,
-                {SessionError::NullMaterializationProvider, 0U,
-                 "Session requires a materialization provider"}};
+        const SessionResult cause{
+            SessionError::NullMaterializationProvider, 0U,
+            "Session requires a materialization provider"};
+        return {
+            nullptr, cause,
+            make_api_diagnostic(
+                cause, RuntimeDiagnosticStage::SessionCreation,
+                RuntimeOperation::CreateSession,
+                RuntimeDiagnosticSubjectKind::MaterializationProvider,
+                contracts::EvidenceValidity::Invalid)};
     }
     try {
         auto implementation = std::make_unique<Session::Impl>();
@@ -10022,11 +10877,18 @@ SessionCreation create_session(
             *implementation->reset_failure_outcome_storage);
         return {std::unique_ptr<Session>(
                     new Session(std::move(implementation))),
-                {}};
+                {}, {}};
     } catch (...) {
-        return {nullptr,
-                {SessionError::AllocationFailure, 0U,
-                 "Session setup allocation failed"}};
+        const SessionResult cause{
+            SessionError::AllocationFailure, 0U,
+            "Session setup allocation failed"};
+        return {
+            nullptr, cause,
+            make_api_diagnostic(
+                cause, RuntimeDiagnosticStage::SessionCreation,
+                RuntimeOperation::CreateSession,
+                RuntimeDiagnosticSubjectKind::Session,
+                contracts::EvidenceValidity::Invalid)};
     }
 }
 

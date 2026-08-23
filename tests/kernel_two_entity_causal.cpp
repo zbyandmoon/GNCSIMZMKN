@@ -1288,29 +1288,33 @@ void verify_atomic_failure(
         live, live.provider->b_state_block_handle);
     require(failed.status == kernel::StepStatus::Failed &&
                 failed.committed_epoch == 0U &&
-                failed.primary_diagnostic.has_value() &&
-                failed.primary_diagnostic->stage ==
+                failed.primary_diagnostic.has_value(),
+            "multi-owner candidate failure did not return one frozen failure");
+    const auto& diagnostic = *failed.primary_diagnostic;
+    require(diagnostic.stage ==
                     kernel::RuntimeDiagnosticStage::CandidateProduction &&
-                failed.primary_diagnostic->cause_code ==
+                diagnostic.cause_code ==
                     kernel::SessionError::InvocationFailed &&
-                failed.primary_diagnostic->validity_effect ==
+                diagnostic.validity_effect ==
                     contracts::EvidenceValidity::Invalid &&
-                failed.primary_diagnostic->disposition ==
+                diagnostic.disposition ==
                     kernel::RuntimeFailureDisposition::FailOperation &&
-                failed.primary_diagnostic->tick == 0 &&
-                failed.primary_diagnostic->base_epoch == 0U &&
-                live.session->state() == kernel::SessionState::Failed &&
+                diagnostic.tick == 0 && diagnostic.base_epoch == 0U,
+            "multi-owner candidate failure diagnostic changed");
+    require(live.session->state() == kernel::SessionState::Failed &&
                 live.session->committed_tick() == 0 &&
                 live.session->committed_epoch() == 0U &&
-                live.provider->control.candidate_trace ==
-                    std::vector<std::string>({"A", "Link", "B"}) &&
-                near(a_before.position, a_after.position) &&
+                live.session->committed_outputs().empty(),
+            "multi-owner candidate failure advanced Session authority");
+    require(live.provider->control.candidate_trace ==
+                std::vector<std::string>({"A", "Link", "B"}),
+            "multi-owner candidate failure changed deterministic production order");
+    require(near(a_before.position, a_after.position) &&
                 a_before.revision == a_after.revision &&
                 link_before.valid == link_after.valid &&
                 link_before.revision == link_after.revision &&
                 near(b_before.position, b_after.position) &&
-                b_before.revision == b_after.revision &&
-                live.session->committed_outputs().empty(),
+                b_before.revision == b_after.revision,
             "failure after A candidate leaked a partial multi-owner commit");
     const auto rejected = live.session->execute_step();
     require(rejected.status == kernel::StepStatus::Failed &&

@@ -40,7 +40,7 @@ constexpr std::string_view kIntervalOneFingerprint =
 constexpr std::string_view kPriorCanonicalFingerprint =
     "e981118b136b3e6872da40a00c296153b9ad26e144c7882341b64b30b219574c";
 constexpr std::string_view kCanonicalFingerprint =
-    "4faccb3be9c6b760591b286c8996322069c7e0c1ba1668dcdf8946fb36c263ff";
+    "65e00515234efcabfae14399e9fe6838d65248af2d9a598f50b09a3470131078";
 constexpr std::int64_t kTerminalTick = 3000;
 
 void require(bool condition, std::string_view message) {
@@ -178,8 +178,19 @@ template <std::size_t Size>
 [[nodiscard]] bool exactly_same(const kernel::RuntimeDiagnostic& lhs,
                                 const kernel::RuntimeDiagnostic& rhs) noexcept {
     return lhs.code == rhs.code && lhs.stage == rhs.stage &&
+           lhs.operation == rhs.operation &&
+           lhs.source_kind == rhs.source_kind &&
+           lhs.source_handle == rhs.source_handle &&
+           lhs.source_field == rhs.source_field &&
+           lhs.subject_kind == rhs.subject_kind &&
+           lhs.subject_reference_kind == rhs.subject_reference_kind &&
            lhs.subject_handle == rhs.subject_handle &&
+           lhs.run_id == rhs.run_id &&
+           lhs.run_context_present == rhs.run_context_present &&
            lhs.tick == rhs.tick && lhs.base_epoch == rhs.base_epoch &&
+           lhs.simulation_context_present ==
+               rhs.simulation_context_present &&
+           lhs.cause_kind == rhs.cause_kind &&
            lhs.cause_code == rhs.cause_code &&
            lhs.cause_ref == rhs.cause_ref &&
            lhs.validity_effect == rhs.validity_effect &&
@@ -429,10 +440,17 @@ void verify_source_plan_proof_image(
     const auto interval_one = ref_yyz::compile_complete_image();
     const auto target_rate =
         ref_yyz::compile_00a_target_rate_image(kTerminalTick);
-    require(interval_one.succeeded() && target_rate.succeeded() &&
-                interval_one.value->fingerprint() ==
-                    kIntervalOneFingerprint &&
-                image->fingerprint() == kCanonicalFingerprint &&
+    require(interval_one.succeeded(), diagnostics(interval_one));
+    require(target_rate.succeeded(), diagnostics(target_rate));
+    require(interval_one.value->fingerprint() == kIntervalOneFingerprint,
+            std::string("unexpected interval-one fingerprint: ") +
+                interval_one.value->fingerprint());
+    require(image->fingerprint() == kCanonicalFingerprint,
+            std::string("unexpected canonical fingerprint: ") +
+                image->fingerprint() + "; descriptor=" +
+                image->descriptor_semantic_hash() + "; proof=" +
+                image->proof_index_hash());
+    require(
                 image->fingerprint() != kPriorCanonicalFingerprint &&
                 image->fingerprint() != interval_one.value->fingerprint() &&
                 image->fingerprint() != target_rate.value->fingerprint() &&

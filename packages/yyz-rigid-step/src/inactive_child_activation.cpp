@@ -71,14 +71,6 @@ template <typename Value>
     return value == nullptr ? nullptr : std::get_if<double>(&value->value);
 }
 
-[[nodiscard]] const std::int64_t* integer(
-    const CanonicalConfigBlock& configuration,
-    std::string_view field_id) noexcept {
-    const auto* value = field(configuration, field_id);
-    return value == nullptr ? nullptr
-                            : std::get_if<std::int64_t>(&value->value);
-}
-
 [[nodiscard]] bool exact_fields(
     const CanonicalConfigBlock& configuration,
     std::string_view schema_id,

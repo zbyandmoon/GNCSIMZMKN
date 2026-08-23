@@ -209,18 +209,18 @@ void append_field_sources(
     source.bindings = {
         {"binding.stuck.demand-actuator", std::string(kDemandOccurrence),
          "surface-demand", std::string(kActuatorOccurrence),
-         "surface-demand", source_ref("/bindings/demand-actuator")},
+         "surface-demand", source_ref("/bindings/demand-actuator"), {}},
         {"binding.stuck.actuator-load", std::string(kActuatorOccurrence),
          "actual-surface", std::string(kLoadOccurrence), "actual-surface",
-         source_ref("/bindings/actuator-load")},
+         source_ref("/bindings/actuator-load"), {}},
         {"binding.stuck.load-rigid", std::string(kLoadOccurrence),
          "surface-load", std::string(kRigidOccurrence), "surface-load",
-         source_ref("/bindings/load-rigid")}};
+         source_ref("/bindings/load-rigid"), {}}};
 
     source.transactions.push_back(
         {std::string(kTransactionId), scope,
          {std::string(kActuatorOccurrence), std::string(kRigidOccurrence)},
-         source_ref("/transactions/stuck-actuator")});
+         source_ref("/transactions/stuck-actuator"), {}});
 
     compiler::CompleteSourceEvaluatorHistory history;
     history.evaluator_occurrence_id = std::string(kContactOccurrence);
@@ -1665,8 +1665,45 @@ void verify_invalid_payload(
     require(!rejected &&
                 rejected.reason ==
                     kernel::CommandSubmissionReason::PayloadRejected &&
+                rejected.active_run_id == live.run_id &&
+                rejected.primary_diagnostic.has_value() &&
+                rejected.primary_diagnostic->code ==
+                    kernel::RuntimeDiagnosticCode::CommandSubmissionRejected &&
+                rejected.primary_diagnostic->stage ==
+                    kernel::RuntimeDiagnosticStage::CommandSubmission &&
+                rejected.primary_diagnostic->operation ==
+                    kernel::RuntimeOperation::SubmitCommand &&
+                rejected.primary_diagnostic->source_kind ==
+                    kernel::RuntimeDiagnosticSourceKind::ImageConformance &&
+                rejected.primary_diagnostic->source_handle ==
+                    rejected.route_handle &&
+                rejected.primary_diagnostic->source_field ==
+                    kernel::RuntimeApiField::None &&
+                rejected.primary_diagnostic->subject_kind ==
+                    kernel::RuntimeDiagnosticSubjectKind::CommandRoute &&
+                rejected.primary_diagnostic->subject_reference_kind ==
+                    kernel::RuntimeDiagnosticSubjectReferenceKind::ImageHandle &&
+                rejected.primary_diagnostic->subject_handle ==
+                    rejected.route_handle &&
+                rejected.primary_diagnostic->run_id == live.run_id &&
+                rejected.primary_diagnostic->run_context_present &&
+                rejected.primary_diagnostic->simulation_context_present &&
+                rejected.primary_diagnostic->cause_kind ==
+                    kernel::RuntimeDiagnosticCauseKind::CommandSubmissionReason &&
+                rejected.primary_diagnostic->cause_ref ==
+                    static_cast<std::uint32_t>(
+                        kernel::CommandSubmissionReason::PayloadRejected) &&
+                rejected.primary_diagnostic->validity_effect ==
+                    contracts::EvidenceValidity::Valid &&
+                rejected.primary_diagnostic->disposition ==
+                    kernel::RuntimeFailureDisposition::RejectCommand &&
                 !retry && retry.reason == rejected.reason &&
                 retry.duplicate_retry &&
+                retry.primary_diagnostic.has_value() &&
+                retry.primary_diagnostic->source_handle ==
+                    rejected.primary_diagnostic->source_handle &&
+                retry.primary_diagnostic->cause_ref ==
+                    rejected.primary_diagnostic->cause_ref &&
                 live.session->pending_command_count() == 0U &&
                 live.session->command_application_receipts().empty() &&
                 live.session->committed_events().empty() &&

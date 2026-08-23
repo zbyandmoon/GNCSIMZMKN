@@ -376,7 +376,8 @@ const gnc::model_sdk::StaticEvaluatorHistoryWitness
           std::string(kRigidStateLayoutIdentity)},
          {std::string(kCommittedMissionMassHistoryMemberId),
           std::string(kMassStateSchemaIdentity),
-          std::string(kMassStateLayoutIdentity)}}};
+          std::string(kMassStateLayoutIdentity)}},
+        {}};
 
 const gnc::model_sdk::StaticEvaluatorHistoryWitness
     kRunwideCommittedMissionHistoryImplementationWitness{
@@ -391,7 +392,8 @@ const gnc::model_sdk::StaticEvaluatorHistoryWitness
           std::string(kRigidStateLayoutIdentity)},
          {std::string(kRunwideCommittedMissionMassHistoryMemberId),
           std::string(kMassStateSchemaIdentity),
-          std::string(kMassStateLayoutIdentity)}}};
+          std::string(kMassStateLayoutIdentity)}},
+        {}};
 
 template <typename ExpectedCallable, auto Callable>
 void append_static_entry(
@@ -1490,7 +1492,8 @@ describe_yyz_rigid_step_package() {
               std::string(kRigidStateLayoutIdentity)},
              {std::string(kCommittedMissionMassHistoryMemberId),
               std::string(kMassStateSchemaIdentity),
-              std::string(kMassStateLayoutIdentity)}}};
+              std::string(kMassStateLayoutIdentity)}},
+            {}};
     evaluator.runtime_component = std::move(evaluator_runtime);
 
     gnc::model_sdk::StaticModelDescriptor accumulator;
@@ -1713,7 +1716,8 @@ describe_yyz_rigid_step_package() {
               std::string(kRigidStateLayoutIdentity)},
              {std::string(kRunwideCommittedMissionMassHistoryMemberId),
               std::string(kMassStateSchemaIdentity),
-              std::string(kMassStateLayoutIdentity)}}};
+              std::string(kMassStateLayoutIdentity)}},
+            {}};
     runwide_evaluator.runtime_component = std::move(runwide_runtime);
 
     package.models.push_back(std::move(mass));

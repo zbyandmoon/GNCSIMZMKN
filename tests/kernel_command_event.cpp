@@ -498,7 +498,8 @@ template <auto Callable>
 
     source.transactions.push_back(
         {"transaction.qualification.mode-owner", scope,
-         {std::string(kOccurrenceId)}, source_ref("/transactions/mode-owner")});
+         {std::string(kOccurrenceId)}, source_ref("/transactions/mode-owner"),
+         {}});
     source.package_build_locks.push_back(
         {std::string(kPackageId), std::string(kPackageVersion),
          std::string(kBuildFingerprint), source_ref("/packages/mode-owner")});
@@ -1435,11 +1436,152 @@ void verify_submission_and_idempotency(
     const auto reject = [&](kernel::CommandRequest request,
                             kernel::CommandSubmissionReason reason,
                             std::string_view message) {
+        const auto requested_route = request.route_handle;
+        const auto requested_run_id = request.run_id;
+        const bool route_known = std::any_of(
+            live.image->command_routes().begin(),
+            live.image->command_routes().end(),
+            [requested_route](const auto& route) {
+                return route.handle == requested_route;
+            });
+        const bool route_source =
+            route_known &&
+            (reason == kernel::CommandSubmissionReason::TargetMismatch ||
+             reason == kernel::CommandSubmissionReason::SchemaMismatch ||
+             reason == kernel::CommandSubmissionReason::AuthorityMismatch ||
+             reason == kernel::CommandSubmissionReason::CapacityExceeded ||
+             reason == kernel::CommandSubmissionReason::PayloadTypeMismatch ||
+             reason == kernel::CommandSubmissionReason::PayloadRejected);
+        const auto expected_source_field = [&] {
+            if (route_source) return kernel::RuntimeApiField::None;
+            switch (reason) {
+            case kernel::CommandSubmissionReason::InvalidLifecycle:
+                return kernel::RuntimeApiField::SessionLifecycle;
+            case kernel::CommandSubmissionReason::EmptyCommandId:
+            case kernel::CommandSubmissionReason::CommandIdConflict:
+                return kernel::RuntimeApiField::CommandId;
+            case kernel::CommandSubmissionReason::WrongRunId:
+                return kernel::RuntimeApiField::CommandRunId;
+            case kernel::CommandSubmissionReason::UnknownRoute:
+                return kernel::RuntimeApiField::CommandRoute;
+            case kernel::CommandSubmissionReason::InvalidTiming:
+                return kernel::RuntimeApiField::CommandTiming;
+            case kernel::CommandSubmissionReason::InvalidSupersessionKey:
+                return kernel::RuntimeApiField::CommandSupersessionKey;
+            case kernel::CommandSubmissionReason::MissingPayload:
+                return kernel::RuntimeApiField::CommandPayload;
+            case kernel::CommandSubmissionReason::TransactionOpen:
+                return kernel::RuntimeApiField::TransactionCutoff;
+            case kernel::CommandSubmissionReason::AllocationFailure:
+                return kernel::RuntimeApiField::RuntimeAllocation;
+            case kernel::CommandSubmissionReason::None:
+            case kernel::CommandSubmissionReason::TargetMismatch:
+            case kernel::CommandSubmissionReason::SchemaMismatch:
+            case kernel::CommandSubmissionReason::AuthorityMismatch:
+            case kernel::CommandSubmissionReason::CapacityExceeded:
+            case kernel::CommandSubmissionReason::PayloadTypeMismatch:
+            case kernel::CommandSubmissionReason::PayloadRejected:
+                return kernel::RuntimeApiField::None;
+            }
+            return kernel::RuntimeApiField::RuntimeExecution;
+        }();
+        const auto expected_subject_kind = [&] {
+            switch (reason) {
+            case kernel::CommandSubmissionReason::InvalidLifecycle:
+                return kernel::RuntimeDiagnosticSubjectKind::Session;
+            case kernel::CommandSubmissionReason::WrongRunId:
+                return kernel::RuntimeDiagnosticSubjectKind::Run;
+            case kernel::CommandSubmissionReason::UnknownRoute:
+            case kernel::CommandSubmissionReason::TargetMismatch:
+            case kernel::CommandSubmissionReason::SchemaMismatch:
+            case kernel::CommandSubmissionReason::AuthorityMismatch:
+            case kernel::CommandSubmissionReason::CapacityExceeded:
+            case kernel::CommandSubmissionReason::PayloadTypeMismatch:
+            case kernel::CommandSubmissionReason::PayloadRejected:
+                return kernel::RuntimeDiagnosticSubjectKind::CommandRoute;
+            case kernel::CommandSubmissionReason::TransactionOpen:
+                return kernel::RuntimeDiagnosticSubjectKind::Transaction;
+            case kernel::CommandSubmissionReason::None:
+            case kernel::CommandSubmissionReason::EmptyCommandId:
+            case kernel::CommandSubmissionReason::InvalidTiming:
+            case kernel::CommandSubmissionReason::MissingPayload:
+            case kernel::CommandSubmissionReason::CommandIdConflict:
+            case kernel::CommandSubmissionReason::AllocationFailure:
+            case kernel::CommandSubmissionReason::InvalidSupersessionKey:
+                return kernel::RuntimeDiagnosticSubjectKind::Command;
+            }
+            return kernel::RuntimeDiagnosticSubjectKind::Command;
+        }();
+        const bool route_subject =
+            expected_subject_kind ==
+            kernel::RuntimeDiagnosticSubjectKind::CommandRoute;
+        const auto expected_subject_reference =
+            route_subject
+                ? (route_known
+                       ? kernel::RuntimeDiagnosticSubjectReferenceKind::
+                             ImageHandle
+                       : kernel::RuntimeDiagnosticSubjectReferenceKind::
+                             NumericValue)
+                : kernel::RuntimeDiagnosticSubjectReferenceKind::None;
         const auto outcome = live.session->submit_command(std::move(request));
-        require(!outcome && outcome.reason == reason, message);
+        require(!outcome && outcome.reason == reason &&
+                    live.session->active_run_id() != nullptr &&
+                    outcome.active_run_id ==
+                        *live.session->active_run_id() &&
+                    outcome.primary_diagnostic.has_value() &&
+                    outcome.primary_diagnostic->code ==
+                        kernel::RuntimeDiagnosticCode::
+                            CommandSubmissionRejected &&
+                    outcome.primary_diagnostic->stage ==
+                        kernel::RuntimeDiagnosticStage::CommandSubmission &&
+                    outcome.primary_diagnostic->operation ==
+                        kernel::RuntimeOperation::SubmitCommand &&
+                    outcome.primary_diagnostic->source_kind ==
+                        (route_source
+                             ? kernel::RuntimeDiagnosticSourceKind::
+                                   ImageConformance
+                             : kernel::RuntimeDiagnosticSourceKind::
+                                   RuntimeApi) &&
+                    outcome.primary_diagnostic->source_handle ==
+                        (route_source ? requested_route : 0U) &&
+                    outcome.primary_diagnostic->source_field ==
+                        expected_source_field &&
+                    outcome.primary_diagnostic->subject_kind ==
+                        expected_subject_kind &&
+                    outcome.primary_diagnostic->subject_reference_kind ==
+                        expected_subject_reference &&
+                    outcome.primary_diagnostic->subject_handle ==
+                        (route_subject ? requested_route : 0U) &&
+                    outcome.primary_diagnostic->run_id == requested_run_id &&
+                    outcome.primary_diagnostic->run_context_present ==
+                        !requested_run_id.empty() &&
+                    outcome.primary_diagnostic->tick ==
+                        live.session->committed_tick() &&
+                    outcome.primary_diagnostic->base_epoch ==
+                        live.session->committed_epoch() &&
+                    outcome.primary_diagnostic
+                        ->simulation_context_present &&
+                    outcome.primary_diagnostic->cause_kind ==
+                        kernel::RuntimeDiagnosticCauseKind::
+                            CommandSubmissionReason &&
+                    outcome.primary_diagnostic->cause_code ==
+                        kernel::SessionError::None &&
+                    outcome.primary_diagnostic->cause_ref ==
+                        static_cast<std::uint32_t>(reason) &&
+                    outcome.primary_diagnostic->validity_effect ==
+                        contracts::EvidenceValidity::Valid &&
+                    outcome.primary_diagnostic->disposition ==
+                        kernel::RuntimeFailureDisposition::RejectCommand &&
+                    kernel::to_string(outcome.primary_diagnostic->code) ==
+                        "GNC-RUN-CMD-0001",
+                message);
     };
 
-    auto request = command_request(live, "wrong-run", Mode::Active);
+    auto request = command_request(live, "", Mode::Active);
+    reject(std::move(request),
+           kernel::CommandSubmissionReason::EmptyCommandId,
+           "empty command id passed submission validation");
+    request = command_request(live, "wrong-run", Mode::Active);
     request.run_id = kernel::RunId("run.other");
     reject(std::move(request), kernel::CommandSubmissionReason::WrongRunId,
            "wrong RunId command passed submission validation");
@@ -1464,6 +1606,11 @@ void verify_submission_and_idempotency(
     request.effective_tick = 3;
     reject(std::move(request), kernel::CommandSubmissionReason::InvalidTiming,
            "out-of-range effective tick passed submission validation");
+    request = command_request(live, "empty-supersession", Mode::Active);
+    request.supersession_key.clear();
+    reject(std::move(request),
+           kernel::CommandSubmissionReason::InvalidSupersessionKey,
+           "empty supersession key passed submission validation");
     request = command_request(live, "missing-payload", Mode::Active);
     request.payload = {};
     reject(std::move(request), kernel::CommandSubmissionReason::MissingPayload,
@@ -1479,6 +1626,7 @@ void verify_submission_and_idempotency(
                         1, std::nullopt, "accepted");
     const auto accepted = live.session->submit_command(accepted_request);
     require(accepted && !accepted.duplicate_retry &&
+                !accepted.primary_diagnostic.has_value() &&
                 accepted.ledger_sequence ==
                     live.session->command_ledger_sequence(),
             "valid command did not enter the per-Session ledger and queue");
@@ -1512,6 +1660,46 @@ void verify_submission_and_idempotency(
                            "capacity-overflow"),
            kernel::CommandSubmissionReason::CapacityExceeded,
            "route queue capacity did not reject the newest command");
+}
+
+void verify_submission_allocation_failure(
+    const contracts::ExecutionPlanImage& image) {
+    auto live = initialize_session(image, "run.submission-allocation");
+    auto request = command_request(live, "allocation", Mode::Active);
+    command_allocation_fault::arm(0);
+    const auto outcome = live.session->submit_command(std::move(request));
+    command_allocation_fault::disarm();
+    require(!outcome &&
+                outcome.reason ==
+                    kernel::CommandSubmissionReason::AllocationFailure &&
+                outcome.active_run_id == live.run_id &&
+                outcome.ledger_sequence == 0U &&
+                outcome.primary_diagnostic.has_value() &&
+                outcome.primary_diagnostic->code ==
+                    kernel::RuntimeDiagnosticCode::CommandSubmissionRejected &&
+                outcome.primary_diagnostic->source_kind ==
+                    kernel::RuntimeDiagnosticSourceKind::RuntimeApi &&
+                outcome.primary_diagnostic->source_handle == 0U &&
+                outcome.primary_diagnostic->source_field ==
+                    kernel::RuntimeApiField::RuntimeAllocation &&
+                outcome.primary_diagnostic->subject_kind ==
+                    kernel::RuntimeDiagnosticSubjectKind::Command &&
+                outcome.primary_diagnostic->subject_reference_kind ==
+                    kernel::RuntimeDiagnosticSubjectReferenceKind::None &&
+                outcome.primary_diagnostic->subject_handle == 0U &&
+                outcome.primary_diagnostic->run_context_present &&
+                outcome.primary_diagnostic->simulation_context_present &&
+                outcome.primary_diagnostic->cause_ref ==
+                    static_cast<std::uint32_t>(
+                        kernel::CommandSubmissionReason::AllocationFailure) &&
+                outcome.primary_diagnostic->validity_effect ==
+                    contracts::EvidenceValidity::Valid &&
+                outcome.primary_diagnostic->disposition ==
+                    kernel::RuntimeFailureDisposition::RejectCommand &&
+                live.session->command_ledger_sequence() == 0U &&
+                live.session->command_submission_outcomes().empty() &&
+                live.session->pending_command_count() == 0U,
+            "submission allocation failure mutated command evidence or lost its public diagnostic");
 }
 
 void verify_atomic_application(const contracts::ExecutionPlanImage& image) {
@@ -1584,8 +1772,31 @@ void verify_transaction_cutoff(const contracts::ExecutionPlanImage& image) {
         live.provider->control.command_after_cutoff_outcome;
     require(step.status == kernel::StepStatus::Committed &&
                 after_cutoff.has_value() && !*after_cutoff &&
-                after_cutoff->reason ==
-                    kernel::CommandSubmissionReason::TransactionOpen &&
+                 after_cutoff->reason ==
+                     kernel::CommandSubmissionReason::TransactionOpen &&
+                 after_cutoff->primary_diagnostic.has_value() &&
+                 after_cutoff->primary_diagnostic->operation ==
+                     kernel::RuntimeOperation::SubmitCommand &&
+                 after_cutoff->primary_diagnostic->source_kind ==
+                     kernel::RuntimeDiagnosticSourceKind::RuntimeApi &&
+                 after_cutoff->primary_diagnostic->source_field ==
+                     kernel::RuntimeApiField::TransactionCutoff &&
+                 after_cutoff->primary_diagnostic->subject_kind ==
+                     kernel::RuntimeDiagnosticSubjectKind::Transaction &&
+                 after_cutoff->primary_diagnostic
+                         ->subject_reference_kind ==
+                     kernel::RuntimeDiagnosticSubjectReferenceKind::
+                         ImageHandle &&
+                 after_cutoff->primary_diagnostic->subject_handle ==
+                     live.image->transactions().front().handle &&
+                 after_cutoff->primary_diagnostic->run_context_present &&
+                 after_cutoff->primary_diagnostic
+                     ->simulation_context_present &&
+                 after_cutoff->primary_diagnostic->cause_ref ==
+                     static_cast<std::uint32_t>(
+                         kernel::CommandSubmissionReason::TransactionOpen) &&
+                 after_cutoff->primary_diagnostic->disposition ==
+                     kernel::RuntimeFailureDisposition::RejectCommand &&
                 live.session->command_ledger_sequence() ==
                     before.ledger_sequence &&
                 live.session->command_submission_outcomes().size() == 1U &&
@@ -2067,6 +2278,24 @@ void verify_reset_isolation_and_dispose(
     require(!after_complete &&
                 after_complete.reason ==
                     kernel::CommandSubmissionReason::InvalidLifecycle &&
+                after_complete.primary_diagnostic.has_value() &&
+                after_complete.primary_diagnostic->source_kind ==
+                    kernel::RuntimeDiagnosticSourceKind::RuntimeApi &&
+                after_complete.primary_diagnostic->source_field ==
+                    kernel::RuntimeApiField::SessionLifecycle &&
+                after_complete.primary_diagnostic->subject_kind ==
+                    kernel::RuntimeDiagnosticSubjectKind::Session &&
+                after_complete.primary_diagnostic->subject_reference_kind ==
+                    kernel::RuntimeDiagnosticSubjectReferenceKind::None &&
+                after_complete.primary_diagnostic->subject_handle == 0U &&
+                after_complete.active_run_id == first.run_id &&
+                after_complete.primary_diagnostic->run_context_present &&
+                after_complete.primary_diagnostic
+                    ->simulation_context_present &&
+                after_complete.primary_diagnostic->validity_effect ==
+                    contracts::EvidenceValidity::Valid &&
+                after_complete.primary_diagnostic->disposition ==
+                    kernel::RuntimeFailureDisposition::RejectCommand &&
                 first.session->command_ledger_sequence() == completed_ledger &&
                 first.session->command_submission_outcomes().size() ==
                     completed_submissions,
@@ -2213,6 +2442,7 @@ std::size_t run_self_check() {
     const auto long_running = compile_fixture(true, 12);
     verify_compiler_and_image_contracts(resettable);
     verify_submission_and_idempotency(resettable.image);
+    verify_submission_allocation_failure(resettable.image);
     verify_atomic_application(resettable.image);
     verify_transaction_cutoff(resettable.image);
     verify_decisions_and_queue_maintenance(resettable.image);
@@ -2222,7 +2452,7 @@ std::size_t run_self_check() {
     verify_cancellation_boundaries(resettable.image);
     verify_reset_isolation_and_dispose(resettable, non_resettable);
     verify_checkpoint_restore_unsupported(resettable.image);
-    return 11U;
+    return 12U;
 }
 
 } // namespace

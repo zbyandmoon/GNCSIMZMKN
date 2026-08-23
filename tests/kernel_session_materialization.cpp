@@ -314,9 +314,20 @@ template <std::size_t Size>
     const gnc::kernel::RuntimeDiagnostic& lhs,
     const gnc::kernel::RuntimeDiagnostic& rhs) noexcept {
     return lhs.code == rhs.code && lhs.stage == rhs.stage &&
+           lhs.operation == rhs.operation &&
+           lhs.source_kind == rhs.source_kind &&
+           lhs.source_handle == rhs.source_handle &&
+           lhs.source_field == rhs.source_field &&
+           lhs.subject_kind == rhs.subject_kind &&
+           lhs.subject_reference_kind == rhs.subject_reference_kind &&
            lhs.subject_handle == rhs.subject_handle &&
-           lhs.run_id == rhs.run_id && lhs.tick == rhs.tick &&
+           lhs.run_id == rhs.run_id &&
+           lhs.run_context_present == rhs.run_context_present &&
+           lhs.tick == rhs.tick &&
            lhs.base_epoch == rhs.base_epoch &&
+           lhs.simulation_context_present ==
+               rhs.simulation_context_present &&
+           lhs.cause_kind == rhs.cause_kind &&
            lhs.cause_code == rhs.cause_code &&
            lhs.cause_ref == rhs.cause_ref &&
            lhs.validity_effect == rhs.validity_effect &&
@@ -514,6 +525,109 @@ void verify_created_and_initialized(
                              "Runtime Cells were not destroyed in reverse");
 }
 
+void verify_creation_diagnostics(
+    const std::shared_ptr<const ExecutionPlanImage>& image) {
+    auto adapter = gnc::tests::ref_yyz::make_session_adapter(*image);
+    require(static_cast<bool>(adapter), adapter.error);
+
+    const auto null_image = gnc::kernel::create_session(
+        std::shared_ptr<const ExecutionPlanImage>{}, adapter.provider);
+    require(!null_image && null_image.session == nullptr &&
+                null_image.result.error == SessionError::NullImage &&
+                null_image.primary_diagnostic.has_value() &&
+                null_image.primary_diagnostic->code ==
+                    gnc::kernel::RuntimeDiagnosticCode::
+                        ImageValidationFailed &&
+                null_image.primary_diagnostic->stage ==
+                    gnc::kernel::RuntimeDiagnosticStage::SessionCreation &&
+                null_image.primary_diagnostic->operation ==
+                    gnc::kernel::RuntimeOperation::CreateSession &&
+                null_image.primary_diagnostic->source_kind ==
+                    gnc::kernel::RuntimeDiagnosticSourceKind::RuntimeApi &&
+                null_image.primary_diagnostic->source_handle == 0U &&
+                null_image.primary_diagnostic->source_field ==
+                    gnc::kernel::RuntimeApiField::Image &&
+                null_image.primary_diagnostic->subject_kind ==
+                    gnc::kernel::RuntimeDiagnosticSubjectKind::Image &&
+                null_image.primary_diagnostic->subject_reference_kind ==
+                    gnc::kernel::RuntimeDiagnosticSubjectReferenceKind::None &&
+                null_image.primary_diagnostic->subject_handle == 0U &&
+                !null_image.primary_diagnostic->run_context_present &&
+                null_image.primary_diagnostic->tick == 0 &&
+                null_image.primary_diagnostic->base_epoch == 0U &&
+                !null_image.primary_diagnostic->simulation_context_present &&
+                null_image.primary_diagnostic->cause_kind ==
+                    gnc::kernel::RuntimeDiagnosticCauseKind::SessionError &&
+                null_image.primary_diagnostic->cause_code ==
+                    SessionError::NullImage &&
+                null_image.primary_diagnostic->validity_effect ==
+                    gnc::contracts::EvidenceValidity::Invalid,
+            "null Image creation failure lost its public diagnostic context");
+
+    const auto null_provider = gnc::kernel::create_session(image, nullptr);
+    require(!null_provider && null_provider.session == nullptr &&
+                null_provider.result.error ==
+                    SessionError::NullMaterializationProvider &&
+                null_provider.primary_diagnostic.has_value() &&
+                null_provider.primary_diagnostic->operation ==
+                    gnc::kernel::RuntimeOperation::CreateSession &&
+                null_provider.primary_diagnostic->source_kind ==
+                    gnc::kernel::RuntimeDiagnosticSourceKind::RuntimeApi &&
+                null_provider.primary_diagnostic->source_handle == 0U &&
+                null_provider.primary_diagnostic->source_field ==
+                    gnc::kernel::RuntimeApiField::MaterializationProvider &&
+                null_provider.primary_diagnostic->subject_kind ==
+                    gnc::kernel::RuntimeDiagnosticSubjectKind::
+                        MaterializationProvider &&
+                null_provider.primary_diagnostic->subject_reference_kind ==
+                    gnc::kernel::RuntimeDiagnosticSubjectReferenceKind::None &&
+                null_provider.primary_diagnostic->subject_handle == 0U &&
+                !null_provider.primary_diagnostic->run_context_present &&
+                null_provider.primary_diagnostic->cause_code ==
+                    SessionError::NullMaterializationProvider &&
+                null_provider.primary_diagnostic->tick == 0 &&
+                null_provider.primary_diagnostic->base_epoch == 0U &&
+                !null_provider.primary_diagnostic
+                     ->simulation_context_present &&
+                null_provider.primary_diagnostic->validity_effect ==
+                    gnc::contracts::EvidenceValidity::Invalid,
+            "null provider creation failure lost its public diagnostic context");
+
+    allocation_fault::arm(0);
+    const auto allocation_failure =
+        gnc::kernel::create_session(image, adapter.provider);
+    const auto allocations_after_failure =
+        allocation_fault::post_failure_allocation_count();
+    allocation_fault::disarm();
+    require(!allocation_failure && allocation_failure.session == nullptr &&
+                allocation_failure.result.error ==
+                    SessionError::AllocationFailure &&
+                allocation_failure.primary_diagnostic.has_value() &&
+                allocation_failure.primary_diagnostic->code ==
+                    gnc::kernel::RuntimeDiagnosticCode::AllocationFailed &&
+                allocation_failure.primary_diagnostic->operation ==
+                    gnc::kernel::RuntimeOperation::CreateSession &&
+                allocation_failure.primary_diagnostic->source_kind ==
+                    gnc::kernel::RuntimeDiagnosticSourceKind::RuntimeApi &&
+                allocation_failure.primary_diagnostic->source_field ==
+                    gnc::kernel::RuntimeApiField::RuntimeAllocation &&
+                allocation_failure.primary_diagnostic->subject_kind ==
+                    gnc::kernel::RuntimeDiagnosticSubjectKind::Session &&
+                allocation_failure.primary_diagnostic
+                        ->subject_reference_kind ==
+                    gnc::kernel::RuntimeDiagnosticSubjectReferenceKind::None &&
+                !allocation_failure.primary_diagnostic
+                     ->run_context_present &&
+                !allocation_failure.primary_diagnostic
+                     ->simulation_context_present &&
+                allocation_failure.primary_diagnostic->cause_code ==
+                    SessionError::AllocationFailure &&
+                allocation_failure.primary_diagnostic->validity_effect ==
+                    gnc::contracts::EvidenceValidity::Invalid &&
+                allocations_after_failure == 0U,
+            "creation allocation failure lost its allocation-safe diagnostic");
+}
+
 void verify_failure_unwind(
     const std::shared_ptr<const ExecutionPlanImage>& image,
     FailurePhase phase, std::size_t ordinal, SessionError expected) {
@@ -536,8 +650,26 @@ void verify_failure_unwind(
                 result.primary_diagnostic->code ==
                     gnc::kernel::RuntimeDiagnosticCode::
                         MaterializationFailed &&
-                result.primary_diagnostic->stage == expected_stage &&
-                result.primary_diagnostic->validity_effect ==
+                 result.primary_diagnostic->stage == expected_stage &&
+                 result.primary_diagnostic->operation ==
+                     gnc::kernel::RuntimeOperation::Initialize &&
+                 result.primary_diagnostic->source_kind ==
+                     gnc::kernel::RuntimeDiagnosticSourceKind::
+                         ImageConformance &&
+                 result.primary_diagnostic->source_handle ==
+                     result.primary_diagnostic->subject_handle &&
+                 result.primary_diagnostic->source_field ==
+                     gnc::kernel::RuntimeApiField::None &&
+                 result.primary_diagnostic->subject_kind !=
+                     gnc::kernel::RuntimeDiagnosticSubjectKind::ImageObject &&
+                 result.primary_diagnostic->subject_reference_kind ==
+                     gnc::kernel::RuntimeDiagnosticSubjectReferenceKind::
+                         ImageHandle &&
+                 result.primary_diagnostic->run_context_present &&
+                 result.primary_diagnostic->simulation_context_present &&
+                 result.primary_diagnostic->cause_kind ==
+                     gnc::kernel::RuntimeDiagnosticCauseKind::SessionError &&
+                 result.primary_diagnostic->validity_effect ==
                     gnc::contracts::EvidenceValidity::Unknown &&
                 creation.session->active_run_id() == nullptr &&
                 !creation.session->run_sequence().has_value() &&
@@ -619,7 +751,28 @@ void require_metadata_failure(
     const auto result = creation.session->initialize(
         initialization_request(*malformed,
                                "run:materialization-metadata-failure"));
+    const bool numeric_image_subject =
+        expected == SessionError::UnsupportedImageRevision ||
+        expected == SessionError::InvalidImageHandle;
     require(!static_cast<bool>(result) && result.result.error == expected &&
+                result.primary_diagnostic.has_value() &&
+                result.primary_diagnostic->operation ==
+                    gnc::kernel::RuntimeOperation::Initialize &&
+                (!numeric_image_subject ||
+                 (result.primary_diagnostic->source_kind ==
+                      gnc::kernel::RuntimeDiagnosticSourceKind::ImageField &&
+                  result.primary_diagnostic->source_handle ==
+                      result.result.image_handle &&
+                  result.primary_diagnostic->subject_kind ==
+                      (expected == SessionError::UnsupportedImageRevision
+                           ? gnc::kernel::RuntimeDiagnosticSubjectKind::Image
+                           : gnc::kernel::RuntimeDiagnosticSubjectKind::
+                                 ImageObject) &&
+                  result.primary_diagnostic->subject_reference_kind ==
+                      gnc::kernel::
+                          RuntimeDiagnosticSubjectReferenceKind::NumericValue &&
+                  result.primary_diagnostic->subject_handle ==
+                      result.result.image_handle)) &&
                 creation.session->state() == SessionState::Failed &&
                 trace->events.empty() && trace->live_object_count() == 0U,
             message);
@@ -893,6 +1046,7 @@ void verify_allocation_failure_unwind(
     adapter.trace->events.reserve(2048U);
     bool observed_preplacement_failure = false;
     bool observed_partial_object_failure = false;
+    bool observed_history_allocation_failure = false;
     bool observed_success = false;
     for (std::int64_t fail_after = 0;
          fail_after < 512 && !observed_success; ++fail_after) {
@@ -911,8 +1065,21 @@ void verify_allocation_failure_unwind(
                     "successful allocation-fault pass has wrong state");
         } else {
             require(creation.session->state() == SessionState::Failed &&
-                        !result.result.detail.empty(),
+                        !result.result.detail.empty() &&
+                        result.primary_diagnostic.has_value() &&
+                        result.primary_diagnostic->operation ==
+                            gnc::kernel::RuntimeOperation::Initialize &&
+                        result.primary_diagnostic->run_context_present &&
+                        (result.primary_diagnostic->subject_handle != 0U ||
+                         result.primary_diagnostic->subject_kind ==
+                             gnc::kernel::RuntimeDiagnosticSubjectKind::Run),
                     "allocation failure escaped or lost stable diagnostics");
+            observed_history_allocation_failure =
+                observed_history_allocation_failure ||
+                (result.primary_diagnostic->stage ==
+                     gnc::kernel::RuntimeDiagnosticStage::History &&
+                 result.result.detail ==
+                     "Session initialization allocation failed");
             observed_preplacement_failure =
                 observed_preplacement_failure ||
                 adapter.trace->events.empty();
@@ -925,8 +1092,9 @@ void verify_allocation_failure_unwind(
                 "allocation fault leaked a placed Session object");
     }
     require(observed_preplacement_failure &&
-                observed_partial_object_failure && observed_success,
-            "allocation injection did not cover reserve, placement and success");
+                observed_partial_object_failure &&
+                observed_history_allocation_failure && observed_success,
+            "allocation injection did not cover reserve, placement, history and success");
 }
 
 void verify_reset_allocation_failure_atomicity(
@@ -1187,6 +1355,7 @@ void run() {
                 image->state_blocks().size() == 2U &&
                 image->storage_layouts().size() == 5U,
             "REF-YYZ Image shape changed before Session consumption");
+    verify_creation_diagnostics(image);
     verify_created_and_initialized(image);
     verify_failure_unwind(image, FailurePhase::Preparation, 1U,
                           SessionError::PreparationFailed);

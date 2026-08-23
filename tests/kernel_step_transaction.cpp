@@ -637,9 +637,20 @@ void require_mission_oracle(const MissionResultProbe& value) {
     const gnc::kernel::RuntimeDiagnostic& lhs,
     const gnc::kernel::RuntimeDiagnostic& rhs) noexcept {
     return lhs.code == rhs.code && lhs.stage == rhs.stage &&
+           lhs.operation == rhs.operation &&
+           lhs.source_kind == rhs.source_kind &&
+           lhs.source_handle == rhs.source_handle &&
+           lhs.source_field == rhs.source_field &&
+           lhs.subject_kind == rhs.subject_kind &&
+           lhs.subject_reference_kind == rhs.subject_reference_kind &&
            lhs.subject_handle == rhs.subject_handle &&
-           lhs.run_id == rhs.run_id && lhs.tick == rhs.tick &&
+           lhs.run_id == rhs.run_id &&
+           lhs.run_context_present == rhs.run_context_present &&
+           lhs.tick == rhs.tick &&
            lhs.base_epoch == rhs.base_epoch &&
+           lhs.simulation_context_present ==
+               rhs.simulation_context_present &&
+           lhs.cause_kind == rhs.cause_kind &&
            lhs.cause_code == rhs.cause_code &&
            lhs.cause_ref == rhs.cause_ref &&
            lhs.validity_effect == rhs.validity_effect &&
@@ -1156,9 +1167,37 @@ void verify_initialization_identity_and_commit(
                 is_empty_lifecycle_rejection(
                     mismatch.session->last_step_outcome(),
                     mismatch_id, 0U, 0U, 0) &&
-                !rejected_run &&
-                rejected_run.result.error ==
-                    SessionError::InvalidLifecycleTransition &&
+                 !rejected_run &&
+                 rejected_run.result.error ==
+                     SessionError::InvalidLifecycleTransition &&
+                 rejected_run.primary_diagnostic.has_value() &&
+                 rejected_run.primary_diagnostic->code ==
+                     RuntimeDiagnosticCode::LifecycleTransitionRejected &&
+                 rejected_run.primary_diagnostic->stage ==
+                     RuntimeDiagnosticStage::RunDrive &&
+                 rejected_run.primary_diagnostic->operation ==
+                     gnc::kernel::RuntimeOperation::RunToTerminal &&
+                 rejected_run.primary_diagnostic->source_kind ==
+                     gnc::kernel::RuntimeDiagnosticSourceKind::RuntimeApi &&
+                 rejected_run.primary_diagnostic->source_field ==
+                     gnc::kernel::RuntimeApiField::SessionLifecycle &&
+                 rejected_run.primary_diagnostic->subject_kind ==
+                     gnc::kernel::RuntimeDiagnosticSubjectKind::Session &&
+                 rejected_run.primary_diagnostic
+                         ->subject_reference_kind ==
+                     gnc::kernel::RuntimeDiagnosticSubjectReferenceKind::None &&
+                 rejected_run.run_id == mismatch_id &&
+                 rejected_run.observed_committed_tick == 0 &&
+                 rejected_run.observed_committed_epoch == 0U &&
+                 rejected_run.validity ==
+                     gnc::contracts::EvidenceValidity::Valid &&
+                 rejected_run.primary_diagnostic->run_context_present &&
+                 rejected_run.primary_diagnostic
+                     ->simulation_context_present &&
+                 rejected_run.primary_diagnostic->cause_kind ==
+                     gnc::kernel::RuntimeDiagnosticCauseKind::SessionError &&
+                 rejected_run.primary_diagnostic->validity_effect ==
+                     gnc::contracts::EvidenceValidity::Valid &&
                 frozen_mismatch.finalization_status ==
                     gnc::kernel::RunFinalizationStatus::NotStarted &&
                 exactly_same(*mismatch.session->run_outcome(),
@@ -1178,11 +1217,66 @@ void verify_initialization_identity_and_commit(
             "successful initialization published the wrong active run");
     const auto completed = successful.session->run_to_terminal();
     require(completed && successful.session->run_outcome() != nullptr &&
+                !completed.primary_diagnostic.has_value() &&
+                completed.run_id ==
+                    *successful.session->last_committed_run_id() &&
+                completed.observed_committed_tick ==
+                    successful.session->committed_tick() &&
+                completed.observed_committed_epoch ==
+                    successful.session->committed_epoch() &&
+                completed.validity ==
+                    gnc::contracts::EvidenceValidity::Valid &&
                 successful.session->run_outcome()->final_status ==
                     gnc::kernel::RunFinalStatus::Completed,
             "fresh Session did not complete after initialization failures");
     require_mission_oracle(mission_result_probe(*successful.session,
                                                 successful.adapter));
+}
+
+void verify_run_drive_diagnostic_propagation(
+    const std::shared_ptr<const ExecutionPlanImage>& image) {
+    AdapterOptions options;
+    options.failure = {FailurePhase::Boundary, 0U};
+    auto bundle = initialize_session(
+        image, options, "run:drive-diagnostic-propagation");
+    const auto drive = bundle.session->run_to_terminal();
+    const auto& step = bundle.session->last_step_outcome();
+    const auto* run = bundle.session->run_outcome();
+    require(!drive && drive.status == gnc::kernel::RunDriveStatus::Failed &&
+                drive.result.error == SessionError::InvocationFailed &&
+                drive.run_id == *bundle.session->last_committed_run_id() &&
+                drive.observed_committed_tick ==
+                    bundle.session->committed_tick() &&
+                drive.observed_committed_epoch ==
+                    bundle.session->committed_epoch() &&
+                drive.validity ==
+                    gnc::contracts::EvidenceValidity::Invalid &&
+                drive.primary_diagnostic.has_value() &&
+                step.primary_diagnostic.has_value() && run != nullptr &&
+                run->primary_diagnostic.has_value() &&
+                exactly_same(*drive.primary_diagnostic,
+                             *step.primary_diagnostic) &&
+                exactly_same(*drive.primary_diagnostic,
+                             *run->primary_diagnostic) &&
+                drive.primary_diagnostic->operation ==
+                    gnc::kernel::RuntimeOperation::ExecuteStep &&
+                drive.primary_diagnostic->source_kind ==
+                    gnc::kernel::RuntimeDiagnosticSourceKind::
+                        ImageConformance &&
+                drive.primary_diagnostic->source_field ==
+                    gnc::kernel::RuntimeApiField::None &&
+                drive.primary_diagnostic->subject_kind ==
+                    gnc::kernel::RuntimeDiagnosticSubjectKind::Callsite &&
+                drive.primary_diagnostic->subject_reference_kind ==
+                    gnc::kernel::RuntimeDiagnosticSubjectReferenceKind::
+                        ImageHandle &&
+                drive.primary_diagnostic->run_context_present &&
+                drive.primary_diagnostic->simulation_context_present &&
+                drive.primary_diagnostic->validity_effect ==
+                    gnc::contracts::EvidenceValidity::Invalid &&
+                drive.primary_diagnostic->disposition ==
+                    gnc::kernel::RuntimeFailureDisposition::FailOperation,
+            "run drive lost the exact primary step failure diagnostic");
 }
 
 void verify_reset_capability_fail_closed(
@@ -1561,9 +1655,14 @@ void verify_complete_step_transactions(
                 is_empty_lifecycle_rejection(
                     bundle.session->last_step_outcome(),
                     terminal.run_id, 0U, 3U, 2) &&
-                !rejected_run &&
-                rejected_run.result.error ==
-                    SessionError::InvalidLifecycleTransition &&
+                 !rejected_run &&
+                 rejected_run.result.error ==
+                     SessionError::InvalidLifecycleTransition &&
+                 rejected_run.primary_diagnostic.has_value() &&
+                 rejected_run.primary_diagnostic->operation ==
+                     gnc::kernel::RuntimeOperation::RunToTerminal &&
+                 rejected_run.primary_diagnostic->subject_kind ==
+                     gnc::kernel::RuntimeDiagnosticSubjectKind::Session &&
                 bundle.session->state() == gnc::kernel::SessionState::Completed &&
                 bundle.session->committed_epoch() == 3U &&
                 bundle.session->committed_tick() == 2 &&
@@ -2759,6 +2858,8 @@ void verify_cancel_before_first_step_idempotence_and_dispose(
 
     const auto empty_id = bundle.session->request_cancel(
         cancellation_request("", std::string(run_id)));
+    const auto empty_run = bundle.session->request_cancel(
+        cancellation_request("cancel:empty-run", ""));
     const auto wrong_run = bundle.session->request_cancel(
         cancellation_request("cancel:wrong-run", "run:other"));
     const auto accepted = bundle.session->request_cancel(
@@ -2775,21 +2876,53 @@ void verify_cancel_before_first_step_idempotence_and_dispose(
     require(!empty_id &&
                 empty_id.disposition ==
                     gnc::kernel::CancellationDisposition::Rejected &&
+                empty_id.reason ==
+                    gnc::kernel::CancellationReason::EmptyRequestId &&
+                empty_id.active_run_id ==
+                    gnc::kernel::RunId(std::string(run_id)) &&
+                !empty_run &&
+                empty_run.disposition ==
+                    gnc::kernel::CancellationDisposition::Rejected &&
+                empty_run.reason ==
+                    gnc::kernel::CancellationReason::EmptyRunId &&
+                empty_run.active_run_id ==
+                    gnc::kernel::RunId(std::string(run_id)) &&
                 !wrong_run &&
                 wrong_run.disposition ==
                     gnc::kernel::CancellationDisposition::Rejected &&
+                wrong_run.reason ==
+                    gnc::kernel::CancellationReason::WrongRunId &&
+                wrong_run.active_run_id ==
+                    gnc::kernel::RunId(std::string(run_id)) &&
                 accepted &&
                 accepted.disposition ==
                     gnc::kernel::CancellationDisposition::Accepted &&
+                accepted.reason == gnc::kernel::CancellationReason::None &&
+                accepted.active_run_id ==
+                    gnc::kernel::RunId(std::string(run_id)) &&
                 accepted.observed_committed_epoch == 0U &&
                 accepted.observed_committed_tick == 0 && repeated &&
                 repeated.disposition ==
                     gnc::kernel::CancellationDisposition::AlreadyRequested &&
+                repeated.reason ==
+                    gnc::kernel::CancellationReason::DuplicateRequest &&
+                repeated.active_run_id ==
+                    gnc::kernel::RunId(std::string(run_id)) &&
                 !superseded &&
                 superseded.disposition ==
                     gnc::kernel::CancellationDisposition::Superseded &&
+                superseded.reason ==
+                    gnc::kernel::CancellationReason::OtherRequestAccepted &&
+                superseded.active_run_id ==
+                    gnc::kernel::RunId(std::string(run_id)) &&
                 !driven && driven.result &&
                 driven.status == gnc::kernel::RunDriveStatus::Cancelled &&
+                driven.run_id == gnc::kernel::RunId(std::string(run_id)) &&
+                driven.observed_committed_tick == 0 &&
+                driven.observed_committed_epoch == 0U &&
+                driven.validity ==
+                    gnc::contracts::EvidenceValidity::Valid &&
+                !driven.primary_diagnostic.has_value() &&
                 step.status == gnc::kernel::StepStatus::Cancelled &&
                 step.result && !step.primary_diagnostic.has_value() &&
                 step.base_epoch == 0U && step.committed_epoch == 0U &&
@@ -3138,6 +3271,10 @@ void verify_terminal_and_failure_precedence_over_cancellation(
         require(!rejected &&
                     rejected.disposition ==
                         gnc::kernel::CancellationDisposition::Rejected &&
+                    rejected.reason ==
+                        gnc::kernel::CancellationReason::InvalidLifecycle &&
+                    rejected.active_run_id ==
+                        gnc::kernel::RunId(std::string(run_id)) &&
                     rejected.observed_committed_epoch == 3U &&
                     rejected.observed_committed_tick == 2 &&
                     bundle.session->state() ==
@@ -3172,6 +3309,10 @@ void verify_terminal_and_failure_precedence_over_cancellation(
         require(!superseded &&
                     superseded.disposition ==
                         gnc::kernel::CancellationDisposition::Superseded &&
+                    superseded.reason ==
+                        gnc::kernel::CancellationReason::InvalidLifecycle &&
+                    superseded.active_run_id ==
+                        gnc::kernel::RunId(std::string(run_id)) &&
                     bundle.session->state() ==
                         gnc::kernel::SessionState::Failed &&
                     bundle.session->run_outcome() == outcome &&
@@ -3231,13 +3372,25 @@ void verify_dispose_lifecycle(
                 "Created dispose fixture could not create a Session");
         const auto created_reset = created.session->reset(
             reset_request(*image, "run:created-reset"));
+        const auto created_dispose = created.session->dispose();
+        require(created_dispose && created_dispose.run_id.empty() &&
+                    created_dispose.observed_committed_tick == 0 &&
+                    created_dispose.observed_committed_epoch == 0U &&
+                    created_dispose.validity ==
+                        gnc::contracts::EvidenceValidity::Valid &&
+                    !created_dispose.primary_diagnostic.has_value(),
+                "Created dispose did not return a successful public outcome");
         require(!created_reset &&
                     created_reset.result.error ==
                         SessionError::InvalidLifecycleTransition &&
-                    created.session->state() ==
-                        gnc::kernel::SessionState::Created &&
-                    created.session->run_outcome() == nullptr &&
-                    created.session->dispose() &&
+                    created_reset.primary_diagnostic.has_value() &&
+                    created_reset.primary_diagnostic->operation ==
+                        gnc::kernel::RuntimeOperation::Reset &&
+                    created_reset.primary_diagnostic->subject_kind ==
+                        gnc::kernel::RuntimeDiagnosticSubjectKind::Run &&
+                    created_reset.primary_diagnostic->run_id ==
+                        gnc::kernel::RunId("run:created-reset") &&
+                    created_reset.primary_diagnostic->run_context_present &&
                     created.session->state() ==
                         gnc::kernel::SessionState::Disposed &&
                     created.session->preparation_count() == 0U &&
@@ -3247,16 +3400,52 @@ void verify_dispose_lifecycle(
                     created.session->last_committed_run_id() == nullptr &&
                     created.session->run_outcome() == nullptr,
                 "Created Session did not dispose cleanly");
+        const auto rejected_initialize = created.session->initialize(
+            initialization_request(*image, "run:disposed-initialize"));
         const auto rejected_reset = created.session->reset(
             reset_request(*image, "run:disposed-reset"));
         const auto event_count = adapter.trace->events.size();
         const auto repeated = created.session->dispose();
-        require(!rejected_reset &&
+        require(!rejected_initialize &&
+                    rejected_initialize.result.error ==
+                        SessionError::InvalidLifecycleTransition &&
+                    rejected_initialize.primary_diagnostic.has_value() &&
+                    rejected_initialize.primary_diagnostic->operation ==
+                        gnc::kernel::RuntimeOperation::Initialize &&
+                    rejected_initialize.primary_diagnostic->subject_kind ==
+                        gnc::kernel::RuntimeDiagnosticSubjectKind::Run &&
+                    rejected_initialize.primary_diagnostic->run_id ==
+                        gnc::kernel::RunId("run:disposed-initialize") &&
+                    rejected_initialize.primary_diagnostic
+                        ->run_context_present &&
+                    !rejected_reset &&
                     rejected_reset.result.error ==
                         SessionError::InvalidLifecycleTransition &&
                     !repeated &&
-                    repeated.error ==
+                    repeated.result.error ==
                         SessionError::InvalidLifecycleTransition &&
+                    repeated.run_id.empty() &&
+                    repeated.observed_committed_tick == 0 &&
+                    repeated.observed_committed_epoch == 0U &&
+                    repeated.validity ==
+                        gnc::contracts::EvidenceValidity::Valid &&
+                    repeated.primary_diagnostic.has_value() &&
+                    repeated.primary_diagnostic->code ==
+                        RuntimeDiagnosticCode::LifecycleTransitionRejected &&
+                    repeated.primary_diagnostic->operation ==
+                        gnc::kernel::RuntimeOperation::Dispose &&
+                    repeated.primary_diagnostic->source_kind ==
+                        gnc::kernel::RuntimeDiagnosticSourceKind::RuntimeApi &&
+                    repeated.primary_diagnostic->source_field ==
+                        gnc::kernel::RuntimeApiField::SessionLifecycle &&
+                    repeated.primary_diagnostic->subject_kind ==
+                        gnc::kernel::RuntimeDiagnosticSubjectKind::Session &&
+                    repeated.primary_diagnostic->subject_reference_kind ==
+                        gnc::kernel::RuntimeDiagnosticSubjectReferenceKind::
+                            None &&
+                    !repeated.primary_diagnostic->run_context_present &&
+                    repeated.primary_diagnostic
+                        ->simulation_context_present &&
                     adapter.trace->events.size() == event_count,
                 "Disposed Session accepted reset/dispose reentry");
         created.session.reset();
@@ -3269,15 +3458,59 @@ void verify_dispose_lifecycle(
             image, {}, "run:dispose-completed");
         const auto live_initialized =
             bundle.adapter.trace->live_object_count();
+        const auto empty_restore = bundle.session->restore(
+            restore_request(*image, {}, {}));
+        const auto named_restore = bundle.session->restore(
+            restore_request(*image, "run:active-restore", {}));
         const auto rejected_reset = bundle.session->reset(
             reset_request(*image, "run:dispose-active-reset"));
         const auto rejected_dispose = bundle.session->dispose();
-        require(!rejected_reset &&
+        require(!empty_restore &&
+                    empty_restore.result.error ==
+                        SessionError::InvalidLifecycleTransition &&
+                    empty_restore.primary_diagnostic.has_value() &&
+                    empty_restore.primary_diagnostic->operation ==
+                        gnc::kernel::RuntimeOperation::Restore &&
+                    empty_restore.primary_diagnostic->subject_kind ==
+                        gnc::kernel::RuntimeDiagnosticSubjectKind::Run &&
+                    empty_restore.primary_diagnostic->run_id.empty() &&
+                    !empty_restore.primary_diagnostic
+                         ->run_context_present &&
+                    !named_restore &&
+                    named_restore.result.error ==
+                        SessionError::InvalidLifecycleTransition &&
+                    named_restore.primary_diagnostic.has_value() &&
+                    named_restore.primary_diagnostic->operation ==
+                        gnc::kernel::RuntimeOperation::Restore &&
+                    named_restore.primary_diagnostic->run_id ==
+                        gnc::kernel::RunId("run:active-restore") &&
+                    named_restore.primary_diagnostic->run_context_present &&
+                    !rejected_reset &&
                     rejected_reset.result.error ==
                         SessionError::InvalidLifecycleTransition &&
+                    rejected_reset.primary_diagnostic.has_value() &&
+                    rejected_reset.primary_diagnostic->operation ==
+                        gnc::kernel::RuntimeOperation::Reset &&
+                    rejected_reset.primary_diagnostic->run_id ==
+                        gnc::kernel::RunId("run:dispose-active-reset") &&
+                    rejected_reset.primary_diagnostic->run_context_present &&
                     !rejected_dispose &&
-                    rejected_dispose.error ==
+                    rejected_dispose.result.error ==
                         SessionError::InvalidLifecycleTransition &&
+                    rejected_dispose.run_id ==
+                        gnc::kernel::RunId("run:dispose-completed") &&
+                    rejected_dispose.observed_committed_tick == 0 &&
+                    rejected_dispose.observed_committed_epoch == 0U &&
+                    rejected_dispose.validity ==
+                        gnc::contracts::EvidenceValidity::Valid &&
+                    rejected_dispose.primary_diagnostic.has_value() &&
+                    rejected_dispose.primary_diagnostic->operation ==
+                        gnc::kernel::RuntimeOperation::Dispose &&
+                    rejected_dispose.primary_diagnostic->source_field ==
+                        gnc::kernel::RuntimeApiField::SessionLifecycle &&
+                    rejected_dispose.primary_diagnostic->run_context_present &&
+                    rejected_dispose.primary_diagnostic
+                        ->simulation_context_present &&
                     bundle.session->state() ==
                         gnc::kernel::SessionState::Initialized &&
                     bundle.session->run_outcome() == nullptr &&
@@ -3291,8 +3524,17 @@ void verify_dispose_lifecycle(
                 "Completed dispose fixture lacks an outcome");
         const auto outcome_copy = *outcome;
         const auto run_id = *bundle.session->last_committed_run_id();
-        require(bundle.adapter.trace->live_object_count() > 0U &&
-                    bundle.session->dispose() &&
+        const auto live_before_dispose =
+            bundle.adapter.trace->live_object_count();
+        const auto completed_dispose = bundle.session->dispose();
+        require(live_before_dispose > 0U &&
+                    completed_dispose &&
+                    completed_dispose.run_id == run_id &&
+                    completed_dispose.observed_committed_tick == 2 &&
+                    completed_dispose.observed_committed_epoch == 3U &&
+                    completed_dispose.validity ==
+                        gnc::contracts::EvidenceValidity::Valid &&
+                    !completed_dispose.primary_diagnostic.has_value() &&
                     bundle.session->state() ==
                         gnc::kernel::SessionState::Disposed &&
                     bundle.session->preparation_count() == 0U &&
@@ -3312,8 +3554,21 @@ void verify_dispose_lifecycle(
         const auto event_count = bundle.adapter.trace->events.size();
         const auto repeated = bundle.session->dispose();
         require(!repeated &&
-                    repeated.error ==
+                    repeated.result.error ==
                         SessionError::InvalidLifecycleTransition &&
+                    repeated.run_id == run_id &&
+                    repeated.observed_committed_tick == 2 &&
+                    repeated.observed_committed_epoch == 3U &&
+                    repeated.validity ==
+                        gnc::contracts::EvidenceValidity::Valid &&
+                    repeated.primary_diagnostic.has_value() &&
+                    repeated.primary_diagnostic->operation ==
+                        gnc::kernel::RuntimeOperation::Dispose &&
+                    repeated.primary_diagnostic->source_field ==
+                        gnc::kernel::RuntimeApiField::SessionLifecycle &&
+                    repeated.primary_diagnostic->run_context_present &&
+                    repeated.primary_diagnostic
+                        ->simulation_context_present &&
                     bundle.adapter.trace->events.size() == event_count,
                 "Completed dispose ran cleanup twice");
         bundle.session.reset();
@@ -3336,10 +3591,18 @@ void verify_dispose_lifecycle(
         const auto outcome_copy = *outcome;
         const auto rejected_reset = bundle.session->reset(
             reset_request(*image, "run:dispose-failed-reset"));
+        const auto failed_dispose = bundle.session->dispose();
         require(!rejected_reset &&
                     rejected_reset.result.error ==
                         SessionError::InvalidLifecycleTransition &&
-                    bundle.session->dispose() &&
+                    failed_dispose &&
+                    failed_dispose.run_id ==
+                        gnc::kernel::RunId("run:dispose-execution-failed") &&
+                    failed_dispose.observed_committed_tick == 0 &&
+                    failed_dispose.observed_committed_epoch == 0U &&
+                    failed_dispose.validity ==
+                        gnc::contracts::EvidenceValidity::Invalid &&
+                    !failed_dispose.primary_diagnostic.has_value() &&
                     bundle.session->state() ==
                         gnc::kernel::SessionState::Disposed &&
                     bundle.session->preparation_count() == 0U &&
@@ -3873,6 +4136,7 @@ void verify_checkpoint_branch_restore(
 void run() {
     const auto image = build_image();
     verify_initialization_identity_and_commit(image);
+    verify_run_drive_diagnostic_propagation(image);
     verify_reset_diagnostic_code_stability();
     verify_checkpoint_diagnostic_code_stability();
     verify_complete_step_transactions(image);

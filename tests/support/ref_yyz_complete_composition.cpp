@@ -701,7 +701,7 @@ namespace {
                  occurrence_id(providers.front().first),
                  providers.front().second->port_id,
                  occurrence_id(consumer_index), input.port_id,
-                 ref(profile, "bindings/" + binding_id)});
+                 ref(profile, "bindings/" + binding_id), {}});
         }
     }
 
