@@ -11,7 +11,8 @@
 namespace gnc::kernel {
 namespace {
 
-constexpr std::uint32_t kSupportedImageRevision = 3U;
+constexpr std::uint32_t kMinimumSupportedImageRevision = 3U;
+constexpr std::uint32_t kSupportedImageRevision = 4U;
 
 [[nodiscard]] bool valid_alignment(std::uint64_t alignment) noexcept {
     return alignment != 0U && (alignment & (alignment - 1U)) == 0U &&
@@ -3114,6 +3115,90 @@ struct Session::Impl final : SessionObjectAccess,
                            "Session slice requires one transaction");
         }
         const auto& transaction = image->transactions().front();
+        if (image->revision() == 3U &&
+            !transaction.member_occurrence_handles.empty()) {
+            return failure(
+                SessionError::InvalidImageStructure,
+                transaction.handle,
+                "revision 3 transaction contains multi-scope membership");
+        }
+        std::set<std::pair<std::string, std::string>> state_owner_scopes;
+        for (const auto& block : image->state_blocks()) {
+            const auto* occurrence = find_handle(
+                image->occurrences(), block.owner_occurrence_handle);
+            if (occurrence != nullptr && occurrence->has_scope) {
+                state_owner_scopes.emplace(
+                    occurrence->scope_kind,
+                    occurrence->scope_subject_entity_id);
+            }
+        }
+        const bool multi_scope_membership_required =
+            state_owner_scopes.size() >= 2U;
+        if (multi_scope_membership_required !=
+            !transaction.member_occurrence_handles.empty()) {
+            return failure(
+                SessionError::InvalidImageStructure,
+                transaction.handle,
+                "transaction scope membership does not match frozen state-owner scopes");
+        }
+        if (!transaction.member_occurrence_handles.empty()) {
+            if (!std::is_sorted(
+                    transaction.member_occurrence_handles.begin(),
+                    transaction.member_occurrence_handles.end()) ||
+                std::adjacent_find(
+                    transaction.member_occurrence_handles.begin(),
+                    transaction.member_occurrence_handles.end()) !=
+                    transaction.member_occurrence_handles.end()) {
+                return failure(
+                    SessionError::InvalidImageStructure,
+                    transaction.handle,
+                    "multi-scope transaction occurrence membership is not canonical");
+            }
+            std::set<std::string> member_scope_subjects;
+            for (const auto handle :
+                 transaction.member_occurrence_handles) {
+                const auto* occurrence =
+                    find_handle(image->occurrences(), handle);
+                if (occurrence == nullptr || !occurrence->has_scope ||
+                    occurrence->scope_kind != "Vehicle" ||
+                    occurrence->scope_subject_entity_id.empty()) {
+                    return failure(
+                        SessionError::InvalidImageStructure,
+                        transaction.handle,
+                        "multi-scope transaction member is not a frozen Vehicle occurrence");
+                }
+                member_scope_subjects.insert(
+                    occurrence->scope_subject_entity_id);
+            }
+            std::vector<std::uint32_t> expected_members;
+            for (const auto& occurrence : image->occurrences()) {
+                if (occurrence.has_scope &&
+                    occurrence.scope_kind == "Vehicle" &&
+                    member_scope_subjects.count(
+                        occurrence.scope_subject_entity_id) != 0U) {
+                    expected_members.push_back(occurrence.handle);
+                }
+            }
+            std::sort(expected_members.begin(), expected_members.end());
+            if (member_scope_subjects.size() < 2U ||
+                expected_members != transaction.member_occurrence_handles) {
+                return failure(
+                    SessionError::InvalidImageStructure,
+                    transaction.handle,
+                    "multi-scope transaction does not freeze complete Vehicle scope membership");
+            }
+            for (const auto& candidate : transaction.candidates) {
+                if (!std::binary_search(
+                        transaction.member_occurrence_handles.begin(),
+                        transaction.member_occurrence_handles.end(),
+                        candidate.owner_occurrence_handle)) {
+                    return failure(
+                        SessionError::InvalidImageStructure,
+                        candidate.owner_occurrence_handle,
+                        "transaction candidate owner is outside frozen scope membership");
+                }
+            }
+        }
         if (transaction.candidates.empty() ||
             !unique_nonzero_handles(transaction.held_slot_handles)) {
             return failure(SessionError::InvalidImageStructure,
@@ -3198,6 +3283,31 @@ struct Session::Impl final : SessionObjectAccess,
             return failure(SessionError::InvalidImageStructure,
                            transaction.handle,
                            "transaction candidate membership is duplicated");
+        }
+        std::vector<std::uint32_t> expected_candidate_owners;
+        expected_candidate_owners.reserve(image->state_blocks().size());
+        for (const auto& block : image->state_blocks()) {
+            expected_candidate_owners.push_back(block.owner_occurrence_handle);
+        }
+        std::sort(expected_candidate_owners.begin(),
+                  expected_candidate_owners.end());
+        expected_candidate_owners.erase(
+            std::unique(expected_candidate_owners.begin(),
+                        expected_candidate_owners.end()),
+            expected_candidate_owners.end());
+        std::vector<std::uint32_t> actual_candidate_owners;
+        actual_candidate_owners.reserve(transaction.candidates.size());
+        for (const auto& candidate : transaction.candidates) {
+            actual_candidate_owners.push_back(
+                candidate.owner_occurrence_handle);
+        }
+        std::sort(actual_candidate_owners.begin(),
+                  actual_candidate_owners.end());
+        if (expected_candidate_owners != actual_candidate_owners) {
+            return failure(
+                SessionError::InvalidImageStructure,
+                transaction.handle,
+                "transaction candidate owners do not exactly cover frozen state ownership");
         }
         for (const auto held_handle : transaction.held_slot_handles) {
             const auto* held = find_handle(image->slots(), held_handle);
@@ -3677,6 +3787,146 @@ struct Session::Impl final : SessionObjectAccess,
         return {};
     }
 
+    [[nodiscard]] SessionResult validate_entity_selectors() {
+        if (image->revision() == 3U && !image->entity_selectors().empty()) {
+            return failure(SessionError::InvalidImageStructure, 0U,
+                           "revision 3 Image contains entity selectors");
+        }
+        std::set<std::uint32_t> selected_bindings;
+        for (const auto& selector : image->entity_selectors()) {
+            const auto* binding =
+                find_handle(image->bindings(), selector.binding_handle);
+            const auto* provider_occurrence = find_handle(
+                image->occurrences(), selector.provider_occurrence_handle);
+            const auto* consumer_occurrence = find_handle(
+                image->occurrences(), selector.consumer_occurrence_handle);
+            const auto* provider_port = find_handle(
+                image->ports(), selector.provider_port_handle);
+            const auto* consumer_port = find_handle(
+                image->ports(), selector.consumer_port_handle);
+            const auto* provider_slot = find_handle(
+                image->slots(), selector.provider_slot_handle);
+            bool valid = binding != nullptr &&
+                         provider_occurrence != nullptr &&
+                         consumer_occurrence != nullptr &&
+                         provider_port != nullptr &&
+                         consumer_port != nullptr && provider_slot != nullptr &&
+                         selected_bindings.insert(selector.binding_handle).second &&
+                         !selector.selected_entity_id.empty() &&
+                         selector.plan_element_id.rfind("entity-selector/", 0U) ==
+                             0U &&
+                         provider_occurrence->has_scope &&
+                         consumer_occurrence->has_scope &&
+                         provider_occurrence->scope_kind == "Vehicle" &&
+                         consumer_occurrence->scope_kind == "Vehicle" &&
+                         provider_occurrence->scope_subject_entity_id !=
+                             consumer_occurrence->scope_subject_entity_id &&
+                         selector.selected_entity_id ==
+                             provider_occurrence->scope_subject_entity_id &&
+                         selector.selected_entity_id ==
+                             provider_occurrence->subject_entity_id &&
+                         binding->provider_port_handle ==
+                             selector.provider_port_handle &&
+                         binding->provider_slot_handle ==
+                             selector.provider_slot_handle &&
+                         binding->consumer_port_handle ==
+                             selector.consumer_port_handle &&
+                         provider_port->occurrence_handle ==
+                             selector.provider_occurrence_handle &&
+                         consumer_port->occurrence_handle ==
+                             selector.consumer_occurrence_handle &&
+                         provider_slot->owner_occurrence_handle ==
+                             selector.provider_occurrence_handle &&
+                         provider_slot->port_handle ==
+                             selector.provider_port_handle &&
+                         provider_port->direction == "Output" &&
+                         provider_port->binding_kind == "SampledSignal" &&
+                         provider_port->temporal_relation == "CurrentCycle" &&
+                         consumer_port->direction == "Input" &&
+                         consumer_port->binding_kind == "SampledSignal" &&
+                         consumer_port->temporal_relation == "CurrentCycle" &&
+                         !selector.consumer_callsite_handles.empty() &&
+                         std::is_sorted(
+                             selector.consumer_callsite_handles.begin(),
+                             selector.consumer_callsite_handles.end()) &&
+                         std::adjacent_find(
+                             selector.consumer_callsite_handles.begin(),
+                             selector.consumer_callsite_handles.end()) ==
+                             selector.consumer_callsite_handles.end();
+            for (const auto handle : selector.consumer_callsite_handles) {
+                const auto* callsite = find_handle(image->callsites(), handle);
+                valid = valid && callsite != nullptr &&
+                        callsite->occurrence_handle ==
+                            selector.consumer_occurrence_handle &&
+                        std::find(callsite->input_slot_handles.begin(),
+                                  callsite->input_slot_handles.end(),
+                                  selector.provider_slot_handle) !=
+                            callsite->input_slot_handles.end();
+            }
+            std::vector<std::uint32_t> expected_consumer_callsites;
+            for (const auto& callsite : image->callsites()) {
+                if (callsite.occurrence_handle ==
+                        selector.consumer_occurrence_handle &&
+                    std::find(callsite.input_slot_handles.begin(),
+                              callsite.input_slot_handles.end(),
+                              selector.provider_slot_handle) !=
+                        callsite.input_slot_handles.end()) {
+                    expected_consumer_callsites.push_back(callsite.handle);
+                }
+            }
+            std::sort(expected_consumer_callsites.begin(),
+                      expected_consumer_callsites.end());
+            expected_consumer_callsites.erase(
+                std::unique(expected_consumer_callsites.begin(),
+                            expected_consumer_callsites.end()),
+                expected_consumer_callsites.end());
+            valid = valid && expected_consumer_callsites ==
+                                 selector.consumer_callsite_handles;
+            if (!valid) {
+                return failure(
+                    SessionError::InvalidImageStructure, selector.handle,
+                    "entity selector numeric authorization is invalid");
+            }
+        }
+        for (const auto& binding : image->bindings()) {
+            const auto* provider_port =
+                find_handle(image->ports(), binding.provider_port_handle);
+            const auto* consumer_port =
+                find_handle(image->ports(), binding.consumer_port_handle);
+            const auto* provider_occurrence =
+                provider_port == nullptr
+                    ? nullptr
+                    : find_handle(image->occurrences(),
+                                  provider_port->occurrence_handle);
+            const auto* consumer_occurrence =
+                consumer_port == nullptr
+                    ? nullptr
+                    : find_handle(image->occurrences(),
+                                  consumer_port->occurrence_handle);
+            const bool cross_vehicle =
+                provider_occurrence != nullptr &&
+                consumer_occurrence != nullptr &&
+                provider_occurrence->has_scope &&
+                consumer_occurrence->has_scope &&
+                provider_occurrence->scope_kind == "Vehicle" &&
+                consumer_occurrence->scope_kind == "Vehicle" &&
+                provider_occurrence->scope_subject_entity_id !=
+                    consumer_occurrence->scope_subject_entity_id;
+            const auto selector_count = static_cast<std::size_t>(std::count_if(
+                image->entity_selectors().begin(),
+                image->entity_selectors().end(), [&](const auto& selector) {
+                    return selector.binding_handle == binding.handle;
+                }));
+            if ((cross_vehicle && selector_count != 1U) ||
+                (!cross_vehicle && selector_count != 0U)) {
+                return failure(
+                    SessionError::InvalidImageStructure, binding.handle,
+                    "cross-Vehicle binding selector cardinality is invalid");
+            }
+        }
+        return {};
+    }
+
     [[nodiscard]] std::uint32_t region_ordinal(
         std::uint32_t callsite_handle) const noexcept {
         std::uint32_t result =
@@ -3872,7 +4122,8 @@ struct Session::Impl final : SessionObjectAccess,
     }
 
     [[nodiscard]] SessionResult validate_image() {
-        if (image->revision() != kSupportedImageRevision) {
+        if (image->revision() < kMinimumSupportedImageRevision ||
+            image->revision() > kSupportedImageRevision) {
             return failure(SessionError::UnsupportedImageRevision,
                            image->revision(),
                            "Image revision is unsupported");
@@ -3893,6 +4144,7 @@ struct Session::Impl final : SessionObjectAccess,
             !unique_nonzero_handles(image->dag_nodes()) ||
             !unique_nonzero_handles(image->integration_scopes()) ||
             !unique_nonzero_handles(image->transactions()) ||
+            !unique_nonzero_handles(image->entity_selectors()) ||
             !unique_nonzero_handles(image->held_outputs()) ||
             !unique_nonzero_handles(image->observation_schedules()) ||
             !unique_nonzero_handles(image->command_routes()) ||
@@ -3909,6 +4161,7 @@ struct Session::Impl final : SessionObjectAccess,
         if (result) result = validate_observation_schedules();
         if (result) result = validate_states();
         if (result) result = validate_histories();
+        if (result) result = validate_entity_selectors();
         if (result) result = validate_transactions();
         if (result) result = validate_command_event_routes();
         if (result) result = validate_cancellation_policy();

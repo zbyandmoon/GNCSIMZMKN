@@ -66,7 +66,8 @@ add_library(
         packages/yyz-rigid-step/src/rigid_step.cpp
         packages/yyz-rigid-step/src/mass_commit.cpp
         packages/yyz-rigid-step/src/qualification_00a.cpp
-        packages/yyz-rigid-step/src/scheduled_stuck_actuator.cpp)
+        packages/yyz-rigid-step/src/scheduled_stuck_actuator.cpp
+        packages/yyz-rigid-step/src/two_entity_causal.cpp)
 target_include_directories(
     yyz_rigid_step
     PUBLIC
@@ -342,6 +343,19 @@ if(GNC_BUILD_TESTS)
     endif()
     gnc_enable_warnings(gnc_kernel_stuck_actuator_probe)
 
+    # R3 two-entity causal path with explicit selector and atomic scope union.
+    add_executable(
+        gnc_kernel_two_entity_causal_probe
+        tests/kernel_two_entity_causal.cpp)
+    target_link_libraries(
+        gnc_kernel_two_entity_causal_probe
+        PRIVATE compiler kernel_session yyz_rigid_step)
+    if(MSVC)
+        target_compile_options(
+            gnc_kernel_two_entity_causal_probe PRIVATE /bigobj)
+    endif()
+    gnc_enable_warnings(gnc_kernel_two_entity_causal_probe)
+
     # R0 validation spike: intentionally isolated from product modules and Legacy.
     add_executable(
         gnc_scientific_conventions
@@ -598,6 +612,9 @@ if(GNC_BUILD_TESTS)
     add_test(
         NAME r3.kernel-stuck-actuator.probe
         COMMAND gnc_kernel_stuck_actuator_probe --self-check)
+    add_test(
+        NAME r3.kernel-two-entity-causal.probe
+        COMMAND gnc_kernel_two_entity_causal_probe --self-check)
     add_test(
         NAME r0.scientific-conventions.properties
         COMMAND gnc_scientific_conventions --self-check)

@@ -651,7 +651,7 @@ void verify_metadata_failures(
         "wrong state codec did not fail deterministically");
     require_metadata_failure(
         image, adapter.provider, adapter.trace,
-        [](auto& data) { ++data.revision; },
+        [](auto& data) { data.revision += 2U; },
         SessionError::UnsupportedImageRevision,
         "unsupported Image revision reached placement");
     require_metadata_failure(

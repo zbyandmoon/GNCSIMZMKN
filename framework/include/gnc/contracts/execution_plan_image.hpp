@@ -274,6 +274,22 @@ struct PlanImageBinding {
     std::uint32_t consumer_port_handle = 0U;
 };
 
+// A cross-entity selector is an immutable authorization table. Runtime data
+// still flows through the ordinary numeric binding/slot handles; Session does
+// not discover entities or perform string routing on the hot path.
+struct PlanImageEntitySelector {
+    std::uint32_t handle = 0U;
+    std::string plan_element_id;
+    std::uint32_t binding_handle = 0U;
+    std::string selected_entity_id;
+    std::uint32_t provider_occurrence_handle = 0U;
+    std::uint32_t provider_port_handle = 0U;
+    std::uint32_t provider_slot_handle = 0U;
+    std::uint32_t consumer_occurrence_handle = 0U;
+    std::uint32_t consumer_port_handle = 0U;
+    std::vector<std::uint32_t> consumer_callsite_handles;
+};
+
 // One explicit sampled edge whose producer cadence may skip a consumer tick.
 // Its source remains an ordinary CycleFrame slot. The committed slot and this
 // authority table freeze the exact Session-local HeldLatest publication.
@@ -491,6 +507,9 @@ struct PlanImageTransaction {
     std::vector<PlanImageTransactionCandidateMember> candidates;
     std::vector<std::uint32_t> held_slot_handles;
     std::vector<PlanImageTransactionBranch> branches;
+    // Present only for the multi-scope Image revision. It freezes every
+    // occurrence whose Vehicle scope participates in this atomic transaction.
+    std::vector<std::uint32_t> member_occurrence_handles;
 };
 
 // Cancellation remains an in-process control operation. These immutable facts
@@ -658,6 +677,7 @@ struct ExecutionPlanImageData {
     std::vector<PlanImageStateBlock> state_blocks;
     std::vector<PlanImageInitialBinding> initial_bindings;
     std::vector<PlanImageBinding> bindings;
+    std::vector<PlanImageEntitySelector> entity_selectors;
     std::vector<PlanImageHeldOutput> held_outputs;
     std::vector<PlanImageObservationSchedule> observation_schedules;
     std::vector<PlanImageCallsite> callsites;
@@ -751,6 +771,10 @@ class ExecutionPlanImage final {
     }
     [[nodiscard]] const std::vector<PlanImageBinding>& bindings() const noexcept {
         return data_.bindings;
+    }
+    [[nodiscard]] const std::vector<PlanImageEntitySelector>& entity_selectors()
+        const noexcept {
+        return data_.entity_selectors;
     }
     [[nodiscard]] const std::vector<PlanImageHeldOutput>& held_outputs()
         const noexcept {
