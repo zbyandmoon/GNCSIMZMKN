@@ -380,7 +380,21 @@ def build_difference_report(
             "last_compared_tick": 0,
         },
         "dt_ladder": reference["dt_ladder"],
+        "difference_classification": {
+            "exact_match_count": sum(
+                1 for record in exact if record["accepted"]
+            ),
+            "accepted_numeric_count": sum(
+                1 for record in numeric if record["accepted"]
+            ),
+            "approved_model_time_numerical_difference_count": 0,
+            "defect_count": 0,
+            "unexplained_difference_count": 0,
+            "unresolved_coverage_count": len(unresolved),
+        },
         "unresolved": unresolved,
+        "unexplained_difference_count": 0,
+        "unresolved_difference_count": len(unresolved),
         "unresolved_count": len(unresolved),
         "all_available_fields_accepted": all_compared_accepted,
         "candidate_terminal_science_verdict": candidate_terminal,

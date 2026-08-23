@@ -489,7 +489,7 @@ Legacy CSV 初值/trajectory input、published output、candidate state 和 summ
 
 Summary 必须分别给出 `match`、`approved_difference`、`retired`、`target_pending`、`unresolved` 和 `invalid`。G1 需要 `unresolved = 0`；`target_pending` 只能用于明确属于后续 R1–R3 runtime 的项，不能隐藏 R0 本应完成的 source/formula/reference 缺口。
 
-当前 `reports/r3-yyz-001-00a-difference.json` 采用 exact identity/status 与逐字段 abs/rel `2e-12`。所有可得 opening comparisons 均 accepted；near-zero North velocity 在 tick 0 形成最大绝对差 `1.347066989204615e-14` 和最大相对差 `1`，该字段由绝对阈值控制。唯一 unresolved row 是 opening domain failure 后缺失的 tick 1～3000 trajectory。`candidate_terminal_science_verdict=false`。
+当前 `reports/r3-yyz-001-00a-difference.json` 采用 exact identity/status 与逐字段 abs/rel `2e-12`。所有可得 opening comparisons 均 accepted；near-zero North velocity 在 tick 0 形成最大绝对差 `1.347066989204615e-14` 和最大相对差 `1`，该字段由绝对阈值控制。`unexplained_difference_count=0`；唯一 unresolved coverage row 是 opening domain failure 后缺失的 tick 1～3000 trajectory，因此 `unresolved_difference_count=1`。`candidate_terminal_science_verdict=false`。
 
 ## 13. 完整性、派生与重放
 

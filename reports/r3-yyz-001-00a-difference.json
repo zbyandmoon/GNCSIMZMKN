@@ -1,6 +1,14 @@
 {
   "all_available_fields_accepted": true,
   "candidate_terminal_science_verdict": false,
+  "difference_classification": {
+    "accepted_numeric_count": 45,
+    "approved_model_time_numerical_difference_count": 0,
+    "defect_count": 0,
+    "exact_match_count": 9,
+    "unexplained_difference_count": 0,
+    "unresolved_coverage_count": 1
+  },
   "dt_ladder": {
     "committed_intervals": [
       0,
@@ -560,6 +568,7 @@
     "requested_terminal_tick": 3000,
     "terminal": "unavailable-domain-failure-before-first-interval"
   },
+  "unexplained_difference_count": 0,
   "unresolved": [
     {
       "first_unavailable_tick": 1,
@@ -568,5 +577,6 @@
       "required_owner_choice": "select and qualify an aero/environment asset combination whose declared domain contains the author opening input, or revise the author input"
     }
   ],
-  "unresolved_count": 1
+  "unresolved_count": 1,
+  "unresolved_difference_count": 1
 }
